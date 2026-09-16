@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.log
+
+# Runtime data (dedup store, cookies) — keep the folder
+data/*
+!data/.gitkeep

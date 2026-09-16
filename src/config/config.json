@@ -1,0 +1,22 @@
+{
+  "discord": {
+    "clientId": "923262419923513445",
+    "guildId": null
+  },
+  "music": {
+    "idleTimeoutSec": 120,
+    "maxQueueSize": 100
+  },
+  "steam": {
+    "channelId": "1518054940268826624",
+    "cron": "33 3 * * *",
+    "maxSeenIds": 500,
+    "postOnFirstRun": true
+  },
+  "epic": {
+    "channelId": "1518316514015711262",
+    "cron": "0 12,17 * * *",
+    "postOnFirstRun": true
+  },
+  "embedColor": "#5865F2"
+}
