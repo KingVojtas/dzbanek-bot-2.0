@@ -1,7 +1,10 @@
+import { join } from 'node:path';
 import { type Readable } from 'node:stream';
 import youtubeDl from 'youtube-dl-exec';
 import type { Track, TrackSource } from '../../core/types';
 import { ytDlpCookieFlags } from '../ytdlp-cookies';
+
+const YTDLP_CACHE = join(process.cwd(), 'data', 'yt-dlp-cache');
 
 const PLAYLIST_CAP = 50;
 const YOUTUBE_HOST = /(?:youtube\.com|youtu\.be|music\.youtube\.com)/i;
@@ -33,17 +36,34 @@ function isYouTubeUrl(input: string): boolean {
   }
 }
 
-function commonFlags(): Record<string, unknown> {
+function baseFlags(): Record<string, unknown> {
   return {
     noWarnings: true,
     noCheckCertificates: true,
     restrictFilenames: true,
     geoBypass: true,
-    // YouTube nsig / player JS must be solved or media URLs 403.
+    cacheDir: YTDLP_CACHE,
+    ...ytDlpCookieFlags(),
+  };
+}
+
+/** Metadata/search: cookie-free clients that still return titles without nsig. */
+function resolveFlags(): Record<string, unknown> {
+  return {
+    ...baseFlags(),
+    ignoreNoFormatsError: true,
+    noCheckFormats: true,
+    extractorArgs: 'youtube:player_client=android_vr,tv_simply,mweb,web_embedded',
+  };
+}
+
+/** Streaming: Deno + several clients so at least one format list is usable. */
+function streamFlags(): Record<string, unknown> {
+  return {
+    ...baseFlags(),
     jsRuntimes: 'deno',
     remoteComponents: 'ejs:github',
-    extractorArgs: 'youtube:player_client=web,mweb,tv_simply',
-    ...ytDlpCookieFlags(),
+    extractorArgs: 'youtube:player_client=android_vr,tv_simply,mweb,web,web_embedded',
   };
 }
 
@@ -81,18 +101,24 @@ function toTrack(info: YtDlpJson, requestedBy: string, extras?: Partial<Track>):
 }
 
 async function dumpJson(target: string, extra: Record<string, unknown> = {}): Promise<YtDlpJson> {
-  const raw = await youtubeDl(target, {
-    dumpSingleJson: true,
-    skipDownload: true,
-    noPlaylist: extra.noPlaylist ?? true,
-    ...commonFlags(),
-    ...extra,
-  } as Parameters<typeof youtubeDl>[1]);
+  const run = async (flags: Record<string, unknown>) => {
+    const raw = await youtubeDl(target, {
+      dumpSingleJson: true,
+      skipDownload: true,
+      noPlaylist: extra.noPlaylist ?? true,
+      ...flags,
+      ...extra,
+    } as Parameters<typeof youtubeDl>[1]);
+    return typeof raw === 'string' ? (JSON.parse(raw) as YtDlpJson) : (raw as YtDlpJson);
+  };
 
-  if (typeof raw === 'string') {
-    return JSON.parse(raw) as YtDlpJson;
+  try {
+    return await run(resolveFlags());
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (!/format is not available|no video formats/i.test(msg)) throw error;
+    return run(streamFlags());
   }
-  return raw as YtDlpJson;
 }
 
 export class YouTubeSource implements TrackSource {
@@ -141,10 +167,10 @@ export class YouTubeSource implements TrackSource {
       track.url,
       {
         output: '-',
-        format: 'bestaudio/best/18',
+        format: 'bestaudio/best',
         noPlaylist: true,
         quiet: true,
-        ...commonFlags(),
+        ...streamFlags(),
       } as Parameters<typeof youtubeDl.exec>[1],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );

@@ -167,16 +167,24 @@ export class SpotifySource {
     const payloads =
       ref.kind === 'album' ? await this.fetchAlbumTracks(ref.id) : await this.fetchPlaylistTracks(ref.id);
 
-    const tracks: Track[] = [];
-    for (const payload of payloads.slice(0, PLAYLIST_CAP)) {
-      try {
-        const matched = await this.matchTrack(payload, requestedBy);
-        if (matched) tracks.push(matched);
-      } catch {
-        // Skip unmatchable items; keep the rest of the album/playlist.
+    const slice = payloads.slice(0, PLAYLIST_CAP);
+    const matched = new Array<Track | null>(slice.length).fill(null);
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(4, slice.length) }, async () => {
+      while (cursor < slice.length) {
+        const idx = cursor;
+        cursor += 1;
+        const payload = slice[idx];
+        if (!payload) continue;
+        try {
+          matched[idx] = await this.matchTrack(payload, requestedBy);
+        } catch {
+          matched[idx] = null;
+        }
       }
-    }
-    return tracks;
+    });
+    await Promise.all(workers);
+    return matched.filter((track): track is Track => track != null);
   }
 
   private async fetchAlbumTracks(id: string): Promise<SpotifyTrackPayload[]> {

@@ -7,6 +7,8 @@ export const skip: Command = {
   data: new SlashCommandBuilder().setName('skip').setDescription('Skip the current track.'),
 
   async execute(interaction, services) {
+    await interaction.deferReply();
+
     const player = await requirePlayer(interaction, services, { sameVoice: true });
     if (!player) return;
 
@@ -16,6 +18,6 @@ export const skip: Command = {
       ? `⏭️ Skipped **${skipped?.title ?? 'the current track'}**. Up next: **${next.title}**.`
       : `⏭️ Skipped **${skipped?.title ?? 'the current track'}**. Queue is empty.`;
 
-    await interaction.reply({ embeds: [buildInfoEmbed(description)] });
+    await interaction.editReply({ embeds: [buildInfoEmbed(description)] });
   },
 };

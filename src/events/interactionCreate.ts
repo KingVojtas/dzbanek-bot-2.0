@@ -8,7 +8,13 @@ import {
   type InteractionReplyOptions,
 } from 'discord.js';
 import { QUEUE_BUTTON_PREFIX, queueButtons } from '../commands/music/queue';
-import { QUEUE_PAGE_SIZE, buildInfoEmbed, buildQueueEmbed, queueTotalPages } from '../core/embeds';
+import {
+  QUEUE_PAGE_SIZE,
+  buildInfoEmbed,
+  buildQueueEmbed,
+  queueTotalPages,
+  upcomingQueue,
+} from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import type { GuildPlayer } from '../music/GuildPlayer';
 
@@ -73,7 +79,10 @@ async function handleButton(interaction: ButtonInteraction, services: Services):
     return;
   }
 
-  const totalPages = queueTotalPages(player.queue.length, QUEUE_PAGE_SIZE);
+  const totalPages = queueTotalPages(
+    upcomingQueue(player.current, player.queue).length,
+    QUEUE_PAGE_SIZE,
+  );
   const safePage = Math.min(Math.max(0, page), totalPages - 1);
 
   await interaction.update({

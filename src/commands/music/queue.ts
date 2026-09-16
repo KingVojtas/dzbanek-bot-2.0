@@ -4,7 +4,7 @@ import {
   ButtonStyle,
   SlashCommandBuilder,
 } from 'discord.js';
-import { QUEUE_PAGE_SIZE, buildQueueEmbed, queueTotalPages } from '../../core/embeds';
+import { QUEUE_PAGE_SIZE, buildQueueEmbed, queueTotalPages, upcomingQueue } from '../../core/embeds';
 import type { Command } from '../../core/types';
 import { replyEphemeral } from './_util';
 
@@ -46,7 +46,8 @@ export const queue: Command = {
       return;
     }
 
-    const totalPages = queueTotalPages(player.queue.length, QUEUE_PAGE_SIZE);
+    const upcoming = upcomingQueue(player.current, player.queue);
+    const totalPages = queueTotalPages(upcoming.length, QUEUE_PAGE_SIZE);
     const requested = (interaction.options.getInteger('page') ?? 1) - 1;
     const page = Math.min(Math.max(0, requested), totalPages - 1);
 

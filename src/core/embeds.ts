@@ -14,16 +14,22 @@ export function buildInfoEmbed(description: string, title?: string): EmbedBuilde
   return embed;
 }
 
-/** Format a duration in seconds as `m:ss` or `h:mm:ss`. */
-export function formatDuration(totalSeconds: number): string {
-  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return 'Live / Unknown';
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = Math.floor(totalSeconds % 60);
+/** Playback clock (`0:00`, `3:21`, `1:02:03`). Zero is a valid position. */
+export function formatClock(totalSeconds: number): string {
+  const sec = Math.max(0, Math.floor(Number.isFinite(totalSeconds) ? totalSeconds : 0));
+  const hours = Math.floor(sec / 3600);
+  const minutes = Math.floor((sec % 3600) / 60);
+  const seconds = sec % 60;
   const parts = hours > 0 ? [hours, minutes, seconds] : [minutes, seconds];
   return parts
     .map((value, i) => (i === 0 ? String(value) : String(value).padStart(2, '0')))
     .join(':');
+}
+
+/** Track length: `Live / Unknown` when duration is missing. */
+export function formatDuration(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return 'Live / Unknown';
+  return formatClock(totalSeconds);
 }
 
 /** Human friendly view count e.g. "1.2M" or "3.4K". */
@@ -82,14 +88,15 @@ export const QUEUE_PAGE_SIZE = 8;
  * @param page 0-based page index into the upcoming queue.
  */
 export function buildQueueEmbed(current: Track | null, queue: Track[], page = 0): EmbedBuilder {
+  const upcoming = current ? queue.filter((track) => track !== current) : queue;
   const pageSize = QUEUE_PAGE_SIZE;
-  const totalPages = Math.max(1, Math.ceil(queue.length / pageSize) || 1);
+  const totalPages = Math.max(1, Math.ceil(upcoming.length / pageSize) || 1);
   const safePage = Math.min(Math.max(0, page), totalPages - 1);
   const start = safePage * pageSize;
-  const pageTracks = queue.slice(start, start + pageSize);
+  const pageTracks = upcoming.slice(start, start + pageSize);
 
   let remainingSec = 0;
-  for (const t of queue) {
+  for (const t of upcoming) {
     if (t.durationSec > 0) remainingSec += t.durationSec;
   }
   if (current && current.durationSec > 0) remainingSec += current.durationSec;
@@ -108,7 +115,7 @@ export function buildQueueEmbed(current: Track | null, queue: Track[], page = 0)
     lines.push('▶ **Nothing playing**');
   }
 
-  if (queue.length > 0) {
+  if (upcoming.length > 0) {
     lines.push('', `**Up next** · page **${safePage + 1}/${totalPages}**`);
     pageTracks.forEach((track, i) => {
       const n = start + i + 1;
@@ -126,7 +133,7 @@ export function buildQueueEmbed(current: Track | null, queue: Track[], page = 0)
   const color = current?.source === 'spotify' ? 0x1db954 : config.embedColor;
 
   const footerParts: string[] = [];
-  footerParts.push(`${queue.length} queued`);
+  footerParts.push(`${upcoming.length} queued`);
   if (remainingSec > 0) footerParts.push(`~${formatDuration(remainingSec)} left`);
   footerParts.push(`Page ${safePage + 1}/${totalPages}`);
 
@@ -140,6 +147,11 @@ export function buildQueueEmbed(current: Track | null, queue: Track[], page = 0)
   if (current?.thumbnail) embed.setThumbnail(current.thumbnail);
 
   return embed;
+}
+
+/** Upcoming tracks only (excludes the one currently playing). */
+export function upcomingQueue(current: Track | null, queue: Track[]): Track[] {
+  return current ? queue.filter((track) => track !== current) : queue;
 }
 
 /** Total pages for an upcoming queue list. */

@@ -45,6 +45,9 @@ export const play: Command = {
       });
     }
 
+    const guildId = interaction.guildId;
+    const alreadyPlaying = Boolean(guildId && services.music.get(guildId)?.current);
+
     let tracks: Track[];
     let player: Awaited<ReturnType<typeof services.music.join>>;
     try {
@@ -54,6 +57,10 @@ export const play: Command = {
       ]);
     } catch (error: unknown) {
       services.logger.error('Failed to resolve/join for /play:', error);
+      if (!alreadyPlaying && guildId) {
+        const leftover = services.music.get(guildId);
+        if (leftover && !leftover.current) leftover.stop();
+      }
       const errMsg = error instanceof Error ? error.message : String(error || '');
       const hint = youtubeBotCheckHint(errMsg);
       let msg = hint ?? null;
@@ -68,6 +75,9 @@ export const play: Command = {
     }
 
     if (tracks.length === 0) {
+      if (!alreadyPlaying && !player.current && player.queue.length === 0) {
+        player.stop();
+      }
       await interaction.editReply({
         embeds: [
           buildInfoEmbed(
@@ -108,7 +118,7 @@ export const play: Command = {
     }
 
     if (wasIdle && accepted.length >= 1) {
-      const attempt = await player.waitForPlaybackAttempt(25_000);
+      const attempt = await player.waitForPlaybackAttempt(20_000);
       if (!attempt.ok) {
         const hint = attempt.error ? youtubeBotCheckHint(attempt.error) : null;
         await interaction.editReply({
@@ -122,8 +132,8 @@ export const play: Command = {
         return;
       }
 
-      for (let i = 0; i < 15 && !player.getNowPlayingMessage(); i++) {
-        await new Promise((r) => setTimeout(r, 200));
+      for (let i = 0; i < 20 && !player.getNowPlayingMessage(); i++) {
+        await new Promise((r) => setTimeout(r, 50));
       }
 
       if (player.getNowPlayingMessage()) {

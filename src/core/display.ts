@@ -12,7 +12,7 @@ import {
   ThumbnailBuilder,
   type MessageActionRowComponentBuilder,
 } from 'discord.js';
-import { formatDuration, formatViews } from './embeds';
+import { formatClock, formatDuration, formatViews } from './embeds';
 import type { EpicFreeGame, LoopMode, SteamDealItem, Track } from './types';
 
 const STEAM_COLOR = 0x1b2838;
@@ -92,7 +92,7 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): V2Displa
     `*${artist}*`,
     '',
     `\`${progressBar(positionSec, durationSec)}\``,
-    `\`${formatDuration(positionSec)}\`  /  \`${durationSec > 0 ? formatDuration(durationSec) : 'Live'}\``,
+    `\`${formatClock(positionSec)}\`  /  \`${durationSec > 0 ? formatClock(durationSec) : 'Live'}\``,
     '',
     meta.join(' · '),
     `Queue **${queueLength}** · ${loopLabel}`,
