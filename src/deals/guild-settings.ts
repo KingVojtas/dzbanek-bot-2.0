@@ -6,6 +6,10 @@ export interface GuildSettings {
   steamChannelId: string | null;
   epicEnabled: boolean;
   epicChannelId: string | null;
+  welcomeEnabled: boolean;
+  welcomeChannelId: string | null;
+  goodbyeEnabled: boolean;
+  goodbyeChannelId: string | null;
 }
 
 function defaults(guildId: string): GuildSettings {
@@ -15,26 +19,28 @@ function defaults(guildId: string): GuildSettings {
     steamChannelId: null,
     epicEnabled: true,
     epicChannelId: null,
+    welcomeEnabled: true,
+    welcomeChannelId: null,
+    goodbyeEnabled: true,
+    goodbyeChannelId: null,
   };
 }
 
-function fromRow(row: {
-  guildId: string;
-  steamEnabled: boolean;
-  steamChannelId: string | null;
-  epicEnabled: boolean;
-  epicChannelId: string | null;
-}): GuildSettings {
+function fromRow(row: GuildSettings): GuildSettings {
   return {
     guildId: row.guildId,
     steamEnabled: row.steamEnabled,
     steamChannelId: row.steamChannelId,
     epicEnabled: row.epicEnabled,
     epicChannelId: row.epicChannelId,
+    welcomeEnabled: row.welcomeEnabled,
+    welcomeChannelId: row.welcomeChannelId,
+    goodbyeEnabled: row.goodbyeEnabled,
+    goodbyeChannelId: row.goodbyeChannelId,
   };
 }
 
-/** Per-guild Steam/Epic channel config, stored in SQLite via Prisma. */
+/** Per-guild channel config, stored in SQLite via Prisma. */
 export class GuildSettingsStore {
   async get(guildId: string): Promise<GuildSettings> {
     const row = await prisma.guildSettings.findUnique({ where: { guildId } });
@@ -60,6 +66,10 @@ export class GuildSettingsStore {
         steamChannelId: next.steamChannelId,
         epicEnabled: next.epicEnabled,
         epicChannelId: next.epicChannelId,
+        welcomeEnabled: next.welcomeEnabled,
+        welcomeChannelId: next.welcomeChannelId,
+        goodbyeEnabled: next.goodbyeEnabled,
+        goodbyeChannelId: next.goodbyeChannelId,
       },
     });
     return fromRow(row);

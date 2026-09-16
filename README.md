@@ -30,13 +30,13 @@ Idle auto-disconnect after 120 seconds of silence (configurable).
 
 ### Steam daily deals
 
-Every day (default **03:33**) the bot fetches Steam discounts from [game-deals.app](https://game-deals.app), keeps games rated *Very Positive* or better, and posts a digest of **new** deals **in every server** that has a Steam channel.
+Every day at **03:33 Europe/Prague** the bot fetches Steam discounts from [game-deals.app](https://game-deals.app), keeps games rated *Very Positive* or better, and posts a digest of **new** deals **in every server** that has a Steam channel.
 
 If every deal was already posted in that server, or none pass the review filter, **no message is sent**.
 
 ### Epic Games free games
 
-Polls the Epic Store free-games API (default **12:00** and **17:00**). Posts the current + upcoming lineup in **each server** only when that server has not seen this lineup yet.
+Polls the Epic Store at **12:00** and **17:00 Europe/Prague** (when the weekly free lineup usually rotates). Posts in **each server** only when that server has not seen this lineup yet. Not at 03:33 — that slot is Steam only.
 
 Both fetchers persist posted IDs / lineup fingerprints **per server** in SQLite (`data/bot.db`, Prisma) so restarts cannot re-spam.
 
@@ -51,7 +51,13 @@ Music already works per voice channel. Deals are per guild:
 | `/setup status` | Show this server's deal channels. |
 | `/setup disable steam\|epic` | Stop posting that feed here. |
 
-If you never run `/setup`, the bot looks for a text channel named like `#steam`, `#deals`, `#epic`, or `#free-games` and uses that. The `channelId` values in `config.json` only seed the server that actually owns those channels.
+If you never run `/setup`, the bot looks for a text channel named like `#steam`, `#deals`, `#epic`, `#free-games`, `#welcome`, or `#goodbye`. The `channelId` values in `config.json` only seed the server that actually owns those channels.
+
+Turn on **Server Members Intent** in the Discord Developer Portal (Bot → Privileged Gateway Intents) so join/leave messages fire.
+
+Welcome: `🍪 Hey @user! Welcome to the dark side, we have cookies. I’m Dzbanek — grab one, say hi, and don’t mind the crumbs. 😈`
+
+Goodbye: `👋 name just left the kitchen. Hasta la vista, baby! 🕶️🍪 We’ll keep a cookie warm in case they come back.`
 
 ---
 
@@ -132,6 +138,7 @@ Non-secret settings live in `src/config/config.json`. The only required secret i
     "clientId": "YOUR_DISCORD_APPLICATION_ID",
     "guildId": null
   },
+  "timezone": "Europe/Prague",
   "music": {
     "idleTimeoutSec": 120,
     "maxQueueSize": 100

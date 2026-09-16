@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 export interface Config {
   discord: {
     clientId: string;
-    /** When set, slash commands register to this one guild (instant). Null = global. */
     guildId: string | null;
   };
+  /** IANA timezone for Steam/Epic cron (e.g. Europe/Prague). */
+  timezone: string;
   music: {
     idleTimeoutSec: number;
     maxQueueSize: number;
@@ -24,6 +25,8 @@ export interface Config {
     cron: string;
     postOnFirstRun: boolean;
   };
+  welcome: { channelId: string | null };
+  goodbye: { channelId: string | null };
   embedColor: number;
 }
 
@@ -70,12 +73,15 @@ function loadConfig(): Config {
   const music = (raw.music ?? {}) as Json;
   const steam = (raw.steam ?? {}) as Json;
   const epic = (raw.epic ?? {}) as Json;
+  const welcome = (raw.welcome ?? {}) as Json;
+  const goodbye = (raw.goodbye ?? {}) as Json;
 
   return {
     discord: {
       clientId: requireString(discord.clientId, 'discord.clientId'),
       guildId: optionalString(discord.guildId),
     },
+    timezone: optionalString(raw.timezone) ?? 'Europe/Prague',
     music: {
       idleTimeoutSec: typeof music.idleTimeoutSec === 'number' ? music.idleTimeoutSec : 120,
       maxQueueSize: typeof music.maxQueueSize === 'number' ? music.maxQueueSize : 100,
@@ -91,6 +97,8 @@ function loadConfig(): Config {
       cron: requireString(epic.cron, 'epic.cron'),
       postOnFirstRun: epic.postOnFirstRun !== false,
     },
+    welcome: { channelId: optionalString(welcome.channelId) },
+    goodbye: { channelId: optionalString(goodbye.channelId) },
     embedColor: parseColor(raw.embedColor),
   };
 }

@@ -41,13 +41,18 @@ async function main(): Promise<void> {
     const runEpic = (reason: string) =>
       void epicService.poll().catch((error) => logger.error(`${reason} Epic poll failed:`, error));
 
+    const cronOpts = { timezone: config.timezone, protect: true as const };
     runSteam('Initial');
-    new Cron(config.steam.cron, () => runSteam('Scheduled'));
-    logger.info(`Steam deals polling scheduled (cron "${config.steam.cron}").`);
+    const steamJob = new Cron(config.steam.cron, cronOpts, () => runSteam('Scheduled'));
+    logger.info(
+      `Steam deals: cron "${config.steam.cron}" (${config.timezone}), next ${steamJob.nextRun()?.toISOString() ?? '?'}.`,
+    );
 
     runEpic('Initial');
-    new Cron(config.epic.cron, () => runEpic('Scheduled'));
-    logger.info(`Epic free games polling scheduled (cron "${config.epic.cron}").`);
+    const epicJob = new Cron(config.epic.cron, cronOpts, () => runEpic('Scheduled'));
+    logger.info(
+      `Epic free games: cron "${config.epic.cron}" (${config.timezone}), next ${epicJob.nextRun()?.toISOString() ?? '?'}.`,
+    );
     logger.info(`Multi-server ready: in ${client.guilds.cache.size} guild(s).`);
   });
 

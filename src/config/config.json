@@ -3,6 +3,7 @@
     "clientId": "923262419923513445",
     "guildId": null
   },
+  "timezone": "Europe/Prague",
   "music": {
     "idleTimeoutSec": 120,
     "maxQueueSize": 100
@@ -17,6 +18,12 @@
     "channelId": "1518316514015711262",
     "cron": "0 12,17 * * *",
     "postOnFirstRun": true
+  },
+  "welcome": {
+    "channelId": ""
+  },
+  "goodbye": {
+    "channelId": ""
   },
   "embedColor": "#5865F2"
 }

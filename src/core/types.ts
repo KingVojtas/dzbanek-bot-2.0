@@ -16,7 +16,7 @@ export interface Services {
   config: Config;
   logger: Logger;
   music: MusicManager;
-  guildSettings?: GuildSettingsStore;
+  guildSettings: GuildSettingsStore;
 }
 
 /** Loop modes for music queue. */

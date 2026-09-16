@@ -61,9 +61,12 @@ export async function resolveGuildSendableChannel(
   return channel;
 }
 
-async function findChannelByName(guild: Guild, kind: DealKind): Promise<SendableChannels | null> {
+export async function findChannelByNameHints(
+  guild: Guild,
+  rawHints: string[],
+): Promise<SendableChannels | null> {
   await guild.channels.fetch().catch(() => null);
-  const hints = hintsFor(kind).map(normalize);
+  const hints = rawHints.map(normalize);
   const me = guild.members.me;
 
   for (const channel of guild.channels.cache.values()) {
@@ -85,6 +88,10 @@ async function findChannelByName(guild: Guild, kind: DealKind): Promise<Sendable
     return channel;
   }
   return null;
+}
+
+async function findChannelByName(guild: Guild, kind: DealKind): Promise<SendableChannels | null> {
+  return findChannelByNameHints(guild, hintsFor(kind));
 }
 
 /**

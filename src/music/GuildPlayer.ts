@@ -39,7 +39,6 @@ export class GuildPlayer {
   private destroyed = false;
   private playGeneration = 0;
   private queuePumpRunning = false;
-  private suppressIdleAdvance = false;
   /** When true, Idle must advance even if loop mode is `track`. */
   private skipRequested = false;
   private queueSnapshot: Track[] = [];
@@ -226,31 +225,6 @@ export class GuildPlayer {
     return next;
   }
 
-  previous(): boolean {
-    const prev = this.history.pop();
-    const cur = this.current;
-
-    if (prev) {
-      this.current = null;
-      if (cur) this.queue.unshift(cur);
-      this.queue.unshift(prev);
-      this.suppressIdleAdvance = true;
-      this.player.stop(true);
-      void this.processQueue();
-      return true;
-    }
-
-    if (cur) {
-      this.current = null;
-      this.queue.unshift(cur);
-      this.suppressIdleAdvance = true;
-      this.player.stop(true);
-      void this.processQueue();
-      return true;
-    }
-    return false;
-  }
-
   stop(): void {
     this.queue.length = 0;
     this.queueSnapshot = [];
@@ -345,10 +319,6 @@ export class GuildPlayer {
 
   private onPlayerBecameIdle(): void {
     if (this.destroyed) return;
-    if (this.suppressIdleAdvance) {
-      this.suppressIdleAdvance = false;
-      return;
-    }
     if (this.queuePumpRunning) return;
     if (this.player.state.status !== AudioPlayerStatus.Idle) return;
 

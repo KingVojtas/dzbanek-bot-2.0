@@ -10,7 +10,7 @@ import type { Command } from '../../core/types';
 export const setup: Command = {
   data: new SlashCommandBuilder()
     .setName('setup')
-    .setDescription('Configure Steam deals and Epic free-games channels for this server.')
+    .setDescription('Configure deal and greeting channels for this server.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addSubcommand((sub) =>
       sub
@@ -38,8 +38,32 @@ export const setup: Command = {
     )
     .addSubcommand((sub) =>
       sub
+        .setName('welcome')
+        .setDescription('Set the channel for join messages.')
+        .addChannelOption((option) =>
+          option
+            .setName('channel')
+            .setDescription('Text channel for welcome messages')
+            .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('goodbye')
+        .setDescription('Set the channel for leave messages.')
+        .addChannelOption((option) =>
+          option
+            .setName('channel')
+            .setDescription('Text channel for goodbye messages')
+            .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
         .setName('disable')
-        .setDescription('Stop posting Steam or Epic in this server.')
+        .setDescription('Stop posting a feature in this server.')
         .addStringOption((option) =>
           option
             .setName('feature')
@@ -48,6 +72,8 @@ export const setup: Command = {
             .addChoices(
               { name: 'Steam deals', value: 'steam' },
               { name: 'Epic free games', value: 'epic' },
+              { name: 'Welcome messages', value: 'welcome' },
+              { name: 'Goodbye messages', value: 'goodbye' },
             ),
         ),
     )
@@ -57,7 +83,7 @@ export const setup: Command = {
 
   async execute(interaction, services) {
     const guildId = interaction.guildId;
-    if (!guildId || !services.guildSettings) {
+    if (!guildId) {
       await interaction.reply({
         embeds: [buildInfoEmbed('This command can only be used in a server.')],
         flags: MessageFlags.Ephemeral,
@@ -80,11 +106,21 @@ export const setup: Command = {
           ? `<#${settings.epicChannelId}>`
           : 'on · no channel yet (will auto-detect a #epic / #free-games channel)'
         : 'disabled';
+      const welcome = settings.welcomeEnabled
+        ? settings.welcomeChannelId
+          ? `<#${settings.welcomeChannelId}>`
+          : 'on · no channel yet (will auto-detect #welcome)'
+        : 'disabled';
+      const goodbye = settings.goodbyeEnabled
+        ? settings.goodbyeChannelId
+          ? `<#${settings.goodbyeChannelId}>`
+          : 'on · no channel yet (will auto-detect #goodbye)'
+        : 'disabled';
       await interaction.reply({
         embeds: [
           buildInfoEmbed(
-            `**Steam deals:** ${steam}\n**Epic free games:** ${epic}\n\nUse \`/setup steam\` or \`/setup epic\` to pick a channel.`,
-            'Deal channels',
+            `**Steam deals:** ${steam}\n**Epic free games:** ${epic}\n**Welcome:** ${welcome}\n**Goodbye:** ${goodbye}\n\nUse \`/setup steam\`, \`/setup epic\`, \`/setup welcome\`, or \`/setup goodbye\` to pick a channel.`,
+            'Server channels',
           ),
         ],
         flags: MessageFlags.Ephemeral,
@@ -94,44 +130,48 @@ export const setup: Command = {
 
     if (sub === 'disable') {
       const feature = interaction.options.getString('feature', true);
-      if (feature === 'steam') {
-        await store.upsert(guildId, { steamEnabled: false });
-      } else {
-        await store.upsert(guildId, { epicEnabled: false });
-      }
+      const disablePatch = {
+        steam: { steamEnabled: false },
+        epic: { epicEnabled: false },
+        welcome: { welcomeEnabled: false },
+        goodbye: { goodbyeEnabled: false },
+      } as const;
+      await store.upsert(guildId, disablePatch[feature as keyof typeof disablePatch]);
+      const labels = {
+        steam: 'Steam deals will no longer post in this server.',
+        epic: 'Epic free games will no longer post in this server.',
+        welcome: 'Welcome messages will no longer post in this server.',
+        goodbye: 'Goodbye messages will no longer post in this server.',
+      };
       await interaction.reply({
-        embeds: [
-          buildInfoEmbed(
-            feature === 'steam'
-              ? 'Steam deals will no longer post in this server.'
-              : 'Epic free games will no longer post in this server.',
-          ),
-        ],
+        embeds: [buildInfoEmbed(labels[feature as keyof typeof labels])],
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
 
     const channel = interaction.options.getChannel('channel', true);
-    if (sub === 'steam') {
-      await store.upsert(guildId, { steamEnabled: true, steamChannelId: channel.id });
-      await interaction.reply({
-        embeds: [
-          buildInfoEmbed(
-            `Steam daily deals will post in <#${channel.id}>. New deals appear on the next scheduled poll.`,
-          ),
-        ],
-      });
-      return;
-    }
-
-    await store.upsert(guildId, { epicEnabled: true, epicChannelId: channel.id });
-    await interaction.reply({
-      embeds: [
-        buildInfoEmbed(
-          `Epic free games will post in <#${channel.id}>. A new lineup appears on the next scheduled poll.`,
-        ),
-      ],
-    });
+    const replies: Record<string, { patch: Parameters<typeof store.upsert>[1]; text: string }> = {
+      steam: {
+        patch: { steamEnabled: true, steamChannelId: channel.id },
+        text: `Steam daily deals will post in <#${channel.id}>. New deals appear on the next scheduled poll.`,
+      },
+      epic: {
+        patch: { epicEnabled: true, epicChannelId: channel.id },
+        text: `Epic free games will post in <#${channel.id}>. A new lineup appears on the next scheduled poll.`,
+      },
+      welcome: {
+        patch: { welcomeEnabled: true, welcomeChannelId: channel.id },
+        text: `Welcome messages will post in <#${channel.id}>.`,
+      },
+      goodbye: {
+        patch: { goodbyeEnabled: true, goodbyeChannelId: channel.id },
+        text: `Goodbye messages will post in <#${channel.id}>.`,
+      },
+    };
+    const chosen = replies[sub];
+    if (!chosen) return;
+    await store.upsert(guildId, chosen.patch);
+    await interaction.reply({ embeds: [buildInfoEmbed(chosen.text)] });
   },
 };

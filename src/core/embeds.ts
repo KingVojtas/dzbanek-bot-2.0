@@ -41,45 +41,6 @@ export function formatViews(count?: number): string {
   return count.toLocaleString() + ' views';
 }
 
-/** Embed for a single track (used by /play and now-playing). `label` is the author line. */
-export function buildTrackEmbed(track: Track, label: string): EmbedBuilder {
-  const color = track.source === 'spotify' ? 0x1db954 : config.embedColor;
-  const pageUrl = track.sourceUrl || track.url;
-  const embed = new EmbedBuilder()
-    .setColor(color)
-    .setAuthor({ name: label })
-    .setTitle(track.title.slice(0, 256))
-    .setURL(pageUrl);
-
-  const fields: { name: string; value: string; inline?: boolean }[] = [
-    { name: 'Duration', value: formatDuration(track.durationSec), inline: true },
-    { name: 'Requested by', value: track.requestedBy, inline: true },
-  ];
-
-  if (track.uploader) {
-    fields.push({ name: 'Uploader', value: track.uploader.slice(0, 100), inline: true });
-  }
-
-  const viewsStr = formatViews(track.views);
-  if (viewsStr) {
-    fields.push({ name: 'Views', value: viewsStr, inline: true });
-  }
-
-  if (track.uploadedAt) {
-    fields.push({ name: 'Uploaded', value: track.uploadedAt, inline: true });
-  }
-
-  if (track.source && track.source !== 'youtube') {
-    const badge = track.source === 'spotify' ? 'Spotify' : track.source;
-    fields.push({ name: 'Source', value: badge, inline: true });
-  }
-
-  embed.addFields(fields);
-
-  if (track.thumbnail) embed.setThumbnail(track.thumbnail);
-  return embed;
-}
-
 /** Tracks shown per page in `/queue` (use buttons to flip pages). */
 export const QUEUE_PAGE_SIZE = 8;
 
