@@ -172,7 +172,8 @@ src/
     guild-settings.ts      SQLite per-server channels
     steam/                 RSS + reviews + prices + digest
     epic/                  Free-games API + digest
-prisma/schema.prisma       SQLite schema
+prisma/schema.prisma       SQLite models
+prisma.config.ts           Database URL (Prisma 7)
 data/bot.db                Runtime SQLite (git-ignored)
 ```
 

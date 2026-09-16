@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:../data/bot.db"
 }
 
 /// Posted Steam deal IDs / Epic lineup fingerprints, scoped per guild.
