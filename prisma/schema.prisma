@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../data/bot.db"
+}
+
+/// Posted Steam deal IDs / Epic lineup fingerprints, scoped per guild.
+model DedupEntry {
+  id        Int      @id @default(autoincrement())
+  scope     String
+  itemId    String
+  createdAt DateTime @default(now())
+
+  @@unique([scope, itemId])
+  @@index([scope])
+  @@index([scope, createdAt])
+}
+
+/// Per-server Steam / Epic channel settings.
+model GuildSettings {
+  guildId        String   @id
+  steamEnabled   Boolean  @default(true)
+  steamChannelId String?
+  epicEnabled    Boolean  @default(true)
+  epicChannelId  String?
+  updatedAt      DateTime @updatedAt
+}

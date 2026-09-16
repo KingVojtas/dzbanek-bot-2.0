@@ -2,7 +2,6 @@ import Parser from 'rss-parser';
 import type { SteamDealItem } from '../../core/types';
 
 export const STEAM_FEED_URL = 'https://game-deals.app/rss/discounts/steam';
-export const STEAM_SEEN_SCOPE = 'steam:deals';
 
 /**
  * Reads the game-deals.app Steam discount RSS feed and normalises each item.
@@ -42,7 +41,8 @@ function extractGameName(title: string): string {
 function extractAppImage(link: string): string | undefined {
   const match = link.match(/store\.steampowered\.com\/app\/(\d+)\//);
   if (!match) return undefined;
-  return `https://cdn.akamai.steamstatic.com/steam/apps/${match[1]}/header.jpg`;
+  // Portrait library capsule matches the per-game thumbnail accessory.
+  return `https://cdn.akamai.steamstatic.com/steam/apps/${match[1]}/library_600x900.jpg`;
 }
 
 function parseContent(content: string): {

@@ -3,6 +3,8 @@ dist/
 .env
 *.log
 
-# Runtime data (dedup store, cookies) — keep the folder
+# Runtime data (SQLite, cookies) — keep the folder
 data/*
 !data/.gitkeep
+*.db
+*.db-journal

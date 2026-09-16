@@ -1,73 +1,48 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
-
-interface ScopeBucket {
-  ids: string[];
-  updatedAt: string;
-}
-
-type StoreFile = Record<string, ScopeBucket>;
+import { prisma } from '../db/client';
 
 /**
- * Persistent JSON set of already-posted IDs, scoped (e.g. "steam:deals", "epic:lineup").
- * Survives restarts so the bot never re-spams the same deal or free-game lineup.
+ * SQLite-backed set of already-posted IDs, scoped (e.g. "steam:<guildId>").
  */
 export class SeenStore {
-  private data: StoreFile = {};
-  private loaded = false;
-  private writeQueue: Promise<void> = Promise.resolve();
-
-  constructor(
-    private readonly filePath: string,
-    private readonly maxIds: number,
-  ) {}
+  constructor(private readonly maxPerScope: number = 500) {}
 
   async has(scope: string, id: string): Promise<boolean> {
-    await this.ensureLoaded();
-    return this.data[scope]?.ids.includes(id) ?? false;
+    const count = await prisma.dedupEntry.count({
+      where: { scope, itemId: id },
+    });
+    return count > 0;
   }
 
   async isEmpty(scope: string): Promise<boolean> {
-    await this.ensureLoaded();
-    return !this.data[scope] || this.data[scope].ids.length === 0;
+    const count = await prisma.dedupEntry.count({ where: { scope } });
+    return count === 0;
   }
 
   async add(scope: string, ids: string[]): Promise<void> {
-    await this.ensureLoaded();
-    if (ids.length === 0) return;
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return;
 
-    const bucket = this.data[scope] ?? { ids: [], updatedAt: new Date().toISOString() };
-    const seen = new Set(bucket.ids);
-    for (const id of ids) {
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      bucket.ids.push(id);
+    for (const itemId of unique) {
+      await prisma.dedupEntry.upsert({
+        where: { scope_itemId: { scope, itemId } },
+        create: { scope, itemId },
+        update: {},
+      });
     }
-    if (bucket.ids.length > this.maxIds) {
-      bucket.ids = bucket.ids.slice(bucket.ids.length - this.maxIds);
-    }
-    bucket.updatedAt = new Date().toISOString();
-    this.data[scope] = bucket;
-    await this.save();
-  }
 
-  private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return;
-    try {
-      const raw = await readFile(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw) as StoreFile;
-      this.data = parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      this.data = {};
-    }
-    this.loaded = true;
-  }
+    const total = await prisma.dedupEntry.count({ where: { scope } });
+    if (total <= this.maxPerScope) return;
 
-  private async save(): Promise<void> {
-    this.writeQueue = this.writeQueue.then(async () => {
-      await mkdir(dirname(this.filePath), { recursive: true });
-      await writeFile(this.filePath, JSON.stringify(this.data, null, 2), 'utf8');
+    const oldest = await prisma.dedupEntry.findMany({
+      where: { scope },
+      orderBy: { createdAt: 'asc' },
+      take: total - this.maxPerScope,
+      select: { id: true },
     });
-    await this.writeQueue;
+    if (oldest.length === 0) return;
+
+    await prisma.dedupEntry.deleteMany({
+      where: { id: { in: oldest.map((row) => row.id) } },
+    });
   }
 }

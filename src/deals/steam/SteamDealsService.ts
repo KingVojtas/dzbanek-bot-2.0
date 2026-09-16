@@ -1,16 +1,26 @@
 import type { Client, Message, SendableChannels, TextBasedChannel } from 'discord.js';
 import type { Config } from '../../config';
-import { buildSteamDealsDigestEmbed } from '../../core/embeds';
+import {
+  STEAM_DIGEST_SIZE,
+  buildSteamDealsDisplay,
+  collectMessageTextContent,
+  extractHeadingTitles,
+  looksLikeSteamDigest,
+} from '../../core/display';
 import type { Logger } from '../../core/logger';
 import type { SteamDealItem } from '../../core/types';
+import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
-import { STEAM_SEEN_SCOPE, SteamFeedReader } from './SteamFeedReader';
+import { resolveDealTargets, type DealTarget } from '../targets';
+import { SteamFeedReader } from './SteamFeedReader';
 import { extractAppId, fetchSteamPrice, formatSteamPrice, parseDiscountPercent } from './SteamPriceApi';
-import { fetchSteamReview, formatReview, isGoodReview } from './SteamReviewApi';
+import { fetchSteamReview, formatReview, isGoodReview, type SteamReviewInfo } from './SteamReviewApi';
 
-const DIGEST_MAX = 10;
+function steamScope(guildId: string): string {
+  return `steam:${guildId}`;
+}
 
-/** Daily Steam deals digest. Posts nothing when there are no new, well-reviewed deals. */
+/** Daily Steam deals digest. Posts per guild; silence when that server has no new deals. */
 export class SteamDealsService {
   private readonly reader = new SteamFeedReader();
   private pollInFlight: Promise<void> | null = null;
@@ -20,6 +30,7 @@ export class SteamDealsService {
     private readonly store: SeenStore,
     private readonly config: Config,
     private readonly logger: Logger,
+    private readonly guildSettings: GuildSettingsStore,
   ) {}
 
   async poll(): Promise<void> {
@@ -31,15 +42,15 @@ export class SteamDealsService {
   }
 
   private async runPoll(): Promise<void> {
-    const channelId = this.config.steam.channelId;
-    if (!channelId) {
-      this.logger.info('Steam: no channelId configured — skipping.');
-      return;
-    }
-
-    const channel = await this.resolveChannel(channelId);
-    if (!channel) {
-      this.logger.warn(`Steam: channel ${channelId} missing or not sendable.`);
+    const targets = await resolveDealTargets(
+      this.client,
+      this.guildSettings,
+      this.config,
+      this.logger,
+      'steam',
+    );
+    if (targets.length === 0) {
+      this.logger.info('Steam: no guild channels configured — skipping.');
       return;
     }
 
@@ -57,54 +68,88 @@ export class SteamDealsService {
       return;
     }
 
-    if ((await this.store.isEmpty(STEAM_SEEN_SCOPE)) && !this.config.steam.postOnFirstRun) {
-      await this.store.add(
-        STEAM_SEEN_SCOPE,
-        withIds.map((item) => item.id),
-      );
-      this.logger.info(`Steam: seeded ${withIds.length} existing deal(s) silently.`);
-      return;
+    const freshByGuild = new Map<string, SteamDealItem[]>();
+    const neededIds = new Set<string>();
+
+    for (const target of targets) {
+      const scope = steamScope(target.guildId);
+      if ((await this.store.isEmpty(scope)) && !this.config.steam.postOnFirstRun) {
+        await this.store.add(
+          scope,
+          withIds.map((item) => item.id),
+        );
+        this.logger.info(
+          `Steam: seeded ${withIds.length} existing deal(s) silently for ${target.guildName}.`,
+        );
+        continue;
+      }
+
+      const fresh: SteamDealItem[] = [];
+      for (const item of withIds) {
+        if (!(await this.store.has(scope, item.id))) fresh.push(item);
+      }
+      if (fresh.length === 0) {
+        this.logger.info(`Steam: no new deals for ${target.guildName} — sending nothing.`);
+        continue;
+      }
+      freshByGuild.set(target.guildId, fresh);
+      for (const item of fresh) neededIds.add(item.id);
     }
 
-    const fresh: SteamDealItem[] = [];
-    for (const item of withIds) {
-      if (!(await this.store.has(STEAM_SEEN_SCOPE, item.id))) fresh.push(item);
-    }
+    if (freshByGuild.size === 0) return;
 
-    if (fresh.length === 0) {
-      this.logger.info('Steam: no new deals — sending nothing.');
-      return;
-    }
-
+    const toReview = withIds.filter((item) => neededIds.has(item.id));
     const reviewEntries = await Promise.all(
-      fresh.map(async (item) => {
+      toReview.map(async (item) => {
         const appId = extractAppId(item.link);
         const review = appId ? await fetchSteamReview(appId) : null;
         return [item.id, review] as const;
       }),
     );
-    const reviewMap = new Map(reviewEntries);
+    const reviewMap = new Map<string, SteamReviewInfo | null>(reviewEntries);
 
+    const priceCache = new Map<string, string | null>();
+    let posted = 0;
+
+    for (const target of targets) {
+      const fresh = freshByGuild.get(target.guildId);
+      if (!fresh) continue;
+
+      const sent = await this.postToGuild(target, fresh, reviewMap, priceCache);
+      if (sent) posted += 1;
+    }
+
+    this.logger.info(`Steam: posted digest to ${posted}/${targets.length} guild(s).`);
+  }
+
+  private async postToGuild(
+    target: DealTarget,
+    fresh: SteamDealItem[],
+    reviewMap: Map<string, SteamReviewInfo | null>,
+    priceCache: Map<string, string | null>,
+  ): Promise<boolean> {
+    const scope = steamScope(target.guildId);
     const passing = fresh.filter((item) => {
       const review = reviewMap.get(item.id);
       return Boolean(review && isGoodReview(review));
     });
-    const rejected = fresh.filter((item) => !passing.some((p) => p.id === item.id));
+    const rejected = fresh.filter((item) => {
+      const review = reviewMap.get(item.id);
+      return Boolean(review && !isGoodReview(review));
+    });
 
-    // Never retry mixed-review / unscored games. Passing IDs are stored after a successful post
-    // so a send failure can retry next poll.
     if (rejected.length > 0) {
       await this.store.add(
-        STEAM_SEEN_SCOPE,
+        scope,
         rejected.map((item) => item.id),
       );
     }
 
     if (passing.length === 0) {
       this.logger.info(
-        `Steam: ${fresh.length} new deal(s) but none passed the review filter — sending nothing.`,
+        `Steam: ${fresh.length} new deal(s) in ${target.guildName} but none passed reviews — sending nothing.`,
       );
-      return;
+      return false;
     }
 
     const byDiscount = (a: SteamDealItem, b: SteamDealItem) => {
@@ -114,29 +159,36 @@ export class SteamDealsService {
       return a.gameName.localeCompare(b.gameName);
     };
 
-    const top = [...passing].sort(byDiscount).slice(0, DIGEST_MAX);
+    const top = [...passing].sort(byDiscount).slice(0, STEAM_DIGEST_SIZE);
 
-    const lastDigest = await this.findLastSteamDigest(channel);
+    const lastDigest = await this.findLastSteamDigest(target.channel);
     if (lastDigest && this.isDuplicateDigest(lastDigest, top)) {
       await this.store.add(
-        STEAM_SEEN_SCOPE,
+        scope,
         passing.map((item) => item.id),
       );
-      this.logger.info('Steam: last digest already lists these games — sending nothing.');
-      return;
+      this.logger.info(`Steam: ${target.guildName} already lists these games — sending nothing.`);
+      return false;
     }
 
     const prices = new Map<string, string | null>();
     const reviews = new Map<string, string>();
     await Promise.all(
       top.map(async (item) => {
+        if (priceCache.has(item.id)) {
+          prices.set(item.id, priceCache.get(item.id) ?? null);
+          return;
+        }
         const appId = extractAppId(item.link);
         if (!appId) {
+          priceCache.set(item.id, null);
           prices.set(item.id, null);
           return;
         }
         const info = await fetchSteamPrice(appId);
-        prices.set(item.id, info ? formatSteamPrice(info) : null);
+        const formatted = info ? formatSteamPrice(info) : null;
+        priceCache.set(item.id, formatted);
+        prices.set(item.id, formatted);
       }),
     );
     for (const item of top) {
@@ -153,23 +205,22 @@ export class SteamDealsService {
     }
 
     try {
-      await channel.send({
-        embeds: [buildSteamDealsDigestEmbed(top, prices, reviews)],
+      const display = buildSteamDealsDisplay(top, prices, reviews);
+      const sent = await target.channel.send({
+        components: display.components,
+        flags: display.flags,
       });
       await this.store.add(
-        STEAM_SEEN_SCOPE,
+        scope,
         passing.map((item) => item.id),
       );
-      this.logger.info(`Steam: posted digest with ${top.length} new deal(s).`);
+      this.logger.info(`Steam: posted ${top.length} deal(s) to ${target.guildName}.`);
+      await reactQuietly(sent, ['🔥', '💰', '👍']);
+      return true;
     } catch (error) {
-      this.logger.error('Steam: failed to post digest:', error);
+      this.logger.error(`Steam: failed to post to ${target.guildName}:`, error);
+      return false;
     }
-  }
-
-  private async resolveChannel(channelId: string): Promise<SendableChannels | null> {
-    const fetched = await this.client.channels.fetch(channelId).catch(() => null);
-    if (!fetched || !fetched.isSendable()) return null;
-    return fetched;
   }
 
   private async findLastSteamDigest(channel: SendableChannels): Promise<Message | null> {
@@ -181,11 +232,16 @@ export class SteamDealsService {
         .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
 
       return (
-        mine.find((msg) =>
-          msg.embeds.some(
-            (e) => /steam daily deals/i.test(e.title ?? '') || /steam deals/i.test(e.footer?.text ?? ''),
-          ),
-        ) ?? null
+        mine.find((msg) => {
+          const blob = collectMessageTextContent(msg);
+          return (
+            looksLikeSteamDigest(blob) ||
+            msg.embeds.some(
+              (e) =>
+                /steam daily deals/i.test(e.title ?? '') || /steam deals/i.test(e.footer?.text ?? ''),
+            )
+          );
+        }) ?? null
       );
     } catch {
       return null;
@@ -193,11 +249,25 @@ export class SteamDealsService {
   }
 
   private isDuplicateDigest(lastMessage: Message, top: SteamDealItem[]): boolean {
-    if (top.length === 0 || lastMessage.embeds.length === 0) return false;
-    const lastTitles = lastMessage.embeds[0].fields.map((f) => f.name.replace(/^\d+\.\s*/, '').trim());
+    if (top.length === 0) return false;
+    const blob = collectMessageTextContent(lastMessage);
+    let lastTitles = extractHeadingTitles(blob);
+    if (lastTitles.length === 0 && lastMessage.embeds[0]) {
+      lastTitles = lastMessage.embeds[0].fields.map((f) => f.name.replace(/^\d+\.\s*/, '').trim());
+    }
     const newTitles = top.map((item) => item.gameName);
     return (
       lastTitles.length === newTitles.length && lastTitles.every((title, i) => title === newTitles[i])
     );
+  }
+}
+
+async function reactQuietly(message: Message, emojis: string[]): Promise<void> {
+  for (const emoji of emojis) {
+    try {
+      await message.react(emoji);
+    } catch {
+      /* missing Add Reactions permission */
+    }
   }
 }

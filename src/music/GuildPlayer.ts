@@ -6,9 +6,9 @@ import {
   demuxProbe,
   entersState,
 } from '@discordjs/voice';
-import type { AudioPlayer, VoiceConnection } from '@discordjs/voice';
+import type { AudioPlayer, AudioResource, VoiceConnection } from '@discordjs/voice';
 import type { Message, SendableChannels } from 'discord.js';
-import { buildTrackEmbed } from '../core/embeds';
+import { buildNowPlayingDisplay, type V2Display } from '../core/display';
 import type { Logger } from '../core/logger';
 import type { LoopMode, Track, TrackSource } from '../core/types';
 
@@ -41,6 +41,7 @@ export class GuildPlayer {
   /** When true, Idle must advance even if loop mode is `track`. */
   private skipRequested = false;
   private queueSnapshot: Track[] = [];
+  private currentResource: AudioResource | null = null;
 
   constructor(
     readonly connection: VoiceConnection,
@@ -59,6 +60,7 @@ export class GuildPlayer {
       }
       const finished = this.current;
       this.current = null;
+      this.currentResource = null;
 
       if (finished) {
         if (this.loopMode === 'track' && !this.skipRequested) {
@@ -75,6 +77,7 @@ export class GuildPlayer {
     this.player.on('error', (error) => {
       this.logger.error('Audio player error:', error);
       this.current = null;
+      this.currentResource = null;
       void this.processQueue();
     });
 
@@ -85,6 +88,46 @@ export class GuildPlayer {
 
   setAnnounceChannel(channel: SendableChannels | null): void {
     this.announceChannel = channel;
+  }
+
+  getPlaybackPositionSec(): number {
+    const ms = this.currentResource?.playbackDuration;
+    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return 0;
+    return ms / 1000;
+  }
+
+  buildNowPlayingPanel(track: Track = this.current!): V2Display {
+    return buildNowPlayingDisplay({
+      track,
+      queueLength: this.queue.length,
+      paused: this.paused,
+      loopMode: this.loopMode,
+      positionSec: this.getPlaybackPositionSec(),
+      upNextTitle: this.queue[0]?.title ?? null,
+      label: this.paused ? 'Paused' : 'Now Playing',
+    });
+  }
+
+  async refreshNowPlaying(): Promise<void> {
+    const msg = this.nowPlayingMessage;
+    const track = this.current;
+    if (!msg || !track || this.destroyed) return;
+    const display = this.buildNowPlayingPanel(track);
+    try {
+      await msg.edit({
+        components: display.components,
+        flags: display.flags,
+      });
+    } catch {
+      /* message gone */
+    }
+  }
+
+  cycleLoopMode(): LoopMode {
+    const next: LoopMode =
+      this.loopMode === 'off' ? 'track' : this.loopMode === 'track' ? 'queue' : 'off';
+    this.setLoopMode(next);
+    return next;
   }
 
   getNowPlayingMessage(): Message | null {
@@ -116,8 +159,10 @@ export class GuildPlayer {
     if (this.destroyed || serial !== this.announceSerial) return;
 
     try {
+      const display = this.buildNowPlayingPanel(track);
       const msg = await channel.send({
-        embeds: [buildTrackEmbed(track, 'Now Playing')],
+        components: display.components,
+        flags: display.flags,
       });
       if (this.destroyed || serial !== this.announceSerial) {
         try {
@@ -293,6 +338,7 @@ export class GuildPlayer {
         inlineVolume: true,
       });
       this.current = track;
+      this.currentResource = resource;
       this.player.play(resource);
       this.logger.info(`Audio player started: ${track.title} (${this.queue.length} still queued)`);
 
@@ -304,6 +350,7 @@ export class GuildPlayer {
       const lastMsg = error instanceof Error ? error.message : String(error);
       this.lastError = lastMsg;
       this.current = null;
+      this.currentResource = null;
       this.logger.error(`Failed to play "${track.title}":`, error);
       this.logger.warn(`Skipping unplayable track "${track.title}" — continuing queue`);
       return false;

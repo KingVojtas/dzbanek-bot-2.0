@@ -1,15 +1,24 @@
 import type { Client, Message, SendableChannels, TextBasedChannel } from 'discord.js';
 import type { Config } from '../../config';
-import { buildEpicFreeGamesEmbed } from '../../core/embeds';
+import {
+  buildEpicFreeGamesDisplay,
+  collectMessageTextContent,
+  extractHeadingTitles,
+  looksLikeEpicDigest,
+} from '../../core/display';
 import type { Logger } from '../../core/logger';
 import type { EpicFreeGame } from '../../core/types';
+import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
+import { resolveDealTargets, type DealTarget } from '../targets';
 
 const EPIC_API_URL =
   'https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions' +
   '?locale=en-US&country=US&allowCountries=US';
 
-const EPIC_SEEN_SCOPE = 'epic:lineup';
+function epicScope(guildId: string): string {
+  return `epic:${guildId}`;
+}
 
 interface RawKeyImage {
   type: string;
@@ -72,6 +81,7 @@ export class EpicFreeGamesService {
     private readonly store: SeenStore,
     private readonly config: Config,
     private readonly logger: Logger,
+    private readonly guildSettings: GuildSettingsStore,
   ) {}
 
   async poll(): Promise<void> {
@@ -83,15 +93,15 @@ export class EpicFreeGamesService {
   }
 
   private async runPoll(): Promise<void> {
-    const channelId = this.config.epic.channelId;
-    if (!channelId) {
-      this.logger.info('Epic: no channelId configured — skipping.');
-      return;
-    }
-
-    const channel = await this.resolveChannel(channelId);
-    if (!channel) {
-      this.logger.warn(`Epic: channel ${channelId} missing or not sendable.`);
+    const targets = await resolveDealTargets(
+      this.client,
+      this.guildSettings,
+      this.config,
+      this.logger,
+      'epic',
+    );
+    if (targets.length === 0) {
+      this.logger.info('Epic: no guild channels configured — skipping.');
       return;
     }
 
@@ -109,23 +119,37 @@ export class EpicFreeGamesService {
     }
 
     const fingerprint = lineupFingerprint(games);
+    let posted = 0;
+    for (const target of targets) {
+      const sent = await this.postToGuild(target, games, fingerprint);
+      if (sent) posted += 1;
+    }
+    this.logger.info(`Epic: posted lineup to ${posted}/${targets.length} guild(s).`);
+  }
 
-    if ((await this.store.isEmpty(EPIC_SEEN_SCOPE)) && !this.config.epic.postOnFirstRun) {
-      await this.store.add(EPIC_SEEN_SCOPE, [fingerprint]);
-      this.logger.info('Epic: seeded current lineup silently.');
-      return;
+  private async postToGuild(
+    target: DealTarget,
+    games: EpicFreeGame[],
+    fingerprint: string,
+  ): Promise<boolean> {
+    const scope = epicScope(target.guildId);
+
+    if ((await this.store.isEmpty(scope)) && !this.config.epic.postOnFirstRun) {
+      await this.store.add(scope, [fingerprint]);
+      this.logger.info(`Epic: seeded current lineup silently for ${target.guildName}.`);
+      return false;
     }
 
-    if (await this.store.has(EPIC_SEEN_SCOPE, fingerprint)) {
-      this.logger.info('Epic: lineup already posted (stored fingerprint) — sending nothing.');
-      return;
+    if (await this.store.has(scope, fingerprint)) {
+      this.logger.info(`Epic: lineup already posted in ${target.guildName} — sending nothing.`);
+      return false;
     }
 
-    const previous = await this.findLastEpicDigest(channel);
+    const previous = await this.findLastEpicDigest(target.channel);
     if (previous && this.titlesMatch(previous, games)) {
-      await this.store.add(EPIC_SEEN_SCOPE, [fingerprint]);
-      this.logger.info('Epic: last message already lists this lineup — sending nothing.');
-      return;
+      await this.store.add(scope, [fingerprint]);
+      this.logger.info(`Epic: ${target.guildName} already lists this lineup — sending nothing.`);
+      return false;
     }
 
     if (previous) {
@@ -137,13 +161,18 @@ export class EpicFreeGamesService {
     }
 
     try {
-      await channel.send({ embeds: [buildEpicFreeGamesEmbed(games)] });
-      await this.store.add(EPIC_SEEN_SCOPE, [fingerprint]);
-      const current = games.filter((g) => !g.isUpcoming).length;
-      const upcoming = games.filter((g) => g.isUpcoming).length;
-      this.logger.info(`Epic: posted free games (${current} current, ${upcoming} upcoming).`);
+      const display = buildEpicFreeGamesDisplay(games);
+      const sent = await target.channel.send({
+        components: display.components,
+        flags: display.flags,
+      });
+      await this.store.add(scope, [fingerprint]);
+      this.logger.info(`Epic: posted free games to ${target.guildName}.`);
+      await reactQuietly(sent, ['🎁', '🆓', '⭐']);
+      return true;
     } catch (error) {
-      this.logger.error('Epic: failed to post digest:', error);
+      this.logger.error(`Epic: failed to post to ${target.guildName}:`, error);
+      return false;
     }
   }
 
@@ -167,12 +196,6 @@ export class EpicFreeGamesService {
     return [...current, ...upcoming];
   }
 
-  private async resolveChannel(channelId: string): Promise<SendableChannels | null> {
-    const fetched = await this.client.channels.fetch(channelId).catch(() => null);
-    if (!fetched || !fetched.isSendable()) return null;
-    return fetched;
-  }
-
   private async findLastEpicDigest(channel: SendableChannels): Promise<Message | null> {
     if (!channel.isTextBased()) return null;
     try {
@@ -182,11 +205,15 @@ export class EpicFreeGamesService {
         .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
 
       return (
-        mine.find((msg) =>
-          msg.embeds.some(
-            (e) => /epic games/i.test(e.title ?? '') || /epic games store/i.test(e.footer?.text ?? ''),
-          ),
-        ) ?? null
+        mine.find((msg) => {
+          const blob = collectMessageTextContent(msg);
+          return (
+            looksLikeEpicDigest(blob) ||
+            msg.embeds.some(
+              (e) => /epic games/i.test(e.title ?? '') || /epic games store/i.test(e.footer?.text ?? ''),
+            )
+          );
+        }) ?? null
       );
     } catch {
       return null;
@@ -194,14 +221,27 @@ export class EpicFreeGamesService {
   }
 
   private titlesMatch(lastMessage: Message, games: EpicFreeGame[]): boolean {
-    if (lastMessage.embeds.length === 0) return false;
-    const lastTitles = lastMessage.embeds[0].fields
-      .map((f) => f.name.trim())
-      .filter((name) => name !== '\u200b');
+    const blob = collectMessageTextContent(lastMessage);
+    let lastTitles = extractHeadingTitles(blob);
+    if (lastTitles.length === 0 && lastMessage.embeds[0]) {
+      lastTitles = lastMessage.embeds[0].fields
+        .map((f) => f.name.trim())
+        .filter((name) => name !== '\u200b');
+    }
     const newTitles = games.map((g) => g.title);
     return (
       lastTitles.length === newTitles.length && lastTitles.every((title, i) => title === newTitles[i])
     );
+  }
+}
+
+async function reactQuietly(message: Message, emojis: string[]): Promise<void> {
+  for (const emoji of emojis) {
+    try {
+      await message.react(emoji);
+    } catch {
+      /* missing Add Reactions permission */
+    }
   }
 }
 
@@ -231,13 +271,34 @@ function getUpcomingEndDate(el: RawElement): string | undefined {
   return el.promotions?.upcomingPromotionalOffers?.[0]?.promotionalOffers?.[0]?.endDate;
 }
 
-function getImage(el: RawElement): string | undefined {
-  const preferred = ['OfferImageWide', 'DieselStoreFrontWide', 'Thumbnail', 'OfferImageTall'];
-  for (const type of preferred) {
-    const found = el.keyImages.find((img) => img.type === type);
+const TALL_IMAGE_TYPES = [
+  'Thumbnail',
+  'OfferImageTall',
+  'DieselStoreFrontTall',
+  'DieselGameBoxTall',
+];
+const WIDE_IMAGE_TYPES = [
+  'OfferImageWide',
+  'DieselStoreFrontWide',
+  'DieselGameBox',
+  'featuredMedia',
+  'OgImage',
+];
+
+function isHttpImage(url: string): boolean {
+  return (
+    /^https:\/\//i.test(url) &&
+    !/video\.qs:\/\//i.test(url) &&
+    !/\.(mp4|webm|m3u8)(\?|$)/i.test(url)
+  );
+}
+
+function pickKeyImage(el: RawElement, types: string[]): string | undefined {
+  for (const type of types) {
+    const found = el.keyImages.find((img) => img.type === type && isHttpImage(img.url));
     if (found) return found.url;
   }
-  return el.keyImages[0]?.url;
+  return el.keyImages.find((img) => isHttpImage(img.url))?.url;
 }
 
 function buildStoreUrl(el: RawElement): string {
@@ -252,12 +313,15 @@ function buildStoreUrl(el: RawElement): string {
 }
 
 function toEpicFreeGame(el: RawElement, isUpcoming: boolean): EpicFreeGame {
+  const tall = pickKeyImage(el, TALL_IMAGE_TYPES);
+  const wide = pickKeyImage(el, WIDE_IMAGE_TYPES);
   return {
     title: el.title,
     description: el.description,
     originalPrice: el.price.totalPrice.fmtPrice.originalPrice,
     storeUrl: buildStoreUrl(el),
-    image: getImage(el),
+    image: tall ?? wide,
+    heroImage: wide ?? tall,
     seller: el.seller?.name || undefined,
     endDate: isUpcoming ? getUpcomingEndDate(el) : getActiveEndDate(el),
     isUpcoming,

@@ -1,5 +1,6 @@
 import { Collection } from 'discord.js';
 import type { Command } from '../core/types';
+import { setup } from './admin/setup';
 import { loop } from './music/loop';
 import { nowplaying } from './music/nowplaying';
 import { pause } from './music/pause';
@@ -12,6 +13,7 @@ import { skip } from './music/skip';
 import { stop } from './music/stop';
 
 const commandList: Command[] = [
+  setup,
   play,
   skip,
   queue,

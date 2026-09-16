@@ -30,15 +30,28 @@ Idle auto-disconnect after 120 seconds of silence (configurable).
 
 ### Steam daily deals
 
-Every day (default **03:33**) the bot fetches Steam discounts from [game-deals.app](https://game-deals.app), keeps games rated *Very Positive* or better, and posts a digest of **new** deals only.
+Every day (default **03:33**) the bot fetches Steam discounts from [game-deals.app](https://game-deals.app), keeps games rated *Very Positive* or better, and posts a digest of **new** deals **in every server** that has a Steam channel.
 
-If every deal was already posted, or none pass the review filter, **no message is sent**.
+If every deal was already posted in that server, or none pass the review filter, **no message is sent**.
 
 ### Epic Games free games
 
-Polls the Epic Store free-games API (default **12:00** and **17:00**). Posts the current + upcoming lineup only when it changed. Same lineup as last time → **silence**.
+Polls the Epic Store free-games API (default **12:00** and **17:00**). Posts the current + upcoming lineup in **each server** only when that server has not seen this lineup yet.
 
-Both fetchers persist posted IDs / lineup fingerprints in `data/` so restarts cannot re-spam.
+Both fetchers persist posted IDs / lineup fingerprints **per server** in SQLite (`data/bot.db`, Prisma) so restarts cannot re-spam.
+
+### Multi-server
+
+Music already works per voice channel. Deals are per guild:
+
+| Command | Description |
+| --- | --- |
+| `/setup steam <channel>` | Where Steam deals post in this server (Manage Server). |
+| `/setup epic <channel>` | Where Epic free games post in this server. |
+| `/setup status` | Show this server's deal channels. |
+| `/setup disable steam\|epic` | Stop posting that feed here. |
+
+If you never run `/setup`, the bot looks for a text channel named like `#steam`, `#deals`, `#epic`, or `#free-games` and uses that. The `channelId` values in `config.json` only seed the server that actually owns those channels.
 
 ---
 
@@ -57,7 +70,7 @@ OAuth2 scopes: `bot`, `applications.commands`
 | Feature | Permissions |
 | --- | --- |
 | Music | Connect, Speak |
-| Steam / Epic | View Channel, Send Messages, Embed Links, Manage Messages |
+| Steam / Epic | View Channel, Send Messages, Embed Links, Manage Messages, Add Reactions |
 
 **Manage Messages** is required so the bot can delete its own previous Now Playing / digest embeds.
 
@@ -66,8 +79,9 @@ OAuth2 scopes: `bot`, `applications.commands`
 ## Setup
 
 ```bash
-# 1. Install dependencies (also downloads the yt-dlp binary)
+# 1. Install dependencies (also downloads the yt-dlp binary + generates Prisma client)
 npm install
+npx prisma db push
 
 # 2. Create your .env file
 cp .env.example .env
@@ -76,7 +90,8 @@ cp .env.example .env
 # 3. Fill in src/config/config.json
 #    - discord.clientId  = Application ID from the Developer Portal
 #    - discord.guildId   = your server ID for instant command deploy (or null for global)
-#    - steam.channelId / epic.channelId = text channel IDs (leave empty to disable)
+#    - steam.channelId / epic.channelId = optional legacy channel IDs
+#      (seed that one server; other servers use /setup or auto-detect)
 
 # 4. Register slash commands
 npm run deploy
@@ -151,11 +166,14 @@ src/
   commands/music/          One file per slash command
   events/                  ready + interactionCreate
   music/                   Voice, queue, Now Playing, YouTube + Spotify sources
+  db/                      Prisma client + one-shot JSON → SQLite migrate
   deals/
-    seen-store.ts          Persistent JSON ID store
+    seen-store.ts          SQLite seen IDs (Prisma DedupEntry)
+    guild-settings.ts      SQLite per-server channels
     steam/                 RSS + reviews + prices + digest
     epic/                  Free-games API + digest
-data/                      Runtime state (git-ignored)
+prisma/schema.prisma       SQLite schema
+data/bot.db                Runtime SQLite (git-ignored)
 ```
 
 ---
@@ -167,6 +185,7 @@ data/                      Runtime state (git-ignored)
 | `npm run dev` | Run with auto-reload (`tsx watch`). |
 | `npm start` | Run the bot. |
 | `npm run deploy` | Register slash commands with Discord. |
+| `npm run db:push` | Create/update `data/bot.db` from the Prisma schema. |
 | `npm run typecheck` | Type-check with `tsc --noEmit`. |
 | `npm run lint` | Lint with ESLint. |
 | `npm run format` | Format with Prettier. |

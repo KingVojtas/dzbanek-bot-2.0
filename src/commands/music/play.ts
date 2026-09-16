@@ -1,5 +1,6 @@
 import { GuildMember, MessageFlags, SlashCommandBuilder } from 'discord.js';
-import { buildInfoEmbed, buildTrackEmbed, formatDuration } from '../../core/embeds';
+import { buildQueuedTrackDisplay } from '../../core/display';
+import { buildInfoEmbed, formatDuration } from '../../core/embeds';
 import { isSpotifyAlbumUrl, isSpotifyPlaylistUrl } from '../../music/sources';
 import { youtubeBotCheckHint } from '../../music/ytdlp-cookies';
 import type { Command, Track } from '../../core/types';
@@ -147,8 +148,10 @@ export const play: Command = {
       }
 
       if (player.current) {
+        const display = player.buildNowPlayingPanel();
         await interaction.editReply({
-          embeds: [buildTrackEmbed(player.current, 'Now Playing')],
+          components: display.components,
+          flags: display.flags,
         });
         return;
       }
@@ -172,9 +175,11 @@ export const play: Command = {
         }
         footer = `Position #${position}${waitSec > 0 ? ` · ~${formatDuration(waitSec)} until it starts` : ''}`;
       }
-      const embed = buildTrackEmbed(added, label);
-      if (footer) embed.setFooter({ text: footer });
-      await interaction.editReply({ embeds: [embed] });
+      const display = buildQueuedTrackDisplay(added, { label, footer });
+      await interaction.editReply({
+        components: display.components,
+        flags: display.flags,
+      });
       return;
     }
 

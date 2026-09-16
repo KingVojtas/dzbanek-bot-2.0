@@ -1,5 +1,4 @@
 import { SlashCommandBuilder } from 'discord.js';
-import { buildTrackEmbed } from '../../core/embeds';
 import type { Command } from '../../core/types';
 import { requirePlayer } from './_util';
 
@@ -12,8 +11,10 @@ export const nowplaying: Command = {
     const player = await requirePlayer(interaction, services);
     if (!player || !player.current) return;
 
+    const display = player.buildNowPlayingPanel();
     await interaction.reply({
-      embeds: [buildTrackEmbed(player.current, player.paused ? 'Paused' : 'Now Playing')],
+      components: display.components,
+      flags: display.flags,
     });
   },
 };

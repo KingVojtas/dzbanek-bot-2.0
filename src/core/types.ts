@@ -8,6 +8,7 @@ import type {
 import type { Readable } from 'node:stream';
 import type { Config } from '../config';
 import type { Logger } from './logger';
+import type { GuildSettingsStore } from '../deals/guild-settings';
 import type { MusicManager } from '../music/MusicManager';
 
 /** Shared services injected into every command's `execute`. */
@@ -15,6 +16,7 @@ export interface Services {
   config: Config;
   logger: Logger;
   music: MusicManager;
+  guildSettings?: GuildSettingsStore;
 }
 
 /** Loop modes for music queue. */
@@ -65,7 +67,10 @@ export interface EpicFreeGame {
   description: string;
   originalPrice: string;
   storeUrl: string;
+  /** Tall/square box art for the row thumbnail. */
   image?: string;
+  /** Wide store banner — used as the digest hero image. */
+  heroImage?: string;
   seller?: string;
   endDate?: string;
   isUpcoming: boolean;
