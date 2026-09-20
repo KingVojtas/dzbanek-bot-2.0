@@ -24,13 +24,15 @@ export const STATIONS: Record<StationId, RadioStation> = {
   kiss: {
     id: 'kiss',
     choiceName: 'Kiss',
-    name: 'Radio Kiss',
-    slogan: 'be happy!',
+    name: 'Kiss Radio',
+    slogan: '...be happy!',
     streamUrl: 'https://icecast4.play.cz/kiss128.mp3',
     websiteUrl: 'https://www.kiss.cz/',
-    color: 0xec008c,
-    logoUrl: 'https://www.kiss.cz/data/download/Kiss_BeHappy.png',
-    imageUrl: 'https://www.kiss.cz/assets/images/download/Tapeta_Kiss_4k_3840x2160_PC-TABLET.jpg',
+    color: 0xe30613,
+    logoUrl:
+      'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9b/Logo_Radio_Kiss.svg/500px-Logo_Radio_Kiss.svg.png',
+    imageUrl:
+      'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9b/Logo_Radio_Kiss.svg/960px-Logo_Radio_Kiss.svg.png',
   },
   rock: {
     id: 'rock',
@@ -41,7 +43,7 @@ export const STATIONS: Record<StationId, RadioStation> = {
     websiteUrl: 'https://rockovyradio.cz/',
     color: 0xc8102e,
     logoUrl: 'https://rockovyradio.cz/design/favicon/android-icon-192x192.png',
-    imageUrl: 'https://rockovyradio.cz/design/img/img-social-networks-default.jpg',
+    imageUrl: 'https://rockovyradio.cz/design/favicon/apple-icon-180x180.png',
   },
   beat: {
     id: 'beat',
