@@ -61,6 +61,11 @@ async function handleButton(interaction: ButtonInteraction, services: Services):
     return;
   }
 
+  if (interaction.customId.startsWith('radio:')) {
+    await handleRadioButton(interaction, services);
+    return;
+  }
+
   if (!interaction.customId.startsWith(QUEUE_BUTTON_PREFIX)) return;
 
   const page = Number.parseInt(interaction.customId.slice(QUEUE_BUTTON_PREFIX.length), 10);
@@ -91,7 +96,10 @@ async function handleButton(interaction: ButtonInteraction, services: Services):
   });
 }
 
-async function handleMusicButton(interaction: ButtonInteraction, services: Services): Promise<void> {
+async function handleMusicButton(
+  interaction: ButtonInteraction,
+  services: Services,
+): Promise<void> {
   const guildId = interaction.guildId;
   if (!guildId) {
     await interaction.reply({
@@ -157,6 +165,50 @@ async function handleMusicButton(interaction: ButtonInteraction, services: Servi
     components: display.components,
     flags: display.flags,
   });
+}
+
+async function handleRadioButton(
+  interaction: ButtonInteraction,
+  services: Services,
+): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({
+      embeds: [buildInfoEmbed('This can only be used in a server.')],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  if (interaction.customId !== 'radio:stop') {
+    await interaction.deferUpdate();
+    return;
+  }
+
+  if (!services.radio.isPlaying(guildId)) {
+    await interaction.reply({
+      embeds: [buildInfoEmbed('🔇 Radio is not playing right now.')],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const member = interaction.member;
+  const botChannelId = services.radio.channelId(guildId);
+  if (
+    !(member instanceof GuildMember) ||
+    !botChannelId ||
+    member.voice.channelId !== botChannelId
+  ) {
+    await interaction.reply({
+      embeds: [buildInfoEmbed('🔇 Join the voice channel the bot is in to use this control.')],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await interaction.deferUpdate();
+  services.radio.stop(guildId);
 }
 
 function inSameVoice(interaction: ButtonInteraction, player: GuildPlayer): boolean {

@@ -68,6 +68,7 @@ export class RadioManager {
         existing.switchStation(station);
         try {
           await existing.waitForStart();
+          await existing.refreshNowPlaying();
         } catch (err) {
           this.logger.error(`${station.name} failed to start in guild ${guildId}:`, err);
           throw err;
@@ -116,13 +117,14 @@ export class RadioManager {
       );
     }
 
-    const session = new RadioSession(connection, station, this.logger, () => {
+    const session = new RadioSession(connection, station, channel.name, this.logger, () => {
       this.sessions.delete(guildId);
     });
     this.sessions.set(guildId, session);
     session.start();
     try {
       await session.waitForStart();
+      await session.refreshNowPlaying();
     } catch (err) {
       this.logger.error(`${station.name} failed to start in guild ${guildId}:`, err);
       throw err;

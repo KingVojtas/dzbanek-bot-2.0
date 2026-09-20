@@ -14,6 +14,10 @@ export interface RadioStation {
   logoUrl: string;
   /** Official photo / social artwork (large embed image). */
   imageUrl: string;
+  /** Optional JSON now-playing endpoint (radia.cz). */
+  nowPlayingUrl?: string;
+  /** Optional Nette snippet URL that returns current on-air HTML. */
+  nowPlayingSnippetUrl?: string;
 }
 
 /**
@@ -33,6 +37,7 @@ export const STATIONS: Record<StationId, RadioStation> = {
       'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9b/Logo_Radio_Kiss.svg/500px-Logo_Radio_Kiss.svg.png',
     imageUrl:
       'https://upload.wikimedia.org/wikipedia/commons/thumb/9/9b/Logo_Radio_Kiss.svg/960px-Logo_Radio_Kiss.svg.png',
+    nowPlayingUrl: 'https://radia.cz/api/v1/radio/radio-kiss/songs/now.json',
   },
   rock: {
     id: 'rock',
@@ -44,6 +49,7 @@ export const STATIONS: Record<StationId, RadioStation> = {
     color: 0xc8102e,
     logoUrl: 'https://rockovyradio.cz/design/favicon/android-icon-192x192.png',
     imageUrl: 'https://rockovyradio.cz/design/favicon/apple-icon-180x180.png',
+    nowPlayingUrl: 'https://radia.cz/api/v1/radio/rock-radio/songs/now.json',
   },
   beat: {
     id: 'beat',
@@ -55,6 +61,8 @@ export const STATIONS: Record<StationId, RadioStation> = {
     color: 0xf5c400,
     logoUrl: 'https://www.radiobeat.cz/img/logo.png',
     imageUrl: 'https://www.radiobeat.cz/img/logo@2x.png',
+    nowPlayingUrl: 'https://radia.cz/api/v1/radio/radio-beat/songs/now.json',
+    nowPlayingSnippetUrl: 'https://www.radiobeat.cz/?do=broadcast-update',
   },
 };
 

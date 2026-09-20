@@ -8,10 +8,13 @@ import {
 import type { AudioPlayer, VoiceConnection } from '@discordjs/voice';
 import type { Message } from 'discord.js';
 import type { Logger } from '../core/logger';
+import { buildRadioPlayingDisplay } from './embed';
+import { fetchNowPlaying, trackKey, type NowPlayingTrack } from './now-playing';
 import type { RadioStation } from './station';
 
 const RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
 const MAX_RECONNECT_ATTEMPTS = 5;
+const NOW_PLAYING_POLL_MS = 20_000;
 
 /**
  * One live Icecast session for a guild: voice connection, audio player, and
@@ -28,14 +31,20 @@ export class RadioSession {
   private ignoreIdle = false;
   private currentStation: RadioStation;
   private nowPlayingMessage: Message | null = null;
+  private metadataTimer: ReturnType<typeof setInterval> | null = null;
+  private lastTrackKey = '';
+  private currentTrack: NowPlayingTrack | null = null;
+  private channelName: string;
 
   constructor(
     readonly connection: VoiceConnection,
     station: RadioStation,
+    channelName: string,
     private readonly logger: Logger,
     private readonly onDestroy: () => void,
   ) {
     this.currentStation = station;
+    this.channelName = channelName;
     this.player = createAudioPlayer();
     this.connection.subscribe(this.player);
     this.attachListeners();
@@ -45,12 +54,17 @@ export class RadioSession {
     return this.currentStation;
   }
 
+  get nowPlaying(): NowPlayingTrack | null {
+    return this.currentTrack;
+  }
+
   getNowPlayingMessage(): Message | null {
     return this.nowPlayingMessage;
   }
 
   setNowPlayingMessage(message: Message | null): void {
     this.nowPlayingMessage = message;
+    this.startNowPlayingLoop();
   }
 
   get channelId(): string | null {
@@ -81,6 +95,8 @@ export class RadioSession {
       /* already idle */
     }
     this.playResource();
+    this.lastTrackKey = '';
+    this.currentTrack = null;
   }
 
   async waitForStart(timeoutMs = 15_000): Promise<void> {
@@ -99,10 +115,23 @@ export class RadioSession {
     );
   }
 
+  async refreshNowPlaying(): Promise<NowPlayingTrack | null> {
+    if (this.destroyed) return this.currentTrack;
+    const track = await fetchNowPlaying(this.currentStation, this.logger);
+    if (this.destroyed) return this.currentTrack;
+    const key = trackKey(track);
+    const changed = key !== this.lastTrackKey;
+    this.lastTrackKey = key;
+    this.currentTrack = track;
+    if (changed) await this.pushNowPlayingEmbed();
+    return this.currentTrack;
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
     this.clearReconnectTimer();
+    this.stopNowPlayingLoop();
     this.reconnectScheduled = false;
     this.deleteNowPlaying();
 
@@ -167,6 +196,37 @@ export class RadioSession {
     this.connection.on(VoiceConnectionStatus.Disconnected, () => {
       void this.handleDisconnect();
     });
+  }
+
+  private startNowPlayingLoop(): void {
+    if (this.metadataTimer || this.destroyed) return;
+    this.metadataTimer = setInterval(() => {
+      void this.refreshNowPlaying();
+    }, NOW_PLAYING_POLL_MS);
+    this.metadataTimer.unref?.();
+  }
+
+  private stopNowPlayingLoop(): void {
+    if (!this.metadataTimer) return;
+    clearInterval(this.metadataTimer);
+    this.metadataTimer = null;
+  }
+
+  private async pushNowPlayingEmbed(): Promise<void> {
+    const message = this.nowPlayingMessage;
+    if (!message || this.destroyed) return;
+    try {
+      const display = buildRadioPlayingDisplay(this.currentStation, this.channelName, {
+        track: this.currentTrack,
+      });
+      await message.edit({
+        embeds: [],
+        components: display.components,
+        flags: display.flags,
+      });
+    } catch (error) {
+      this.logger.debug(`${this.currentStation.name} now-playing embed update failed:`, error);
+    }
   }
 
   private deleteNowPlaying(): void {

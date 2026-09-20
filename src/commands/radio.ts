@@ -8,7 +8,7 @@ import {
 import { buildInfoEmbed } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { memberVoiceChannel, replyEphemeral } from './music/_util';
-import { buildRadioPlayingEmbed } from '../radio/embed';
+import { buildRadioPlayingDisplay } from '../radio/embed';
 import { STATION_LIST, getStation } from '../radio/station';
 
 export const radio: Command = {
@@ -85,8 +85,13 @@ async function playRadio(
     services.radio.station(guildId)?.id === station.id;
 
   if (alreadyThisStation) {
+    const display = buildRadioPlayingDisplay(station, voiceChannel.name, {
+      alreadyPlaying: true,
+      track: services.radio.get(guildId)?.nowPlaying,
+    });
     await interaction.reply({
-      embeds: [buildRadioPlayingEmbed(station, voiceChannel.name, true)],
+      components: display.components,
+      flags: display.flags,
     });
     return;
   }
@@ -101,8 +106,12 @@ async function playRadio(
 
   try {
     const session = await services.radio.play(voiceChannel, station);
+    const display = buildRadioPlayingDisplay(station, voiceChannel.name, {
+      track: session.nowPlaying,
+    });
     await interaction.editReply({
-      embeds: [buildRadioPlayingEmbed(station, voiceChannel.name)],
+      components: display.components,
+      flags: display.flags,
     });
     const reply = await interaction.fetchReply();
     session.setNowPlayingMessage(reply);

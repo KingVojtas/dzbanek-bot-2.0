@@ -14,19 +14,19 @@ Play audio from YouTube (URL or search) and Spotify (track / album / playlist). 
 
 Whenever a new song starts, the previous **Now Playing** embed is deleted and a fresh one is posted so the chat never stacks player messages.
 
-| Command                 | Description                                                                              |
-| ----------------------- | ---------------------------------------------------------------------------------------- |
-| `/play <query>`         | Join your voice channel and play a track (or add it to the queue). Optional `play_next`. |
-| `/skip`                 | Skip the current track.                                                                  |
-| `/queue`                | Show the current queue (paginated).                                                      |
-| `/stop`                 | Stop playback, clear the queue, delete the Now Playing embed, and leave.                 |
-| `/pause` / `/resume`    | Pause or resume playback.                                                                |
-| `/nowplaying`           | Show the current track.                                                                  |
-| `/shuffle`              | Shuffle the upcoming queue.                                                              |
-| `/loop`                 | `off`, `track`, or `queue`.                                                              |
-| `/remove <position>`    | Drop a track from the upcoming queue (1-based).                                          |
-| `/radio play <station>` | Join your voice channel and stream **Kiss**, **Rock Radio**, or **Radio Beat**.          |
-| `/radio stop`           | Stop the radio and leave the voice channel.                                              |
+| Command                 | Description                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `/play <query>`         | Join your voice channel and play a track (or add it to the queue). Optional `play_next`.                                              |
+| `/skip`                 | Skip the current track.                                                                                                               |
+| `/queue`                | Show the current queue (paginated).                                                                                                   |
+| `/stop`                 | Stop playback, clear the queue, delete the Now Playing embed, and leave.                                                              |
+| `/pause` / `/resume`    | Pause or resume playback.                                                                                                             |
+| `/nowplaying`           | Show the current track.                                                                                                               |
+| `/shuffle`              | Shuffle the upcoming queue.                                                                                                           |
+| `/loop`                 | `off`, `track`, or `queue`.                                                                                                           |
+| `/remove <position>`    | Drop a track from the upcoming queue (1-based).                                                                                       |
+| `/radio play <station>` | Join your voice channel and stream **Kiss**, **Rock Radio**, or **Radio Beat**. The now-playing embed updates when the track changes. |
+| `/radio stop`           | Stop the radio and leave the voice channel.                                                                                           |
 
 Starting radio stops any current music queue (and `/play` stops radio) so they never share a voice connection.
 
