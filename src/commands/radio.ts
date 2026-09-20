@@ -8,17 +8,32 @@ import {
 import { buildInfoEmbed } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { memberVoiceChannel, replyEphemeral } from './music/_util';
-import { RADIO_KISS_NAME } from '../radio/station';
+import { buildRadioPlayingEmbed } from '../radio/embed';
+import { STATION_LIST, getStation } from '../radio/station';
 
 export const radio: Command = {
   data: new SlashCommandBuilder()
     .setName('radio')
-    .setDescription('Play Radio Kiss in a voice channel.')
+    .setDescription('Play a live radio station in a voice channel.')
     .addSubcommand((sub) =>
-      sub.setName('play').setDescription('Join your voice channel and start Radio Kiss.'),
+      sub
+        .setName('play')
+        .setDescription('Join your voice channel and start a radio station.')
+        .addStringOption((option) =>
+          option
+            .setName('station')
+            .setDescription('Which station to play')
+            .setRequired(true)
+            .addChoices(
+              ...STATION_LIST.map((station) => ({
+                name: station.choiceName,
+                value: station.id,
+              })),
+            ),
+        ),
     )
     .addSubcommand((sub) =>
-      sub.setName('stop').setDescription('Stop Radio Kiss and leave the voice channel.'),
+      sub.setName('stop').setDescription('Stop the radio and leave the voice channel.'),
     ),
 
   async execute(interaction, services) {
@@ -43,6 +58,12 @@ async function playRadio(
     return;
   }
 
+  const station = getStation(interaction.options.getString('station', true));
+  if (!station) {
+    await replyEphemeral(interaction, '❌ Unknown radio station.');
+    return;
+  }
+
   const voiceChannel = memberVoiceChannel(interaction);
   if (!voiceChannel) {
     await interaction.reply({
@@ -58,31 +79,43 @@ async function playRadio(
     return;
   }
 
-  if (services.radio.isLive(guildId) && services.radio.channelId(guildId) === voiceChannel.id) {
+  const alreadyThisStation =
+    services.radio.isLive(guildId) &&
+    services.radio.channelId(guildId) === voiceChannel.id &&
+    services.radio.station(guildId)?.id === station.id;
+
+  if (alreadyThisStation) {
     await interaction.reply({
-      embeds: [
-        buildInfoEmbed(`📻 ${RADIO_KISS_NAME} is already playing in **#${voiceChannel.name}**.`),
-      ],
+      embeds: [buildRadioPlayingEmbed(station, voiceChannel.name, true)],
     });
     return;
   }
 
   await interaction.deferReply();
 
-  services.music.get(guildId)?.stop();
+  if (!services.radio.isPlaying(guildId)) {
+    services.music.get(guildId)?.stop();
+  }
+
+  const previousMessage = services.radio.get(guildId)?.getNowPlayingMessage() ?? null;
 
   try {
-    await services.radio.play(voiceChannel);
+    const session = await services.radio.play(voiceChannel, station);
     await interaction.editReply({
-      embeds: [
-        buildInfoEmbed(`📻 Now playing **${RADIO_KISS_NAME}** in **#${voiceChannel.name}**.`),
-      ],
+      embeds: [buildRadioPlayingEmbed(station, voiceChannel.name)],
     });
+    const reply = await interaction.fetchReply();
+    session.setNowPlayingMessage(reply);
+    if (previousMessage && previousMessage.id !== reply.id) {
+      await previousMessage.delete().catch(() => {
+        /* already deleted */
+      });
+    }
   } catch (error: unknown) {
-    services.logger.error('Failed to start Radio Kiss:', error);
+    services.logger.error(`Failed to start ${station.name}:`, error);
     const errMsg = error instanceof Error ? error.message : String(error || '');
     await interaction.editReply({
-      embeds: [buildInfoEmbed(`❌ Could not start ${RADIO_KISS_NAME}.\n${errMsg.slice(0, 400)}`)],
+      embeds: [buildInfoEmbed(`❌ Could not start ${station.name}.\n${errMsg.slice(0, 400)}`)],
     });
   }
 }
@@ -112,9 +145,10 @@ async function stopRadio(
     return;
   }
 
+  const name = services.radio.station(guildId)?.name ?? 'the radio';
   services.radio.stop(guildId);
   await interaction.reply({
-    embeds: [buildInfoEmbed(`⏹️ Stopped ${RADIO_KISS_NAME} and left the voice channel.`)],
+    embeds: [buildInfoEmbed(`⏹️ Stopped ${name} and left the voice channel.`)],
   });
 }
 

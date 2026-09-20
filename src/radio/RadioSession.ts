@@ -6,8 +6,9 @@ import {
   entersState,
 } from '@discordjs/voice';
 import type { AudioPlayer, VoiceConnection } from '@discordjs/voice';
+import type { Message } from 'discord.js';
 import type { Logger } from '../core/logger';
-import { RADIO_KISS_NAME, RADIO_KISS_URL } from './station';
+import type { RadioStation } from './station';
 
 const RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
 const MAX_RECONNECT_ATTEMPTS = 5;
@@ -23,15 +24,33 @@ export class RadioSession {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectFailures = 0;
   private reconnectScheduled = false;
+  /** Skip the Idle caused by swapping the current Icecast resource. */
+  private ignoreIdle = false;
+  private currentStation: RadioStation;
+  private nowPlayingMessage: Message | null = null;
 
   constructor(
     readonly connection: VoiceConnection,
+    station: RadioStation,
     private readonly logger: Logger,
     private readonly onDestroy: () => void,
   ) {
+    this.currentStation = station;
     this.player = createAudioPlayer();
     this.connection.subscribe(this.player);
     this.attachListeners();
+  }
+
+  get station(): RadioStation {
+    return this.currentStation;
+  }
+
+  getNowPlayingMessage(): Message | null {
+    return this.nowPlayingMessage;
+  }
+
+  setNowPlayingMessage(message: Message | null): void {
+    this.nowPlayingMessage = message;
   }
 
   get channelId(): string | null {
@@ -48,19 +67,35 @@ export class RadioSession {
     this.playResource();
   }
 
+  /** Swap Icecast URL in place — does not tear down the voice connection. */
+  switchStation(station: RadioStation): void {
+    if (this.destroyed) return;
+    this.currentStation = station;
+    this.reconnectFailures = 0;
+    this.reconnectScheduled = false;
+    this.clearReconnectTimer();
+    this.ignoreIdle = true;
+    try {
+      this.player.stop(true);
+    } catch {
+      /* already idle */
+    }
+    this.playResource();
+  }
+
   async waitForStart(timeoutMs = 15_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (this.destroyed) {
-        throw new Error(`${RADIO_KISS_NAME} stopped before audio started.`);
+        throw new Error(`${this.currentStation.name} stopped before audio started.`);
       }
-      if (this.isLive) return;
+      if (this.player.state.status === AudioPlayerStatus.Playing) return;
       await new Promise((r) => setTimeout(r, 50));
     }
-    if (this.isLive) return;
+    if (this.player.state.status === AudioPlayerStatus.Playing) return;
     this.destroy();
     throw new Error(
-      `Timed out waiting for ${RADIO_KISS_NAME} to start. Make sure FFmpeg is available.`,
+      `Timed out waiting for ${this.currentStation.name} to start. Make sure FFmpeg is available.`,
     );
   }
 
@@ -69,6 +104,7 @@ export class RadioSession {
     this.destroyed = true;
     this.clearReconnectTimer();
     this.reconnectScheduled = false;
+    this.deleteNowPlaying();
 
     try {
       this.player.stop(true);
@@ -92,7 +128,7 @@ export class RadioSession {
   private attachListeners(): void {
     this.player.on('error', (error) => {
       if (this.destroyed) return;
-      this.logger.error(`${RADIO_KISS_NAME} player error:`, error);
+      this.logger.error(`${this.currentStation.name} player error:`, error);
       this.scheduleReconnect();
     });
 
@@ -107,6 +143,10 @@ export class RadioSession {
       }
 
       if (newState.status === AudioPlayerStatus.Idle) {
+        if (this.ignoreIdle) {
+          this.ignoreIdle = false;
+          return;
+        }
         this.scheduleReconnect();
       }
     });
@@ -129,9 +169,18 @@ export class RadioSession {
     });
   }
 
+  private deleteNowPlaying(): void {
+    const old = this.nowPlayingMessage;
+    this.nowPlayingMessage = null;
+    if (!old) return;
+    void old.delete().catch(() => {
+      /* already deleted / missing access */
+    });
+  }
+
   private playResource(): void {
     if (this.destroyed) return;
-    const resource = createAudioResource(RADIO_KISS_URL, { inlineVolume: true });
+    const resource = createAudioResource(this.currentStation.streamUrl, { inlineVolume: true });
     this.player.play(resource);
   }
 
@@ -140,7 +189,7 @@ export class RadioSession {
 
     if (this.reconnectFailures >= MAX_RECONNECT_ATTEMPTS) {
       this.logger.error(
-        `${RADIO_KISS_NAME}: giving up after ${MAX_RECONNECT_ATTEMPTS} consecutive reconnect failures.`,
+        `${this.currentStation.name}: giving up after ${MAX_RECONNECT_ATTEMPTS} consecutive reconnect failures.`,
       );
       this.destroy();
       return;
@@ -152,7 +201,7 @@ export class RadioSession {
     this.reconnectScheduled = true;
 
     this.logger.warn(
-      `${RADIO_KISS_NAME} stream interrupted — reconnecting in ${delay}ms (attempt ${this.reconnectFailures}/${MAX_RECONNECT_ATTEMPTS}).`,
+      `${this.currentStation.name} stream interrupted — reconnecting in ${delay}ms (attempt ${this.reconnectFailures}/${MAX_RECONNECT_ATTEMPTS}).`,
     );
 
     this.reconnectTimer = setTimeout(() => {
@@ -162,7 +211,7 @@ export class RadioSession {
       try {
         this.playResource();
       } catch (error) {
-        this.logger.error(`${RADIO_KISS_NAME} reconnect failed:`, error);
+        this.logger.error(`${this.currentStation.name} reconnect failed:`, error);
         this.scheduleReconnect();
       }
     }, delay);

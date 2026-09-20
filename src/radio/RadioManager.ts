@@ -7,11 +7,11 @@ import {
 import type { VoiceBasedChannel } from 'discord.js';
 import type { Logger } from '../core/logger';
 import { RadioSession } from './RadioSession';
-import { RADIO_KISS_NAME } from './station';
+import type { RadioStation } from './station';
 
 const JOIN_TIMEOUT_MS = 20_000;
 
-/** Tracks one Radio Kiss session per guild. */
+/** Tracks one live-radio session per guild. */
 export class RadioManager {
   private readonly sessions = new Map<string, RadioSession>();
 
@@ -29,6 +29,14 @@ export class RadioManager {
     return this.sessions.get(guildId)?.channelId ?? null;
   }
 
+  station(guildId: string): RadioStation | null {
+    return this.sessions.get(guildId)?.station ?? null;
+  }
+
+  get(guildId: string): RadioSession | undefined {
+    return this.sessions.get(guildId);
+  }
+
   stop(guildId: string): void {
     const session = this.sessions.get(guildId);
     if (!session) return;
@@ -41,10 +49,11 @@ export class RadioManager {
   }
 
   /**
-   * Join `channel` and start Radio Kiss. Reuses a healthy same-channel session.
-   * Replaces a dead session or one in a different channel.
+   * Join `channel` and start `station`. Reuses a healthy same-channel session,
+   * swapping the Icecast URL when the station changes. Replaces a dead session
+   * or one in a different channel.
    */
-  async play(channel: VoiceBasedChannel): Promise<RadioSession> {
+  async play(channel: VoiceBasedChannel, station: RadioStation): Promise<RadioSession> {
     const guildId = channel.guild.id;
 
     const existing = this.sessions.get(guildId);
@@ -52,6 +61,17 @@ export class RadioManager {
       const status = existing.connection.state.status;
       const sameChannel = existing.channelId === channel.id;
       if (sameChannel && existing.isLive && status === VoiceConnectionStatus.Ready) {
+        if (existing.station.id === station.id) return existing;
+        this.logger.info(
+          `Switching radio in guild ${guildId}: ${existing.station.name} → ${station.name}`,
+        );
+        existing.switchStation(station);
+        try {
+          await existing.waitForStart();
+        } catch (err) {
+          this.logger.error(`${station.name} failed to start in guild ${guildId}:`, err);
+          throw err;
+        }
         return existing;
       }
       this.logger.warn(
@@ -96,7 +116,7 @@ export class RadioManager {
       );
     }
 
-    const session = new RadioSession(connection, this.logger, () => {
+    const session = new RadioSession(connection, station, this.logger, () => {
       this.sessions.delete(guildId);
     });
     this.sessions.set(guildId, session);
@@ -104,11 +124,11 @@ export class RadioManager {
     try {
       await session.waitForStart();
     } catch (err) {
-      this.logger.error(`${RADIO_KISS_NAME} failed to start in guild ${guildId}:`, err);
+      this.logger.error(`${station.name} failed to start in guild ${guildId}:`, err);
       throw err;
     }
     this.logger.info(
-      `${RADIO_KISS_NAME} started in guild ${guildId} → #${channel.name} (${channel.id})`,
+      `${station.name} started in guild ${guildId} → #${channel.name} (${channel.id})`,
     );
     return session;
   }
