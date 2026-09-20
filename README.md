@@ -14,23 +14,27 @@ Play audio from YouTube (URL or search) and Spotify (track / album / playlist). 
 
 Whenever a new song starts, the previous **Now Playing** embed is deleted and a fresh one is posted so the chat never stacks player messages.
 
-| Command | Description |
-| --- | --- |
-| `/play <query>` | Join your voice channel and play a track (or add it to the queue). Optional `play_next`. |
-| `/skip` | Skip the current track. |
-| `/queue` | Show the current queue (paginated). |
-| `/stop` | Stop playback, clear the queue, delete the Now Playing embed, and leave. |
-| `/pause` / `/resume` | Pause or resume playback. |
-| `/nowplaying` | Show the current track. |
-| `/shuffle` | Shuffle the upcoming queue. |
-| `/loop` | `off`, `track`, or `queue`. |
-| `/remove <position>` | Drop a track from the upcoming queue (1-based). |
+| Command              | Description                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------- |
+| `/play <query>`      | Join your voice channel and play a track (or add it to the queue). Optional `play_next`. |
+| `/skip`              | Skip the current track.                                                                  |
+| `/queue`             | Show the current queue (paginated).                                                      |
+| `/stop`              | Stop playback, clear the queue, delete the Now Playing embed, and leave.                 |
+| `/pause` / `/resume` | Pause or resume playback.                                                                |
+| `/nowplaying`        | Show the current track.                                                                  |
+| `/shuffle`           | Shuffle the upcoming queue.                                                              |
+| `/loop`              | `off`, `track`, or `queue`.                                                              |
+| `/remove <position>` | Drop a track from the upcoming queue (1-based).                                          |
+| `/radio play`        | Join your voice channel and stream Radio Kiss (live Icecast).                            |
+| `/radio stop`        | Stop the radio and leave the voice channel.                                              |
 
-Idle auto-disconnect after 120 seconds of silence (configurable).
+Starting radio stops any current music queue (and `/play` stops radio) so they never share a voice connection.
+
+Idle auto-disconnect after 120 seconds of silence (configurable). Radio is a live stream and does not idle-kick.
 
 ### Steam daily deals
 
-Every day at **03:33 Europe/Prague** the bot fetches Steam discounts from [game-deals.app](https://game-deals.app), keeps games rated *Very Positive* or better, and posts a digest of **new** deals **in every server** that has a Steam channel.
+Every day at **03:33 Europe/Prague** the bot fetches Steam discounts from [game-deals.app](https://game-deals.app), keeps games rated _Very Positive_ or better, and posts a digest of **new** deals **in every server** that has a Steam channel.
 
 If every deal was already posted in that server, or none pass the review filter, **no message is sent**.
 
@@ -44,12 +48,12 @@ Both fetchers persist posted IDs / lineup fingerprints **per server** in SQLite 
 
 Music already works per voice channel. Deals are per guild:
 
-| Command | Description |
-| --- | --- |
-| `/setup steam <channel>` | Where Steam deals post in this server (Manage Server). |
-| `/setup epic <channel>` | Where Epic free games post in this server. |
-| `/setup status` | Show this server's deal channels. |
-| `/setup disable steam\|epic` | Stop posting that feed here. |
+| Command                      | Description                                            |
+| ---------------------------- | ------------------------------------------------------ |
+| `/setup steam <channel>`     | Where Steam deals post in this server (Manage Server). |
+| `/setup epic <channel>`      | Where Epic free games post in this server.             |
+| `/setup status`              | Show this server's deal channels.                      |
+| `/setup disable steam\|epic` | Stop posting that feed here.                           |
 
 If you never run `/setup`, the bot looks for a text channel named like `#steam`, `#deals`, `#epic`, `#free-games`, `#welcome`, or `#goodbye`. The `channelId` values in `config.json` only seed the server that actually owns those channels.
 
@@ -64,7 +68,7 @@ Goodbye: `👋 name just left the kitchen. Hasta la vista, baby! 🕶️🍪 We�
 ## Prerequisites
 
 - **Node.js ≥ 22.12**
-- **FFmpeg** on your `PATH` (`ffmpeg -version` should work)
+- **FFmpeg** — bundled via `ffmpeg-static` (a system `ffmpeg` on your `PATH` still works)
 - **Deno** on your `PATH` (`deno --version` should work) — yt-dlp uses it to solve YouTube player JS so audio URLs do not 403
 - A Discord bot token from the [Discord Developer Portal](https://discord.com/developers/applications)
 - A home PC or VPS (YouTube often blocks datacenter IPs)
@@ -73,10 +77,10 @@ Goodbye: `👋 name just left the kitchen. Hasta la vista, baby! 🕶️🍪 We�
 
 OAuth2 scopes: `bot`, `applications.commands`
 
-| Feature | Permissions |
-| --- | --- |
-| Music | Connect, Speak |
-| Steam / Epic | View Channel, Send Messages, Embed Links, Manage Messages, Add Reactions |
+| Feature       | Permissions                                                              |
+| ------------- | ------------------------------------------------------------------------ |
+| Music / Radio | Connect, Speak                                                           |
+| Steam / Epic  | View Channel, Send Messages, Embed Links, Manage Messages, Add Reactions |
 
 **Manage Messages** is required so the bot can delete its own previous Now Playing / digest embeds.
 
@@ -188,24 +192,24 @@ data/bot.db                Runtime SQLite (git-ignored)
 
 ## Scripts
 
-| Script | What it does |
-| --- | --- |
-| `npm run dev` | Run with auto-reload (`tsx watch`). |
-| `npm start` | Run the bot. |
-| `npm run deploy` | Register slash commands with Discord. |
-| `npm run db:push` | Create/update `data/bot.db` from the Prisma schema. |
-| `npm run typecheck` | Type-check with `tsc --noEmit`. |
-| `npm run lint` | Lint with ESLint. |
-| `npm run format` | Format with Prettier. |
+| Script              | What it does                                        |
+| ------------------- | --------------------------------------------------- |
+| `npm run dev`       | Run with auto-reload (`tsx watch`).                 |
+| `npm start`         | Run the bot.                                        |
+| `npm run deploy`    | Register slash commands with Discord.               |
+| `npm run db:push`   | Create/update `data/bot.db` from the Prisma schema. |
+| `npm run typecheck` | Type-check with `tsc --noEmit`.                     |
+| `npm run lint`      | Lint with ESLint.                                   |
+| `npm run format`    | Format with Prettier.                               |
 
 ---
 
 ## Troubleshooting
 
-| Problem | Fix |
-| --- | --- |
+| Problem                                  | Fix                                                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Song won't play / "Could not load track" | Update yt-dlp: delete `node_modules/youtube-dl-exec` and reinstall. Set `YTDLP_COOKIES_BASE64` if YouTube bot-checks you. |
-| No audio | Check `ffmpeg -version` and that the bot has Connect + Speak. |
-| Slash commands missing | Run `npm run deploy`. Guild commands appear instantly; global takes ~1 h. |
-| Steam / Epic not posting | Confirm the channel ID, bot permissions, and that there are *new* items (already-seen IDs stay silent). |
-| Can't delete previous message | Grant **Manage Messages**. |
+| No audio                                 | Confirm `ffmpeg-static` installed with `npm install`, and that the bot has Connect + Speak.                               |
+| Slash commands missing                   | Run `npm run deploy`. Guild commands appear instantly; global takes ~1 h.                                                 |
+| Steam / Epic not posting                 | Confirm the channel ID, bot permissions, and that there are _new_ items (already-seen IDs stay silent).                   |
+| Can't delete previous message            | Grant **Manage Messages**.                                                                                                |

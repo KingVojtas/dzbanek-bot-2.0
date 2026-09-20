@@ -1,3 +1,4 @@
+import ffmpegPath from 'ffmpeg-static';
 import '@snazzah/davey';
 import 'libsodium-wrappers';
 import { Cron } from 'croner';
@@ -14,6 +15,11 @@ import { SeenStore } from './deals/seen-store';
 import { SteamDealsService } from './deals/steam/SteamDealsService';
 import { registerEvents } from './events';
 import { MusicManager } from './music/MusicManager';
+import { RadioManager } from './radio/RadioManager';
+
+if (ffmpegPath) {
+  process.env.FFMPEG_PATH = ffmpegPath;
+}
 
 async function main(): Promise<void> {
   const client = createClient();
@@ -23,10 +29,14 @@ async function main(): Promise<void> {
 
   const guildSettings = new GuildSettingsStore();
   const seen = new SeenStore(config.steam.maxSeenIds);
+  const music = new MusicManager(config, logger);
+  const radio = new RadioManager(logger);
+  music.setPreempt((guildId) => radio.stop(guildId));
   const services: Services = {
     config,
     logger,
-    music: new MusicManager(config, logger),
+    music,
+    radio,
     guildSettings,
   };
 
@@ -37,7 +47,9 @@ async function main(): Promise<void> {
 
   client.once(Events.ClientReady, () => {
     const runSteam = (reason: string) =>
-      void steamService.poll().catch((error) => logger.error(`${reason} Steam poll failed:`, error));
+      void steamService
+        .poll()
+        .catch((error) => logger.error(`${reason} Steam poll failed:`, error));
     const runEpic = (reason: string) =>
       void epicService.poll().catch((error) => logger.error(`${reason} Epic poll failed:`, error));
 

@@ -10,12 +10,14 @@ import type { Config } from '../config';
 import type { Logger } from './logger';
 import type { GuildSettingsStore } from '../deals/guild-settings';
 import type { MusicManager } from '../music/MusicManager';
+import type { RadioManager } from '../radio/RadioManager';
 
 /** Shared services injected into every command's `execute`. */
 export interface Services {
   config: Config;
   logger: Logger;
   music: MusicManager;
+  radio: RadioManager;
   guildSettings: GuildSettingsStore;
 }
 

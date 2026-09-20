@@ -46,6 +46,7 @@ export const play: Command = {
     }
 
     const guildId = interaction.guildId;
+    if (guildId) services.radio.stop(guildId);
     const alreadyPlaying = Boolean(guildId && services.music.get(guildId)?.current);
 
     let tracks: Track[];

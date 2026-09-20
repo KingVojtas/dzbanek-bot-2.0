@@ -20,6 +20,7 @@ const JOIN_TIMEOUT_MS = 20_000;
 export class MusicManager {
   private readonly subscriptions = new Map<string, GuildPlayer>();
   private readonly source: TrackSource = new CompositeTrackSource();
+  private preemptRadio: ((guildId: string) => void) | null = null;
 
   constructor(
     private readonly config: Config,
@@ -36,6 +37,11 @@ export class MusicManager {
     return this.source;
   }
 
+  /** Stop radio in this guild before music takes the voice connection. */
+  setPreempt(fn: (guildId: string) => void): void {
+    this.preemptRadio = fn;
+  }
+
   get(guildId: string): GuildPlayer | undefined {
     return this.subscriptions.get(guildId);
   }
@@ -43,6 +49,7 @@ export class MusicManager {
   /** Join `channel` (or return the existing healthy player for the guild). */
   async join(channel: VoiceBasedChannel): Promise<GuildPlayer> {
     const guildId = channel.guild.id;
+    this.preemptRadio?.(guildId);
 
     const existing = this.subscriptions.get(guildId);
     if (existing) {
