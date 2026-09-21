@@ -10,6 +10,14 @@ export interface GuildSettings {
   welcomeChannelId: string | null;
   goodbyeEnabled: boolean;
   goodbyeChannelId: string | null;
+  kitchenEnabled: boolean;
+  kitchenChannelId: string | null;
+  kitchenMessageId: string | null;
+  kitchenJoinDate: string | null;
+  kitchenJoinCount: number;
+  radioNightEnabled: boolean;
+  radioNightChannelId: string | null;
+  radioNightStation: string | null;
 }
 
 function defaults(guildId: string): GuildSettings {
@@ -23,6 +31,14 @@ function defaults(guildId: string): GuildSettings {
     welcomeChannelId: null,
     goodbyeEnabled: true,
     goodbyeChannelId: null,
+    kitchenEnabled: true,
+    kitchenChannelId: null,
+    kitchenMessageId: null,
+    kitchenJoinDate: null,
+    kitchenJoinCount: 0,
+    radioNightEnabled: false,
+    radioNightChannelId: null,
+    radioNightStation: null,
   };
 }
 
@@ -37,6 +53,14 @@ function fromRow(row: GuildSettings): GuildSettings {
     welcomeChannelId: row.welcomeChannelId,
     goodbyeEnabled: row.goodbyeEnabled,
     goodbyeChannelId: row.goodbyeChannelId,
+    kitchenEnabled: row.kitchenEnabled,
+    kitchenChannelId: row.kitchenChannelId,
+    kitchenMessageId: row.kitchenMessageId,
+    kitchenJoinDate: row.kitchenJoinDate,
+    kitchenJoinCount: row.kitchenJoinCount,
+    radioNightEnabled: row.radioNightEnabled,
+    radioNightChannelId: row.radioNightChannelId,
+    radioNightStation: row.radioNightStation,
   };
 }
 
@@ -70,6 +94,14 @@ export class GuildSettingsStore {
         welcomeChannelId: next.welcomeChannelId,
         goodbyeEnabled: next.goodbyeEnabled,
         goodbyeChannelId: next.goodbyeChannelId,
+        kitchenEnabled: next.kitchenEnabled,
+        kitchenChannelId: next.kitchenChannelId,
+        kitchenMessageId: next.kitchenMessageId,
+        kitchenJoinDate: next.kitchenJoinDate,
+        kitchenJoinCount: next.kitchenJoinCount,
+        radioNightEnabled: next.radioNightEnabled,
+        radioNightChannelId: next.radioNightChannelId,
+        radioNightStation: next.radioNightStation,
       },
     });
     return fromRow(row);

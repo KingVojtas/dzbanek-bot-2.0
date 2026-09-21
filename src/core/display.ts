@@ -23,8 +23,11 @@ const EPIC_FREE_URL = 'https://store.epicgames.com/en-US/free-games';
 /** Discord V2 nested-component budget. */
 const V2_COMPONENT_MAX = 40;
 
-/** Deals shown per Steam digest (fits under the 40-component cap with images). */
-export const STEAM_DIGEST_SIZE = 8;
+/**
+ * Deals shown per Steam digest. Layout uses one intro + one section per game
+ * (no per-row separators) so 10 games stay under Discord's 40-component cap.
+ */
+export const STEAM_DIGEST_SIZE = 10;
 const EPIC_DIGEST_MAX = 6;
 
 export interface V2Display {
@@ -278,7 +281,7 @@ export function buildSteamDealsDisplay(
   prices: Map<string, string | null>,
   reviews: Map<string, string>,
 ): V2Display {
-  const top = items.slice(0, fitRows(Math.min(items.length, STEAM_DIGEST_SIZE), 4, 2));
+  const top = items.slice(0, STEAM_DIGEST_SIZE);
   const best = topDiscountPct(top);
 
   const title =
@@ -289,17 +292,20 @@ export function buildSteamDealsDisplay(
   const intro = [
     title,
     top.length > 0
-      ? `**${top.length}** well-reviewed sale${top.length !== 1 ? 's' : ''} · deepest discounts first`
+      ? `**${top.length}** sale${top.length !== 1 ? 's' : ''} · deepest discounts first`
       : 'No deals matched the quality filter.',
-    '-# Live Steam prices · Very Positive or better',
+    '-# Live Steam prices · Very Positive or better when available',
   ].join('\n');
 
   const container = new ContainerBuilder()
     .setAccentColor(STEAM_COLOR)
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(intro.slice(0, 4000)));
 
-  for (const item of top) {
+  if (top.length > 0) {
     container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
+  }
+
+  for (const item of top) {
     container.addSectionComponents(
       buildSteamDealSection(item, prices.get(item.id) ?? null, reviews.get(item.id)),
     );

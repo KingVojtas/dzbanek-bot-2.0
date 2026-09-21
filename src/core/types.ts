@@ -9,6 +9,7 @@ import type { Readable } from 'node:stream';
 import type { Config } from '../config';
 import type { Logger } from './logger';
 import type { GuildSettingsStore } from '../deals/guild-settings';
+import type { KitchenBoard } from '../kitchen/KitchenBoard';
 import type { MusicManager } from '../music/MusicManager';
 import type { RadioManager } from '../radio/RadioManager';
 
@@ -19,6 +20,7 @@ export interface Services {
   music: MusicManager;
   radio: RadioManager;
   guildSettings: GuildSettingsStore;
+  kitchen: KitchenBoard;
 }
 
 /** Loop modes for music queue. */

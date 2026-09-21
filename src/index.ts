@@ -14,6 +14,8 @@ import { GuildSettingsStore } from './deals/guild-settings';
 import { SeenStore } from './deals/seen-store';
 import { SteamDealsService } from './deals/steam/SteamDealsService';
 import { registerEvents } from './events';
+import { KitchenBoard } from './kitchen/KitchenBoard';
+import { RADIO_NIGHT_CRON } from './kitchen/display';
 import { MusicManager } from './music/MusicManager';
 import { RadioManager } from './radio/RadioManager';
 
@@ -32,38 +34,50 @@ async function main(): Promise<void> {
   const music = new MusicManager(config, logger);
   const radio = new RadioManager(logger);
   music.setPreempt((guildId) => radio.stop(guildId));
+  const kitchen = new KitchenBoard(client, music, radio, guildSettings, config, logger);
   const services: Services = {
     config,
     logger,
     music,
     radio,
     guildSettings,
+    kitchen,
   };
 
   const steamService = new SteamDealsService(client, seen, config, logger, guildSettings);
   const epicService = new EpicFreeGamesService(client, seen, config, logger, guildSettings);
+  steamService.setKitchen(kitchen);
+  epicService.setKitchen(kitchen);
 
   registerEvents(client, commands, services);
 
   client.once(Events.ClientReady, () => {
     const runSteam = (reason: string) =>
-      void steamService
-        .poll()
-        .catch((error) => logger.error(`${reason} Steam poll failed:`, error));
+      steamService.poll().catch((error) => logger.error(`${reason} Steam poll failed:`, error));
     const runEpic = (reason: string) =>
-      void epicService.poll().catch((error) => logger.error(`${reason} Epic poll failed:`, error));
+      epicService.poll().catch((error) => logger.error(`${reason} Epic poll failed:`, error));
 
     const cronOpts = { timezone: config.timezone, protect: true as const };
-    runSteam('Initial');
-    const steamJob = new Cron(config.steam.cron, cronOpts, () => runSteam('Scheduled'));
+    const steamJob = new Cron(config.steam.cron, cronOpts, () => void runSteam('Scheduled'));
     logger.info(
       `Steam deals: cron "${config.steam.cron}" (${config.timezone}), next ${steamJob.nextRun()?.toISOString() ?? '?'}.`,
     );
 
-    runEpic('Initial');
-    const epicJob = new Cron(config.epic.cron, cronOpts, () => runEpic('Scheduled'));
+    const epicJob = new Cron(config.epic.cron, cronOpts, () => void runEpic('Scheduled'));
     logger.info(
       `Epic free games: cron "${config.epic.cron}" (${config.timezone}), next ${epicJob.nextRun()?.toISOString() ?? '?'}.`,
+    );
+
+    kitchen.attach();
+    void Promise.all([runSteam('Initial'), runEpic('Initial')]).finally(() => {
+      void kitchen.refreshAll();
+    });
+
+    const radioNightJob = new Cron(RADIO_NIGHT_CRON, cronOpts, () => {
+      void kitchen.runRadioNights().catch((error) => logger.error('Radio Night failed:', error));
+    });
+    logger.info(
+      `Radio Night: cron "${RADIO_NIGHT_CRON}" (${config.timezone}), next ${radioNightJob.nextRun()?.toISOString() ?? '?'}.`,
     );
     logger.info(`Multi-server ready: in ${client.guilds.cache.size} guild(s).`);
   });

@@ -9,21 +9,28 @@ import {
 } from '../../core/display';
 import type { Logger } from '../../core/logger';
 import type { SteamDealItem } from '../../core/types';
+import type { KitchenBoard } from '../../kitchen/KitchenBoard';
 import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
 import { resolveDealTargets, type DealTarget } from '../targets';
 import { SteamFeedReader } from './SteamFeedReader';
-import { extractAppId, fetchSteamPrice, formatSteamPrice, parseDiscountPercent } from './SteamPriceApi';
-import { fetchSteamReview, formatReview, isGoodReview, type SteamReviewInfo } from './SteamReviewApi';
+import { extractAppId, fetchSteamPrice, formatSteamPrice } from './SteamPriceApi';
+import { fetchSteamReview, formatReview, type SteamReviewInfo } from './SteamReviewApi';
+import {
+  selectSteamDigest,
+  steamDigestFingerprint,
+  uniqueSteamApps,
+} from './select-digest';
 
-function steamScope(guildId: string): string {
-  return `steam:${guildId}`;
+function steamDigestScope(guildId: string): string {
+  return `steam-digest:${guildId}`;
 }
 
-/** Daily Steam deals digest. Posts per guild; silence when that server has no new deals. */
+/** Daily Steam deals digest. Always aims for STEAM_DIGEST_SIZE games per post. */
 export class SteamDealsService {
   private readonly reader = new SteamFeedReader();
   private pollInFlight: Promise<void> | null = null;
+  private kitchen: KitchenBoard | null = null;
 
   constructor(
     private readonly client: Client,
@@ -32,6 +39,10 @@ export class SteamDealsService {
     private readonly logger: Logger,
     private readonly guildSettings: GuildSettingsStore,
   ) {}
+
+  setKitchen(kitchen: KitchenBoard): void {
+    this.kitchen = kitchen;
+  }
 
   async poll(): Promise<void> {
     if (this.pollInFlight) return this.pollInFlight;
@@ -62,61 +73,39 @@ export class SteamDealsService {
       return;
     }
 
-    const withIds = items.filter((item) => Boolean(item.id));
+    const withIds = uniqueSteamApps(items.filter((item) => Boolean(item.id)));
     if (withIds.length === 0) {
       this.logger.info('Steam: feed empty — sending nothing.');
       return;
     }
 
-    const freshByGuild = new Map<string, SteamDealItem[]>();
-    const neededIds = new Set<string>();
-
-    for (const target of targets) {
-      const scope = steamScope(target.guildId);
-      if ((await this.store.isEmpty(scope)) && !this.config.steam.postOnFirstRun) {
-        await this.store.add(
-          scope,
-          withIds.map((item) => item.id),
-        );
-        this.logger.info(
-          `Steam: seeded ${withIds.length} existing deal(s) silently for ${target.guildName}.`,
-        );
-        continue;
-      }
-
-      const fresh: SteamDealItem[] = [];
-      for (const item of withIds) {
-        if (!(await this.store.has(scope, item.id))) fresh.push(item);
-      }
-      if (fresh.length === 0) {
-        this.logger.info(`Steam: no new deals for ${target.guildName} — sending nothing.`);
-        continue;
-      }
-      freshByGuild.set(target.guildId, fresh);
-      for (const item of fresh) neededIds.add(item.id);
+    const reviewMap = await this.fetchReviews(withIds);
+    const top = selectSteamDigest(withIds, reviewMap, STEAM_DIGEST_SIZE);
+    if (top.length === 0) {
+      this.logger.info('Steam: nothing to put in the digest — sending nothing.');
+      return;
     }
 
-    if (freshByGuild.size === 0) return;
+    if (top.length < STEAM_DIGEST_SIZE) {
+      this.logger.warn(
+        `Steam: digest only has ${top.length}/${STEAM_DIGEST_SIZE} games (feed has ${withIds.length}).`,
+      );
+    }
 
-    const toReview = withIds.filter((item) => neededIds.has(item.id));
-    const reviewEntries = await Promise.all(
-      toReview.map(async (item) => {
-        const appId = extractAppId(item.link);
-        const review = appId ? await fetchSteamReview(appId) : null;
-        return [item.id, review] as const;
-      }),
-    );
-    const reviewMap = new Map<string, SteamReviewInfo | null>(reviewEntries);
+    const fingerprint = steamDigestFingerprint(top);
+    const prices = await this.fetchPrices(top);
+    const reviews = new Map<string, string>();
+    for (const item of top) {
+      const review = reviewMap.get(item.id);
+      if (review) reviews.set(item.id, formatReview(review));
+    }
 
-    const priceCache = new Map<string, string | null>();
     let posted = 0;
-
     for (const target of targets) {
-      const fresh = freshByGuild.get(target.guildId);
-      if (!fresh) continue;
-
-      const sent = await this.postToGuild(target, fresh, reviewMap, priceCache);
+      this.kitchen?.recordSteam(target.guildId, top, prices, reviews);
+      const sent = await this.postToGuild(target, top, fingerprint, prices, reviews);
       if (sent) posted += 1;
+      this.kitchen?.refresh(target.guildId);
     }
 
     this.logger.info(`Steam: posted digest to ${posted}/${targets.length} guild(s).`);
@@ -124,76 +113,29 @@ export class SteamDealsService {
 
   private async postToGuild(
     target: DealTarget,
-    fresh: SteamDealItem[],
-    reviewMap: Map<string, SteamReviewInfo | null>,
-    priceCache: Map<string, string | null>,
+    top: SteamDealItem[],
+    fingerprint: string,
+    prices: Map<string, string | null>,
+    reviews: Map<string, string>,
   ): Promise<boolean> {
-    const scope = steamScope(target.guildId);
-    const passing = fresh.filter((item) => {
-      const review = reviewMap.get(item.id);
-      return Boolean(review && isGoodReview(review));
-    });
-    const rejected = fresh.filter((item) => {
-      const review = reviewMap.get(item.id);
-      return Boolean(review && !isGoodReview(review));
-    });
+    const scope = steamDigestScope(target.guildId);
 
-    if (rejected.length > 0) {
-      await this.store.add(
-        scope,
-        rejected.map((item) => item.id),
-      );
-    }
-
-    if (passing.length === 0) {
-      this.logger.info(
-        `Steam: ${fresh.length} new deal(s) in ${target.guildName} but none passed reviews — sending nothing.`,
-      );
+    if ((await this.store.isEmpty(scope)) && !this.config.steam.postOnFirstRun) {
+      await this.store.add(scope, [fingerprint]);
+      this.logger.info(`Steam: seeded current digest silently for ${target.guildName}.`);
       return false;
     }
 
-    const byDiscount = (a: SteamDealItem, b: SteamDealItem) => {
-      const da = parseDiscountPercent(a.discount) ?? 0;
-      const db = parseDiscountPercent(b.discount) ?? 0;
-      if (db !== da) return db - da;
-      return a.gameName.localeCompare(b.gameName);
-    };
-
-    const top = [...passing].sort(byDiscount).slice(0, STEAM_DIGEST_SIZE);
+    if (await this.store.has(scope, fingerprint)) {
+      this.logger.info(`Steam: same ${top.length}-game digest already posted in ${target.guildName}.`);
+      return false;
+    }
 
     const lastDigest = await this.findLastSteamDigest(target.channel);
     if (lastDigest && this.isDuplicateDigest(lastDigest, top)) {
-      await this.store.add(
-        scope,
-        passing.map((item) => item.id),
-      );
+      await this.store.add(scope, [fingerprint]);
       this.logger.info(`Steam: ${target.guildName} already lists these games — sending nothing.`);
       return false;
-    }
-
-    const prices = new Map<string, string | null>();
-    const reviews = new Map<string, string>();
-    await Promise.all(
-      top.map(async (item) => {
-        if (priceCache.has(item.id)) {
-          prices.set(item.id, priceCache.get(item.id) ?? null);
-          return;
-        }
-        const appId = extractAppId(item.link);
-        if (!appId) {
-          priceCache.set(item.id, null);
-          prices.set(item.id, null);
-          return;
-        }
-        const info = await fetchSteamPrice(appId);
-        const formatted = info ? formatSteamPrice(info) : null;
-        priceCache.set(item.id, formatted);
-        prices.set(item.id, formatted);
-      }),
-    );
-    for (const item of top) {
-      const review = reviewMap.get(item.id);
-      if (review) reviews.set(item.id, formatReview(review));
     }
 
     if (lastDigest) {
@@ -210,10 +152,7 @@ export class SteamDealsService {
         components: display.components,
         flags: display.flags,
       });
-      await this.store.add(
-        scope,
-        passing.map((item) => item.id),
-      );
+      await this.store.add(scope, [fingerprint]);
       this.logger.info(`Steam: posted ${top.length} deal(s) to ${target.guildName}.`);
       await reactQuietly(sent, ['🔥', '💰', '👍']);
       return true;
@@ -221,6 +160,27 @@ export class SteamDealsService {
       this.logger.error(`Steam: failed to post to ${target.guildName}:`, error);
       return false;
     }
+  }
+
+  private async fetchReviews(
+    items: SteamDealItem[],
+  ): Promise<Map<string, SteamReviewInfo | null>> {
+    const entries = await mapPool(items, 6, async (item) => {
+      const appId = extractAppId(item.link);
+      const review = appId ? await fetchSteamReview(appId) : null;
+      return [item.id, review] as const;
+    });
+    return new Map(entries);
+  }
+
+  private async fetchPrices(items: SteamDealItem[]): Promise<Map<string, string | null>> {
+    const entries = await mapPool(items, 6, async (item) => {
+      const appId = extractAppId(item.link);
+      if (!appId) return [item.id, null] as const;
+      const info = await fetchSteamPrice(appId);
+      return [item.id, info ? formatSteamPrice(info) : null] as const;
+    });
+    return new Map(entries);
   }
 
   private async findLastSteamDigest(channel: SendableChannels): Promise<Message | null> {
@@ -260,6 +220,26 @@ export class SteamDealsService {
       lastTitles.length === newTitles.length && lastTitles.every((title, i) => title === newTitles[i])
     );
   }
+}
+
+async function mapPool<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index]!);
+    }
+  };
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
 }
 
 async function reactQuietly(message: Message, emojis: string[]): Promise<void> {

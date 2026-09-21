@@ -23,6 +23,9 @@ export function registerGuildMemberEvents(client: Client, services: Services): v
 
 async function sendWelcome(member: GuildMember, services: Services): Promise<void> {
   if (member.user.bot) return;
+  await services.kitchen.noteJoin(member.guild.id).catch((error) => {
+    services.logger.debug('Kitchen join counter failed:', error);
+  });
   const channel = await resolveGreetingChannel(
     member.client,
     member.guild,

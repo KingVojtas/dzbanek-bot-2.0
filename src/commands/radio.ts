@@ -1,4 +1,5 @@
 import {
+  ChannelType,
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
@@ -9,6 +10,7 @@ import { buildInfoEmbed } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { memberVoiceChannel, replyEphemeral } from './music/_util';
 import { buildRadioPlayingDisplay } from '../radio/embed';
+import { RADIO_NIGHT_LABEL } from '../kitchen/display';
 import { STATION_LIST, getStation } from '../radio/station';
 
 export const radio: Command = {
@@ -34,6 +36,33 @@ export const radio: Command = {
     )
     .addSubcommand((sub) =>
       sub.setName('stop').setDescription('Stop the radio and leave the voice channel.'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('night')
+        .setDescription(`Schedule Radio Night (${RADIO_NIGHT_LABEL} Prague) in a voice channel.`)
+        .addStringOption((option) =>
+          option
+            .setName('station')
+            .setDescription('Which station to start')
+            .setRequired(true)
+            .addChoices(
+              ...STATION_LIST.map((station) => ({
+                name: station.choiceName,
+                value: station.id,
+              })),
+            ),
+        )
+        .addChannelOption((option) =>
+          option
+            .setName('channel')
+            .setDescription('Voice channel to join (defaults to yours)')
+            .addChannelTypes(ChannelType.GuildVoice)
+            .setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub.setName('night-off').setDescription('Cancel scheduled Radio Night.'),
     ),
 
   async execute(interaction, services) {
@@ -44,6 +73,14 @@ export const radio: Command = {
     }
     if (sub === 'stop') {
       await stopRadio(interaction, services);
+      return;
+    }
+    if (sub === 'night') {
+      await scheduleRadioNight(interaction, services);
+      return;
+    }
+    if (sub === 'night-off') {
+      await cancelRadioNight(interaction, services);
     }
   },
 };
@@ -120,6 +157,7 @@ async function playRadio(
         /* already deleted */
       });
     }
+    services.kitchen.refresh(guildId);
   } catch (error: unknown) {
     services.logger.error(`Failed to start ${station.name}:`, error);
     const errMsg = error instanceof Error ? error.message : String(error || '');
@@ -156,8 +194,84 @@ async function stopRadio(
 
   const name = services.radio.station(guildId)?.name ?? 'the radio';
   services.radio.stop(guildId);
+  services.kitchen.refresh(guildId);
   await interaction.reply({
     embeds: [buildInfoEmbed(`⏹️ Stopped ${name} and left the voice channel.`)],
+  });
+}
+
+async function scheduleRadioNight(
+  interaction: ChatInputCommandInteraction,
+  services: Services,
+): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await replyEphemeral(interaction, 'This command can only be used in a server.');
+    return;
+  }
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    await replyEphemeral(interaction, '❌ You need **Manage Server** to schedule Radio Night.');
+    return;
+  }
+
+  const station = getStation(interaction.options.getString('station', true));
+  if (!station) {
+    await replyEphemeral(interaction, '❌ Unknown radio station.');
+    return;
+  }
+
+  const pickedId = interaction.options.getChannel('channel')?.id;
+  const fromOption = pickedId
+    ? (interaction.guild?.channels.cache.get(pickedId) ??
+      (await interaction.guild?.channels.fetch(pickedId).catch(() => null)))
+    : null;
+  const voiceChannel = fromOption?.isVoiceBased()
+    ? fromOption
+    : memberVoiceChannel(interaction);
+  if (!voiceChannel) {
+    await replyEphemeral(
+      interaction,
+      '🔇 Pick a voice channel, or join one so I know where Radio Night should start.',
+    );
+    return;
+  }
+
+  await services.guildSettings.upsert(guildId, {
+    radioNightEnabled: true,
+    radioNightChannelId: voiceChannel.id,
+    radioNightStation: station.id,
+  });
+  services.kitchen.refresh(guildId);
+
+  await interaction.reply({
+    embeds: [
+      buildInfoEmbed(
+        `📻 Radio Night is on: **${station.name}** in **#${voiceChannel.name}** every ${RADIO_NIGHT_LABEL} (Europe/Prague).\nThe Kitchen Board will show the schedule.`,
+      ),
+    ],
+  });
+}
+
+async function cancelRadioNight(
+  interaction: ChatInputCommandInteraction,
+  services: Services,
+): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await replyEphemeral(interaction, 'This command can only be used in a server.');
+    return;
+  }
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+    await replyEphemeral(interaction, '❌ You need **Manage Server** to cancel Radio Night.');
+    return;
+  }
+
+  await services.guildSettings.upsert(guildId, { radioNightEnabled: false });
+  services.kitchen.refresh(guildId);
+  await interaction.reply({
+    embeds: [buildInfoEmbed('📻 Radio Night is off. I will not auto-join on Friday.')],
   });
 }
 

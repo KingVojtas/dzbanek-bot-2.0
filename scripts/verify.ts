@@ -6,9 +6,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { DISCORD_TOKEN, config } from '../src/config';
+import { STEAM_DIGEST_SIZE } from '../src/core/display';
 import { SteamFeedReader } from '../src/deals/steam/SteamFeedReader';
 import { extractAppId, fetchSteamPrice } from '../src/deals/steam/SteamPriceApi';
 import { fetchSteamReview, isGoodReview } from '../src/deals/steam/SteamReviewApi';
+import { selectSteamDigest, uniqueSteamApps } from '../src/deals/steam/select-digest';
+import type { SteamReviewInfo } from '../src/deals/steam/SteamReviewApi';
 import { YouTubeSource } from '../src/music/sources/youtube';
 
 const execFileAsync = promisify(execFile);
@@ -130,6 +133,27 @@ async function checkSteam(): Promise<void> {
       return;
     }
     ok('steam-rss', `${items.length} deal(s), e.g. ${items[0]?.gameName}`);
+    if (items.length < STEAM_DIGEST_SIZE) {
+      fail('steam-digest-size', `feed has ${items.length} items, need ${STEAM_DIGEST_SIZE}`);
+    } else {
+      const unique = uniqueSteamApps(items);
+      const passing: SteamReviewInfo = {
+        score: 8,
+        scoreDesc: 'Very Positive',
+        totalReviews: 100,
+        positivePct: 90,
+      };
+      const reviews = new Map(unique.map((item) => [item.id, passing] as const));
+      const digest = selectSteamDigest(unique, reviews, STEAM_DIGEST_SIZE);
+      if (digest.length !== STEAM_DIGEST_SIZE) {
+        fail(
+          'steam-digest-size',
+          `selectSteamDigest returned ${digest.length}, expected ${STEAM_DIGEST_SIZE}`,
+        );
+      } else {
+        ok('steam-digest-size', `${digest.length} games, top ${digest[0]?.gameName}`);
+      }
+    }
 
     const withApp = items.find((item) => extractAppId(item.link));
     const appId = withApp ? extractAppId(withApp.link) : null;

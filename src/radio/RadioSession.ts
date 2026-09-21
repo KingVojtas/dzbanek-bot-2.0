@@ -79,6 +79,7 @@ export class RadioSession {
   start(): void {
     if (this.destroyed) return;
     this.playResource();
+    this.startNowPlayingLoop();
   }
 
   /** Swap Icecast URL in place — does not tear down the voice connection. */

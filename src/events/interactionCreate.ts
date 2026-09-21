@@ -131,6 +131,7 @@ async function handleMusicButton(
   if (id === 'music:stop') {
     await interaction.deferUpdate();
     player.stop();
+    services.kitchen.refresh(guildId);
     return;
   }
 
@@ -209,6 +210,7 @@ async function handleRadioButton(
 
   await interaction.deferUpdate();
   services.radio.stop(guildId);
+  services.kitchen.refresh(guildId);
 }
 
 function inSameVoice(interaction: ButtonInteraction, player: GuildPlayer): boolean {

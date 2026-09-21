@@ -18,16 +18,24 @@ model DedupEntry {
   @@index([scope, createdAt])
 }
 
-/// Per-server Steam / Epic / greetings channel settings.
+/// Per-server Steam / Epic / greetings / kitchen channel settings.
 model GuildSettings {
-  guildId          String   @id
-  steamEnabled     Boolean  @default(true)
-  steamChannelId   String?
-  epicEnabled      Boolean  @default(true)
-  epicChannelId    String?
-  welcomeEnabled   Boolean  @default(true)
-  welcomeChannelId String?
-  goodbyeEnabled   Boolean  @default(true)
-  goodbyeChannelId String?
-  updatedAt        DateTime @updatedAt
+  guildId              String   @id
+  steamEnabled         Boolean  @default(true)
+  steamChannelId       String?
+  epicEnabled          Boolean  @default(true)
+  epicChannelId        String?
+  welcomeEnabled       Boolean  @default(true)
+  welcomeChannelId     String?
+  goodbyeEnabled       Boolean  @default(true)
+  goodbyeChannelId     String?
+  kitchenEnabled       Boolean  @default(true)
+  kitchenChannelId     String?
+  kitchenMessageId     String?
+  kitchenJoinDate      String?
+  kitchenJoinCount     Int      @default(0)
+  radioNightEnabled    Boolean  @default(false)
+  radioNightChannelId  String?
+  radioNightStation    String?
+  updatedAt            DateTime @updatedAt
 }

@@ -8,6 +8,7 @@ import {
 } from '../../core/display';
 import type { Logger } from '../../core/logger';
 import type { EpicFreeGame } from '../../core/types';
+import type { KitchenBoard } from '../../kitchen/KitchenBoard';
 import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
 import { resolveDealTargets, type DealTarget } from '../targets';
@@ -75,6 +76,7 @@ function lineupFingerprint(games: EpicFreeGame[]): string {
 /** Polls Epic's free-games API. Posts nothing when the weekly lineup is unchanged. */
 export class EpicFreeGamesService {
   private pollInFlight: Promise<void> | null = null;
+  private kitchen: KitchenBoard | null = null;
 
   constructor(
     private readonly client: Client,
@@ -83,6 +85,10 @@ export class EpicFreeGamesService {
     private readonly logger: Logger,
     private readonly guildSettings: GuildSettingsStore,
   ) {}
+
+  setKitchen(kitchen: KitchenBoard): void {
+    this.kitchen = kitchen;
+  }
 
   async poll(): Promise<void> {
     if (this.pollInFlight) return this.pollInFlight;
@@ -121,8 +127,10 @@ export class EpicFreeGamesService {
     const fingerprint = lineupFingerprint(games);
     let posted = 0;
     for (const target of targets) {
+      this.kitchen?.recordEpic(target.guildId, games);
       const sent = await this.postToGuild(target, games, fingerprint);
       if (sent) posted += 1;
+      this.kitchen?.refresh(target.guildId);
     }
     this.logger.info(`Epic: posted lineup to ${posted}/${targets.length} guild(s).`);
   }
