@@ -1,137 +1,137 @@
-# Dzbanek-bot 2.0
+# 🍪 Dzbanek-bot 2.0
 
-A TypeScript Discord bot (discord.js v14) that plays YouTube/Spotify in voice, streams Czech live radio, posts Steam daily deals and Epic free games, and greets members when they join or leave.
+A TypeScript Discord bot (discord.js v14) for the kitchen. It plays YouTube and Spotify in voice, streams Czech live radio, posts Steam deals and Epic free games, and keeps a cookie warm for anyone who walks in.
 
-Voice, deals, and greetings are separate modules. Music and radio share one voice slot per server — starting one stops the other.
+Music and radio share one voice slot per server. Starting one takes the speaker from the other.
 
 ---
 
-## Features
+## ✨ What’s cooking
 
-### Music player
+### 🎵 Music
 
-Play audio from YouTube (URL or search) and Spotify (track / album / playlist). Spotify is metadata only; audio is resolved on YouTube via yt-dlp.
+Play from YouTube (a link or a search) and from Spotify (track, album, or playlist). Spotify is the recipe card. The audio comes from YouTube via yt-dlp.
 
-Now Playing is a Components v2 card (album art, progress, transport buttons). When a new track starts, the previous card is deleted so the chat does not stack player messages.
+Now Playing is a Components v2 card: album art, a progress bar, and transport buttons. When the next track starts, the previous card is cleared so the chat stays tidy.
 
-| Command              | Description                                                                              |
-| -------------------- | ---------------------------------------------------------------------------------------- |
-| `/play <query>`      | Join your voice channel and play a track (or add it to the queue). Optional `play_next`. |
-| `/queue`             | Show the upcoming queue (paginated).                                                     |
-| `/stop`              | Stop playback, clear the queue, delete the Now Playing card, and leave.                  |
-| `/remove <position>` | Drop a track from the upcoming queue (1-based).                                          |
+| Command              | What it does                                                                            |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| `/play <query>`      | Join your voice channel and play a track, or add it to the queue. Optional `play_next`. |
+| `/queue`             | Show the upcoming queue, page by page.                                                  |
+| `/stop`              | Stop playback, clear the queue, delete the Now Playing card, and leave.                 |
+| `/remove <position>` | Drop one upcoming track (1-based).                                                      |
 
-Pause, skip, shuffle, and loop are buttons on the Now Playing card, not slash commands. The Kitchen Board shows the same track.
+⏸️ Pause, ⏭️ skip, 🔀 shuffle, and 🔁 loop live on the Now Playing card. The Kitchen Board shows the same song.
 
-When the queue goes quiet, the bot waits **120 seconds** (configurable). If people are still in the channel it starts the last radio station (or Beat) instead of leaving. `/setup idle-radio` turns that off. `/stop` still leaves. Queue cap is **100** tracks.
+When the queue goes quiet, Dzbanek waits **120 seconds** (configurable). If people are still in the channel, the last radio station fades in (Beat, if there isn’t one yet). `/setup idle-radio` turns that handoff off. `/stop` still leaves. The queue holds **100** tracks.
 
-### Live radio
+### 📻 Live radio
 
-`/radio play` joins **your** voice channel and streams a Czech Icecast station. The card uses the station logo, brand color, and the track currently on air. Metadata is polled about every **20 seconds** and the **same message** is edited when the song changes.
+`/radio play` joins **your** voice channel and streams a Czech Icecast station. The card wears the station logo and brand color, and it names the track on air. Metadata is checked about every **20 seconds**, and the **same message** is edited when the song changes.
 
-| Choice     | Station    | Stream                                      |
-| ---------- | ---------- | ------------------------------------------- |
-| Kiss       | Kiss Radio | `https://icecast4.play.cz/kiss128.mp3`      |
-| Rock Radio | Rock Radio | `http://ice.abradio.cz/rockradio128.mp3`    |
-| Radio Beat | Radio Beat | `https://icecast3.play.cz/radiobeat128.mp3` |
+| Choice  | Station    | Stream                                      |
+| ------- | ---------- | ------------------------------------------- |
+| 💋 Kiss | Kiss Radio | `https://icecast4.play.cz/kiss128.mp3`      |
+| 🎸 Rock | Rock Radio | `http://ice.abradio.cz/rockradio128.mp3`    |
+| 🥁 Beat | Radio Beat | `https://icecast3.play.cz/radiobeat128.mp3` |
 
-Now-playing sources (never mixed into the FFmpeg voice stream):
+Now-playing sources stay off the FFmpeg voice stream:
 
 - **Kiss / Rock Radio** — [radia.cz](https://radia.cz) `songs/now.json`, then Icecast ICY `StreamTitle`
-- **Radio Beat** — Beat’s own `?do=broadcast-update` (“Právě v éteru”), then radia.cz if the listing is still fresh, then ICY
+- **Radio Beat** — Beat’s own `?do=broadcast-update` (“Právě v éteru”), then radia.cz while the listing is still fresh, then ICY
 
-Beat often only sends a station tag over Icecast. During shows such as **Hard & Heavy**, the site publishes the program name instead of a single song — that is what the card shows.
+Beat often sends only a station tag over Icecast. During shows such as **Hard & Heavy**, the site publishes the program name. That is what the card shows. 🍪 Catch will smile and refuse it: a show is not a song.
 
-| Command                 | Description                                              |
+| Command                 | What it does                                             |
 | ----------------------- | -------------------------------------------------------- |
 | `/radio play <station>` | Join your channel and start Kiss, Rock Radio, or Beat.   |
 | `/radio stop`           | Stop the stream, leave voice, and delete the radio card. |
 | `/radio night`          | Schedule Friday 20:00 Radio Night in a voice channel.    |
 | `/radio night-off`      | Cancel scheduled Radio Night.                            |
 
-The card has **Website**, **Catch**, and **Stop**. You must be in the bot’s voice channel to stop it. Catch saves the song that is on air (artist and title) for you. A show name or a station tag is refused — Beat during Hard & Heavy is a show, not a track. The reply has **Play**, which searches that song on YouTube and queues it the same way `/play` does. The Kitchen Board shows the server’s latest catch and a Play button that only the person who caught it can use.
+The card has **Website**, **Catch**, and **Stop**. Stop wants you in the bot’s voice channel. Catch saves the artist and title for you. The reply grows a **Play** button, which finds that song on YouTube and queues it the same way `/play` does. The Kitchen Board keeps the server’s latest catch, and only the person who saved it can press Play there.
 
-Radio does **not** idle-kick. Switching stations reuses the same connection and deletes the previous card.
+Radio stays up. It does not wander off during a quiet stretch. Switching stations reuses the same connection and retires the previous card.
 
-### The Kitchen Board
+### 🍪 The Kitchen Board
 
-`/setup kitchen` posts one living card in a channel and keeps editing that same message: what’s on the stereo, who’s in the voice channel, the top Steam deal, the Epic free game, how many people joined today, and Radio Night when it’s scheduled.
+`/setup kitchen` hangs one living card in a channel and keeps editing that same message: the stereo, who’s in voice, the top Steam deal, the Epic free game, how many people joined today, and Radio Night when it’s on the calendar.
 
-The bot’s Discord presence follows whichever server is loudest: radio first, then music, then the top Steam headline, otherwise “the kitchen”.
+Discord presence follows the loudest server. Radio first 🎧, then music 🎵, then the top Steam headline 💸, and a quiet kitchen when the house is still.
 
-On Sunday at **18:00 Europe/Prague** the kitchen channel gets one chart for the week: the songs people caught, and Friday’s Radio Night tally if anyone voted. It does not replace the living board.
+On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for the week 📬: the songs people caught, and Friday’s Radio Night tally when anyone voted. The living board stays the live stereo.
 
-### Radio Night
+### 🌙 Radio Night
 
-`/radio night` (Manage Server) picks a voice channel and a fallback station. On Friday from **12:00 to 20:00 Europe/Prague** the Kitchen Board shows Kiss / Rock / Beat vote buttons, one vote per person, changeable. At **20:00** the winner starts in that channel. A tie uses the scheduled station, then the last station that played, then Beat. `/radio night-off` cancels it.
+`/radio night` (Manage Server) picks a voice channel and a fallback station. On Friday from **12:00 to 20:00 Europe/Prague** the Kitchen Board puts out Kiss / Rock / Beat vote buttons. One vote per person, and you can change your mind. At **20:00** the winner starts in that channel. A tie falls through the scheduled station, then the last station that played, then Beat. `/radio night-off` takes it off the calendar.
 
-### Steam daily deals
+### 💸 Steam daily deals
 
-Every day at **03:33 Europe/Prague** the bot fetches Steam discounts from [game-deals.app](https://game-deals.app), keeps games rated _Very Positive_ or better, and posts a digest of **new** deals in every server that has a Steam channel.
+Every day at **03:33 Europe/Prague** Dzbanek reads Steam discounts from [game-deals.app](https://game-deals.app) and posts a fresh **10-game** digest in every server that has a Steam channel.
 
-If every deal was already posted in that server, or none pass the review filter, **no message is sent**.
+Very Positive games (score ≥ 8, or ≥ 80% positive with at least 10 reviews) sit at the top, deepest discount first. The rest of the feed fills any empty seats so the card stays a full plate. Prices use the German storefront (`cc=de` → EUR).
 
-Steam prices use the German storefront (`cc=de` → EUR). Review threshold is Very Positive (`score ≥ 8` or ≥ 80% positive, ≥ 10 reviews).
+The same 10-game lineup is remembered per server. A repeat stays in the pot. An empty feed stays quiet too.
 
-### Epic Games free games
+### 🎁 Epic free games
 
-Polls the Epic Store at **12:00** and **17:00 Europe/Prague** (when the weekly free lineup usually rotates). Posts in **each server** only when that server has not seen this lineup yet. Not at 03:33 — that slot is Steam only.
+The Epic Store is checked at **12:00** and **17:00 Europe/Prague**, when the weekly free lineup usually turns over. Each server hears about a lineup once. The 03:33 slot belongs to Steam.
 
-Both fetchers persist posted IDs / lineup fingerprints **per server** in SQLite (`data/bot.db`, Prisma) so restarts cannot re-spam.
+Both cupboards keep what they already served in SQLite (`data/bot.db`, Prisma), per server, so a restart cannot dish it out again.
 
-### Welcome and goodbye
+### 👋 Welcome and goodbye
 
-Requires **Server Members Intent** in the Discord Developer Portal (Bot → Privileged Gateway Intents).
+Turn on **Server Members Intent** in the Discord Developer Portal (Bot → Privileged Gateway Intents).
 
 | Event | Message                                                                                                                  |
 | ----- | ------------------------------------------------------------------------------------------------------------------------ |
 | Join  | `🍪 Hey @user! Welcome to the dark side, we have cookies. I’m Dzbanek — grab one, say hi, and don’t mind the crumbs. 😈` |
 | Leave | `👋 name just left the kitchen. Hasta la vista, baby! 🕶️🍪 We’ll keep a cookie warm in case they come back.`             |
 
-### Multi-server
+### 🏠 Many kitchens
 
-Music and radio already work per guild. Deals and greetings are configured per server:
+Music and radio already keep a separate pot per server. Deals and greetings are arranged per server too:
 
-| Command                      | Description                                                     |
-| ---------------------------- | --------------------------------------------------------------- |
-| `/setup steam <channel>`     | Where Steam deals post (Manage Server).                         |
-| `/setup epic <channel>`      | Where Epic free games post.                                     |
-| `/setup welcome <channel>`   | Where join messages post.                                       |
-| `/setup goodbye <channel>`   | Where leave messages post.                                      |
-| `/setup kitchen <channel>`   | Where the Kitchen Board lives.                                  |
-| `/setup idle-radio <on/off>` | Fade into radio when the music queue goes quiet.                |
-| `/setup status`              | Show this server’s channels.                                    |
-| `/setup disable …`           | Stop one feed, greeting, the board, Radio Night, or idle radio. |
+| Command                      | What it does                                                       |
+| ---------------------------- | ------------------------------------------------------------------ |
+| `/setup steam <channel>`     | Where Steam deals land (Manage Server).                            |
+| `/setup epic <channel>`      | Where Epic free games land.                                        |
+| `/setup welcome <channel>`   | Where join messages land.                                          |
+| `/setup goodbye <channel>`   | Where leave messages land.                                         |
+| `/setup kitchen <channel>`   | Where the Kitchen Board hangs.                                     |
+| `/setup idle-radio <on/off>` | Fade into radio when the music queue goes quiet.                   |
+| `/setup status`              | Show this server’s channels.                                       |
+| `/setup disable …`           | Pause one feed, a greeting, the board, Radio Night, or idle radio. |
 
-If you never run `/setup`, the bot looks for a text channel named like `#steam`, `#deals`, `#epic`, `#free-games`, `#welcome`, or `#goodbye`. The `channelId` values in `config.json` only seed the server that actually owns those channels.
+Skip `/setup` and Dzbanek looks for a text channel named like `#steam`, `#deals`, `#epic`, `#free-games`, `#welcome`, or `#goodbye`. The `channelId` values in `config.json` only season the server that actually owns those channels.
 
 ---
 
-## Prerequisites
+## 🧰 What you need
 
 - **Node.js ≥ 22.12**
 - **FFmpeg** — bundled via `ffmpeg-static` (a system `ffmpeg` on your `PATH` still works)
-- **Deno** on your `PATH` (`deno --version` should work) — yt-dlp uses it to solve YouTube player JS so audio URLs do not 403
+- **Deno** on your `PATH` (`deno --version` should answer) — yt-dlp uses it to solve YouTube player JS so audio URLs stay friendly
 - A Discord bot token from the [Discord Developer Portal](https://discord.com/developers/applications)
-- A home PC or VPS (YouTube often blocks datacenter IPs)
+- A home PC or VPS (YouTube is often shy with datacenter IPs)
 
-### Bot permissions
+### 🔑 Bot permissions
 
 OAuth2 scopes: `bot`, `applications.commands`
 
 Privileged intent: **Server Members Intent** (welcome / goodbye).
 
-| Feature         | Permissions                                                              |
-| --------------- | ------------------------------------------------------------------------ |
-| Music / Radio   | Connect, Speak, View Channel                                             |
-| Steam / Epic    | View Channel, Send Messages, Embed Links, Manage Messages, Add Reactions |
-| Welcome / leave | View Channel, Send Messages                                              |
+| Feature            | Permissions                                                              |
+| ------------------ | ------------------------------------------------------------------------ |
+| 🎵 Music / Radio   | Connect, Speak, View Channel                                             |
+| 💸 Steam / Epic    | View Channel, Send Messages, Embed Links, Manage Messages, Add Reactions |
+| 👋 Welcome / leave | View Channel, Send Messages                                              |
 
-**Manage Messages** is required so the bot can delete its own previous Now Playing / digest cards.
+**Manage Messages** lets Dzbanek clear the previous Now Playing card and the previous digest.
 
 ---
 
-## Setup
+## 🍰 Setup
 
 ```bash
 # 1. Install dependencies (yt-dlp binary, ffmpeg-static, Prisma client)
@@ -151,14 +151,14 @@ cp .env.example .env
 # 4. Register slash commands
 npm run deploy
 
-# 5. Start the bot
+# 5. Put the kettle on
 npm run dev       # development — auto-reloads on file changes
 npm start         # production
 ```
 
-`npm run deploy` registers **global** commands (can take up to about an hour to show in Discord) and clears any older command list stored on the two kitchen servers, so an old copy cannot hide the new one. Restart the Discord app if the picker still shows removed commands.
+`npm run deploy` registers **global** commands (they can take up to about an hour to appear in Discord) and clears any older command list stored on the two kitchen servers, so an old menu cannot hide the new one. Restart the Discord app if the picker still shows commands that moved onto buttons.
 
-### Optional Spotify
+### 🟢 Optional Spotify
 
 Create an app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) and set in `.env`:
 
@@ -167,11 +167,11 @@ SPOTIFY_CLIENT_ID=...
 SPOTIFY_CLIENT_SECRET=...
 ```
 
-Without these, Spotify **playlists and albums** cannot be resolved. Single-track links fall back to a YouTube search.
+With those, albums and playlists resolve. A single-track link can still fall back to a YouTube search when the keys are absent.
 
-### Optional YouTube cookies
+### 🍪 Optional YouTube cookies
 
-If yt-dlp hits an age gate or bot check, export Netscape `cookies.txt` from a logged-in browser, base64-encode it, and set:
+If yt-dlp meets an age gate or a bot check, export Netscape `cookies.txt` from a logged-in browser, base64-encode it, and set:
 
 ```
 YTDLP_COOKIES_BASE64=...
@@ -179,9 +179,9 @@ YTDLP_COOKIES_BASE64=...
 
 ---
 
-## Configuration
+## ⚙️ Configuration
 
-Non-secret settings live in `src/config/config.json`. The only required secret is `DISCORD_TOKEN`.
+Everyday settings live in `src/config/config.json`. The one secret is `DISCORD_TOKEN`.
 
 ```json
 {
@@ -215,11 +215,11 @@ Non-secret settings live in `src/config/config.json`. The only required secret i
 }
 ```
 
-Cron expressions use `timezone` (Europe/Prague). `postOnFirstRun` controls whether the first poll after startup may post.
+Cron expressions use `timezone` (Europe/Prague). `postOnFirstRun` decides whether the first poll after startup may post.
 
 ---
 
-## Project structure
+## 🗂️ Project structure
 
 ```
 src/
@@ -249,29 +249,29 @@ data/bot.db                Runtime SQLite (git-ignored)
 
 ---
 
-## Scripts
+## 📜 Scripts
 
-| Script              | What it does                                        |
-| ------------------- | --------------------------------------------------- |
-| `npm run dev`       | Run with auto-reload (`tsx watch`).                 |
-| `npm start`         | Run the bot.                                        |
-| `npm run deploy`    | Register slash commands with Discord.               |
-| `npm run db:push`   | Create/update `data/bot.db` from the Prisma schema. |
-| `npm run typecheck` | Type-check with `tsc --noEmit`.                     |
-| `npm run lint`      | Lint with ESLint.                                   |
-| `npm run format`    | Format with Prettier.                               |
+| Script              | What it does                                           |
+| ------------------- | ------------------------------------------------------ |
+| `npm run dev`       | Run with auto-reload (`tsx watch`). 👀                 |
+| `npm start`         | Run the bot. 🍪                                        |
+| `npm run deploy`    | Register slash commands with Discord.                  |
+| `npm run db:push`   | Create or update `data/bot.db` from the Prisma schema. |
+| `npm run typecheck` | Type-check with `tsc --noEmit`.                        |
+| `npm run lint`      | Lint with ESLint.                                      |
+| `npm run format`    | Format with Prettier.                                  |
 
 ---
 
-## Troubleshooting
+## 🔧 If something smells off
 
-| Problem                                  | Fix                                                                                                                           |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Song won't play / "Could not load track" | Update yt-dlp: delete `node_modules/youtube-dl-exec` and reinstall. Set `YTDLP_COOKIES_BASE64` if YouTube bot-checks you.     |
-| No audio                                 | Confirm `ffmpeg-static` installed with `npm install`, and that the bot has Connect + Speak.                                   |
-| Slash commands missing                   | Run `npm run deploy`. Guild commands appear instantly; global takes ~1 h. Restart the Discord client if the picker is stale.  |
-| `/radio` missing the station option      | Deploy again after pulling. Type `/radio` then pick **play** and a station.                                                   |
-| Radio Beat shows a show name, not a song | Beat often does not publish per-track metadata (especially during shows). The card follows the official “Právě v éteru” feed. |
-| Steam / Epic not posting                 | Confirm the channel (`/setup status`), bot permissions, and that there are _new_ items (already-seen IDs stay silent).        |
-| Welcome / goodbye silent                 | Enable **Server Members Intent**, then `/setup welcome` / `/setup goodbye`.                                                   |
-| Can't delete previous message            | Grant **Manage Messages**.                                                                                                    |
+| What happened                            | What to try                                                                                                                               |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Song won't play / "Could not load track" | Update yt-dlp: delete `node_modules/youtube-dl-exec` and reinstall. Set `YTDLP_COOKIES_BASE64` if YouTube asks you to prove you’re human. |
+| No audio                                 | Confirm `ffmpeg-static` came in with `npm install`, and that the bot has Connect + Speak.                                                 |
+| Slash commands missing                   | Run `npm run deploy`. Global commands can take about an hour. Restart Discord if the picker is stale.                                     |
+| `/radio` is missing the station option   | Deploy again after pulling. Type `/radio`, then pick **play** and a station.                                                              |
+| Radio Beat shows a show name             | During a program, Beat publishes the show. The card follows “Právě v éteru”. Catch waits for a real song.                                 |
+| Steam / Epic stayed quiet                | Check `/setup status` and the bot’s permissions. An unchanged lineup stays in the pot.                                                    |
+| Welcome / goodbye stayed quiet           | Enable **Server Members Intent**, then `/setup welcome` and `/setup goodbye`.                                                             |
+| An old card is stuck                     | Grant **Manage Messages** so Dzbanek can clear the previous one.                                                                          |
