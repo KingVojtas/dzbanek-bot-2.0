@@ -2,11 +2,11 @@ import ffmpegPath from 'ffmpeg-static';
 import '@snazzah/davey';
 import 'libsodium-wrappers';
 import { Cron } from 'croner';
-import { Events } from 'discord.js';
+import { Events, type Client } from 'discord.js';
 import { buildCommandCollection } from './commands';
 import { DISCORD_TOKEN, config } from './config';
 import { createClient } from './core/client';
-import { logger } from './core/logger';
+import { logger, type Logger } from './core/logger';
 import type { Services } from './core/types';
 import { migrateJsonStoresIfNeeded } from './db/migrate-json';
 import { EpicFreeGamesService } from './deals/epic/EpicFreeGamesService';
@@ -16,8 +16,10 @@ import { SteamDealsService } from './deals/steam/SteamDealsService';
 import { registerEvents } from './events';
 import { KitchenBoard } from './kitchen/KitchenBoard';
 import { RADIO_NIGHT_CRON } from './kitchen/display';
+import { StereoPresence } from './kitchen/presence';
 import { MusicManager } from './music/MusicManager';
 import { RadioManager } from './radio/RadioManager';
+import { getStation } from './radio/station';
 
 if (ffmpegPath) {
   process.env.FFMPEG_PATH = ffmpegPath;
@@ -35,6 +37,17 @@ async function main(): Promise<void> {
   const radio = new RadioManager(logger);
   music.setPreempt((guildId) => radio.stop(guildId));
   const kitchen = new KitchenBoard(client, music, radio, guildSettings, config, logger);
+  const presence = new StereoPresence(client, music, radio, kitchen, logger);
+  kitchen.setPresenceTick(() => presence.tick());
+  radio.setOnStation((guildId, station) => {
+    void guildSettings.upsert(guildId, { lastRadioStation: station.id }).catch((error) => {
+      logger.debug('Failed to remember last radio station:', error);
+    });
+    presence.tick();
+  });
+  music.setIdleHandoff((guildId, channelId) => {
+    void handOffIdleToRadio(client, radio, kitchen, guildSettings, logger, guildId, channelId);
+  });
   const services: Services = {
     config,
     logger,
@@ -69,6 +82,7 @@ async function main(): Promise<void> {
     );
 
     kitchen.attach();
+    presence.attach();
     void Promise.all([runSteam('Initial'), runEpic('Initial')]).finally(() => {
       void kitchen.refreshAll();
     });
@@ -83,6 +97,43 @@ async function main(): Promise<void> {
   });
 
   await client.login(DISCORD_TOKEN);
+}
+
+async function handOffIdleToRadio(
+  client: Client,
+  radio: RadioManager,
+  kitchen: KitchenBoard,
+  guildSettings: GuildSettingsStore,
+  logger: Logger,
+  guildId: string,
+  channelId: string,
+): Promise<void> {
+  const settings = await guildSettings.get(guildId);
+  if (!settings.idleRadioEnabled) return;
+
+  const guild =
+    client.guilds.cache.get(guildId) ?? (await client.guilds.fetch(guildId).catch(() => null));
+  if (!guild) return;
+  const raw =
+    guild.channels.cache.get(channelId) ?? (await guild.channels.fetch(channelId).catch(() => null));
+  if (!raw?.isVoiceBased()) return;
+
+  const humans = [...raw.members.values()].filter((member) => !member.user.bot);
+  if (humans.length === 0) {
+    logger.info(`Idle → radio skipped in ${guild.name}: voice channel empty.`);
+    return;
+  }
+
+  const station = getStation(settings.lastRadioStation ?? '') ?? getStation('beat');
+  if (!station) return;
+
+  try {
+    await radio.play(raw, station);
+    logger.info(`Idle → radio: ${station.name} in ${guild.name} (#${raw.name}).`);
+    kitchen.refresh(guildId);
+  } catch (error) {
+    logger.error(`Idle → radio failed in ${guild.name}:`, error);
+  }
 }
 
 main().catch((error) => {

@@ -17,7 +17,7 @@ import { resolveGuildSendableChannel } from '../deals/targets';
 import type { GuildSettingsStore } from '../deals/guild-settings';
 import type { MusicManager } from '../music/MusicManager';
 import type { RadioManager } from '../radio/RadioManager';
-import { getStation, type RadioStation } from '../radio/station';
+import { getStation, type RadioStation, type StationId } from '../radio/station';
 import {
   KITCHEN_COLOR,
   buildKitchenBoardDisplay,
@@ -26,6 +26,8 @@ import {
   type KitchenBoardView,
   type KitchenDealTeaser,
 } from './display';
+import { isRadioVoteOpen, radioNightWeekKey } from './time';
+import { RadioNightVoteStore, isStationId } from './votes';
 
 const TICK_MS = 20_000;
 const DEBOUNCE_MS = 1_200;
@@ -50,7 +52,9 @@ export class KitchenBoard {
   private readonly epicByGuild = new Map<string, EpicFreeGame[]>();
   private readonly lastKey = new Map<string, string>();
   private readonly debounce = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly votes = new RadioNightVoteStore();
   private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private presenceTick: (() => void) | null = null;
 
   constructor(
     private readonly client: Client,
@@ -60,6 +64,38 @@ export class KitchenBoard {
     private readonly config: Config,
     private readonly logger: Logger,
   ) {}
+
+  setPresenceTick(fn: () => void): void {
+    this.presenceTick = fn;
+  }
+
+  steamHeadline(): string | null {
+    for (const snap of this.steamByGuild.values()) {
+      const item = snap.items[0];
+      if (!item) continue;
+      const discount = item.discount?.replace(/[()]/g, '').trim();
+      return discount ? `${item.gameName} on sale ${discount}` : item.gameName;
+    }
+    return null;
+  }
+
+  async castVote(
+    guildId: string,
+    userId: string,
+    stationId: StationId,
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const settings = await this.guildSettings.get(guildId);
+    if (!settings.radioNightEnabled || !settings.radioNightChannelId) {
+      return { ok: false, reason: 'Radio Night is not scheduled. Use `/radio night` first.' };
+    }
+    if (!isRadioVoteOpen(this.config.timezone)) {
+      return { ok: false, reason: 'Voting is Friday 12:00–20:00 Prague.' };
+    }
+    await this.votes.cast(guildId, radioNightWeekKey(this.config.timezone), userId, stationId);
+    this.lastKey.delete(guildId);
+    this.refresh(guildId);
+    return { ok: true };
+  }
 
   attach(): void {
     this.client.on(Events.VoiceStateUpdate, (oldState, newState) => {
@@ -131,15 +167,24 @@ export class KitchenBoard {
 
   async runRadioNights(): Promise<void> {
     const rows = await this.guildSettings.all();
+    const weekKey = radioNightWeekKey(this.config.timezone);
     for (const row of rows) {
-      if (!row.radioNightEnabled || !row.radioNightChannelId || !row.radioNightStation) continue;
-      const station = getStation(row.radioNightStation);
+      if (!row.radioNightEnabled || !row.radioNightChannelId) continue;
+      const tieBreak = pickStationId(row.radioNightStation) ?? pickStationId(row.lastRadioStation) ?? 'beat';
+      const winnerId = await this.votes.winner(row.guildId, weekKey, tieBreak);
+      const station = getStation(winnerId);
       if (!station) {
-        this.logger.warn(`Radio Night: unknown station "${row.radioNightStation}" in ${row.guildId}.`);
+        this.logger.warn(`Radio Night: unknown station "${winnerId}" in ${row.guildId}.`);
         continue;
       }
+      const counts = await this.votes.counts(row.guildId, weekKey);
+      const total = counts.kiss + counts.rock + counts.beat;
+      await this.guildSettings.upsert(row.guildId, {
+        radioNightStation: station.id,
+        lastRadioStation: station.id,
+      });
       try {
-        await this.startRadioNight(row.guildId, row.radioNightChannelId, station);
+        await this.startRadioNight(row.guildId, row.radioNightChannelId, station, total > 0 ? counts : null);
       } catch (error) {
         this.logger.error(`Radio Night failed in ${row.guildId}:`, error);
       }
@@ -150,6 +195,7 @@ export class KitchenBoard {
     guildId: string,
     voiceChannelId: string,
     station: RadioStation,
+    counts: { kiss: number; rock: number; beat: number } | null = null,
   ): Promise<void> {
     const guild = await this.client.guilds.fetch(guildId).catch(() => null);
     if (!guild) return;
@@ -189,9 +235,13 @@ export class KitchenBoard {
       guildId,
     );
     if (!text) return;
+    const tally =
+      counts && counts.kiss + counts.rock + counts.beat > 0
+        ? ` Vote: Kiss ${counts.kiss} · Rock ${counts.rock} · Beat ${counts.beat}.`
+        : '';
     await text
       .send({
-        content: `🍪 **Radio Night** — ${station.name} is live in **#${channel.name}**. Hop in.`,
+        content: `🍪 **Radio Night** — **${station.name}** is live in **#${channel.name}**. Hop in.${tally}`,
       })
       .catch(() => {});
   }
@@ -210,7 +260,7 @@ export class KitchenBoard {
     );
     if (!channel || !channel.isTextBased()) return;
 
-    const view = this.buildView(guild, settings.kitchenJoinDate, settings.kitchenJoinCount, settings);
+    const view = await this.buildView(guild, settings.kitchenJoinDate, settings.kitchenJoinCount, settings);
     const key = kitchenViewKey(view);
     const display = buildKitchenBoardDisplay(view);
     const payload = {
@@ -226,6 +276,7 @@ export class KitchenBoard {
         if (this.lastKey.get(guildId) === key) return;
         await existing.edit(payload);
         this.lastKey.set(guildId, key);
+        this.presenceTick?.();
         return;
       } catch {
         await this.guildSettings.upsert(guildId, { kitchenMessageId: null });
@@ -241,6 +292,7 @@ export class KitchenBoard {
       await recovered.edit(payload);
       await this.guildSettings.upsert(guildId, { kitchenMessageId: recovered.id });
       this.lastKey.set(guildId, key);
+      this.presenceTick?.();
       return;
     }
 
@@ -252,6 +304,7 @@ export class KitchenBoard {
     await this.guildSettings.upsert(guildId, { kitchenMessageId: sent.id });
     this.lastKey.set(guildId, key);
     this.logger.info(`Kitchen board posted in ${guild.name}.`);
+    this.presenceTick?.();
   }
 
   private async findExistingBoard(channel: SendableChannels): Promise<Message | null> {
@@ -269,15 +322,16 @@ export class KitchenBoard {
     }
   }
 
-  private buildView(
+  private async buildView(
     guild: Guild,
     joinDate: string | null,
     joinCount: number,
     settings: {
       radioNightEnabled: boolean;
+      radioNightChannelId: string | null;
       radioNightStation: string | null;
     },
-  ): KitchenBoardView {
+  ): Promise<KitchenBoardView> {
     const today = calendarDate(this.config.timezone);
     const joinsToday = joinDate === today ? joinCount : 0;
     const stereo = this.stereoFor(guild.id);
@@ -288,6 +342,19 @@ export class KitchenBoard {
       ? getStation(settings.radioNightStation ?? '')
       : undefined;
 
+    let radioVote: KitchenBoardView['radioVote'];
+    if (
+      settings.radioNightEnabled &&
+      settings.radioNightChannelId &&
+      isRadioVoteOpen(this.config.timezone)
+    ) {
+      const counts = await this.votes.counts(guild.id, radioNightWeekKey(this.config.timezone));
+      radioVote = {
+        counts,
+        total: counts.kiss + counts.rock + counts.beat,
+      };
+    }
+
     return {
       stereo,
       listeners: voice.listeners,
@@ -297,6 +364,7 @@ export class KitchenBoard {
       epic: epicTeaser(epicGames),
       joinsToday,
       radioNight: nightStation ? { stationName: nightStation.name } : undefined,
+      radioVote,
     };
   }
 
@@ -363,6 +431,11 @@ export class KitchenBoard {
       .map((member) => ({ id: member.id, name: displayName(member) }));
     return { name: channel.name, listeners };
   }
+}
+
+function pickStationId(value: string | null | undefined): StationId | null {
+  if (value && isStationId(value)) return value;
+  return null;
 }
 
 function steamTeaser(snap: SteamSnapshot | undefined): KitchenDealTeaser | undefined {

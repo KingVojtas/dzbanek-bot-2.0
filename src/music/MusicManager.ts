@@ -21,6 +21,7 @@ export class MusicManager {
   private readonly subscriptions = new Map<string, GuildPlayer>();
   private readonly source: TrackSource = new CompositeTrackSource();
   private preemptRadio: ((guildId: string) => void) | null = null;
+  private onQueueIdle: ((guildId: string, channelId: string) => void) | null = null;
 
   constructor(
     private readonly config: Config,
@@ -40,6 +41,11 @@ export class MusicManager {
   /** Stop radio in this guild before music takes the voice connection. */
   setPreempt(fn: (guildId: string) => void): void {
     this.preemptRadio = fn;
+  }
+
+  /** After the idle timeout on an empty queue, optionally start radio in that channel. */
+  setIdleHandoff(fn: (guildId: string, channelId: string) => void): void {
+    this.onQueueIdle = fn;
   }
 
   get(guildId: string): GuildPlayer | undefined {
@@ -118,6 +124,7 @@ export class MusicManager {
       this.logger,
       this.config.music.idleTimeoutSec,
       () => this.subscriptions.delete(guildId),
+      (idleGuildId, idleChannelId) => this.onQueueIdle?.(idleGuildId, idleChannelId),
     );
     this.subscriptions.set(guildId, player);
     this.logger.info(`Voice ready in guild ${guildId} → #${channel.name} (${channel.id})`);

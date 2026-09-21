@@ -57,6 +57,7 @@ export class GuildPlayer {
     private readonly logger: Logger,
     private readonly idleTimeoutSec: number,
     private readonly onDestroy: () => void,
+    private readonly onQueueIdle: ((guildId: string, channelId: string) => void) | null = null,
   ) {
     this.player = createAudioPlayer();
     this.connection.subscribe(this.player);
@@ -558,8 +559,12 @@ export class GuildPlayer {
   private startIdleTimer(): void {
     this.clearIdleTimer();
     this.idleTimer = setTimeout(() => {
+      const guildId = this.connection.joinConfig.guildId;
+      const channelId = this.connection.joinConfig.channelId;
       void this.deleteNowPlaying();
+      const handoff = channelId ? this.onQueueIdle : null;
       this.destroy();
+      if (handoff && channelId) handoff(guildId, channelId);
     }, this.idleTimeoutSec * 1000);
   }
 

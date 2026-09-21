@@ -37,5 +37,20 @@ model GuildSettings {
   radioNightEnabled    Boolean  @default(false)
   radioNightChannelId  String?
   radioNightStation    String?
+  lastRadioStation     String?
+  idleRadioEnabled     Boolean  @default(true)
   updatedAt            DateTime @updatedAt
+}
+
+/// One Radio Night vote per member per Friday (Europe/Prague week key).
+model RadioNightVote {
+  id        Int      @id @default(autoincrement())
+  guildId   String
+  weekKey   String
+  userId    String
+  stationId String
+  updatedAt DateTime @updatedAt
+
+  @@unique([guildId, weekKey, userId])
+  @@index([guildId, weekKey])
 }

@@ -18,10 +18,13 @@ import {
   type MessageActionRowComponentBuilder,
 } from 'discord.js';
 import type { V2Display } from '../core/display';
+import { STATION_LIST, type StationId } from '../radio/station';
+import type { VoteCounts } from './votes';
 
 export const KITCHEN_COLOR = 0xc4783a;
 export const RADIO_NIGHT_CRON = '0 20 * * 5';
 export const RADIO_NIGHT_LABEL = 'Friday 20:00';
+export const RADIO_VOTE_PREFIX = 'kitchen:vote:';
 
 const HERO_FILE = 'kitchen-hero.jpg';
 const THUMB_FILE = 'kitchen-thumb.jpg';
@@ -68,6 +71,7 @@ export interface KitchenBoardView {
   epic?: KitchenDealTeaser;
   joinsToday: number;
   radioNight?: { stationName: string };
+  radioVote?: { counts: VoteCounts; total: number };
 }
 
 export interface KitchenDisplay extends V2Display {
@@ -193,7 +197,10 @@ export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay
   if (stereoThumb) stereoSection.setThumbnailAccessory(stereoThumb);
 
   const footer = [cookieLine(view.joinsToday)];
-  if (view.radioNight) {
+  if (view.radioVote) {
+    const bits = STATION_LIST.map((station) => `${station.choiceName} **${view.radioVote!.counts[station.id]}**`);
+    footer.push(`📻 **Radio Night vote** · ${bits.join(' · ')} · closes 20:00`);
+  } else if (view.radioNight) {
     footer.push(`📻 **Radio Night** · ${RADIO_NIGHT_LABEL} · ${view.radioNight.stationName}`);
   }
   footer.push('-# The Kitchen · `/radio play` · `/play`');
@@ -222,6 +229,10 @@ export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay
   container
     .addSeparatorComponents(largeSep())
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(footer.join('\n').slice(0, 4000)));
+
+  if (view.radioVote) {
+    container.addActionRowComponents(voteButtons(view.radioVote.counts));
+  }
 
   const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
   if (stereo.kind === 'radio' && stereo.websiteUrl && /^https?:\/\//i.test(stereo.websiteUrl)) {
@@ -266,7 +277,28 @@ export function kitchenViewKey(view: KitchenBoardView): string {
     view.epic?.title ?? '',
     String(view.joinsToday),
     view.radioNight?.stationName ?? '',
+    view.radioVote
+      ? STATION_LIST.map((station) => `${station.id}:${view.radioVote!.counts[station.id]}`).join(',')
+      : '',
   ].join('|');
+}
+
+function voteButtons(counts: VoteCounts): ActionRowBuilder<MessageActionRowComponentBuilder> {
+  const leader = STATION_LIST.reduce<StationId>(
+    (best, station) => (counts[station.id] > counts[best] ? station.id : best),
+    'beat',
+  );
+  const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
+  for (const station of STATION_LIST) {
+    const n = counts[station.id];
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${RADIO_VOTE_PREFIX}${station.id}`)
+        .setLabel(n > 0 ? `${station.choiceName} · ${n}` : station.choiceName)
+        .setStyle(station.id === leader && n > 0 ? ButtonStyle.Success : ButtonStyle.Secondary),
+    );
+  }
+  return row;
 }
 
 export function looksLikeKitchenBoard(blob: string): boolean {

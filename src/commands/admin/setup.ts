@@ -88,7 +88,19 @@ export const setup: Command = {
               { name: 'Goodbye messages', value: 'goodbye' },
               { name: 'Kitchen Board', value: 'kitchen' },
               { name: 'Radio Night', value: 'radio-night' },
+              { name: 'Idle → radio', value: 'idle-radio' },
             ),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('idle-radio')
+        .setDescription('When the music queue ends, start radio instead of leaving.')
+        .addBooleanOption((option) =>
+          option
+            .setName('enabled')
+            .setDescription('On by default — fade into the last station (or Beat)')
+            .setRequired(true),
         ),
     )
     .addSubcommand((sub) =>
@@ -140,10 +152,13 @@ export const setup: Command = {
             settings.radioNightChannelId ? `<#${settings.radioNightChannelId}>` : 'no voice channel'
           } · Friday 20:00`
         : 'off';
+      const idleRadio = settings.idleRadioEnabled
+        ? `on · ${settings.lastRadioStation ?? 'Beat (default)'}`
+        : 'off · leave after the music idle timeout';
       await interaction.reply({
         embeds: [
           buildInfoEmbed(
-            `**Steam deals:** ${steam}\n**Epic free games:** ${epic}\n**Welcome:** ${welcome}\n**Goodbye:** ${goodbye}\n**Kitchen Board:** ${kitchen}\n**Radio Night:** ${radioNight}\n\nUse \`/setup steam\`, \`/setup epic\`, \`/setup welcome\`, \`/setup goodbye\`, or \`/setup kitchen\` to pick a channel. Schedule Radio Night with \`/radio night\`.`,
+            `**Steam deals:** ${steam}\n**Epic free games:** ${epic}\n**Welcome:** ${welcome}\n**Goodbye:** ${goodbye}\n**Kitchen Board:** ${kitchen}\n**Radio Night:** ${radioNight}\n**Idle → radio:** ${idleRadio}\n\nUse \`/setup steam\`, \`/setup epic\`, \`/setup welcome\`, \`/setup goodbye\`, or \`/setup kitchen\` to pick a channel. Schedule Radio Night with \`/radio night\`. Toggle idle radio with \`/setup idle-radio\`.`,
             'Server channels',
           ),
         ],
@@ -181,6 +196,16 @@ export const setup: Command = {
         });
         return;
       }
+      if (feature === 'idle-radio') {
+        await store.upsert(guildId, { idleRadioEnabled: false });
+        await interaction.reply({
+          embeds: [
+            buildInfoEmbed('Idle → radio is off. After the music queue ends I’ll leave like before.'),
+          ],
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
       const disablePatch = {
         steam: { steamEnabled: false },
         epic: { epicEnabled: false },
@@ -197,6 +222,21 @@ export const setup: Command = {
       await interaction.reply({
         embeds: [buildInfoEmbed(labels[feature as keyof typeof labels])],
         flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (sub === 'idle-radio') {
+      const enabled = interaction.options.getBoolean('enabled', true);
+      await store.upsert(guildId, { idleRadioEnabled: enabled });
+      await interaction.reply({
+        embeds: [
+          buildInfoEmbed(
+            enabled
+              ? 'After the music queue goes quiet I’ll start the last radio station (or Beat) instead of leaving.'
+              : 'Idle → radio is off. After the music queue ends I’ll leave like before.',
+          ),
+        ],
       });
       return;
     }

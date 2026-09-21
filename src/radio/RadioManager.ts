@@ -14,8 +14,13 @@ const JOIN_TIMEOUT_MS = 20_000;
 /** Tracks one live-radio session per guild. */
 export class RadioManager {
   private readonly sessions = new Map<string, RadioSession>();
+  private onStation: ((guildId: string, station: RadioStation) => void) | null = null;
 
   constructor(private readonly logger: Logger) {}
+
+  setOnStation(fn: (guildId: string, station: RadioStation) => void): void {
+    this.onStation = fn;
+  }
 
   isPlaying(guildId: string): boolean {
     return this.sessions.has(guildId);
@@ -61,7 +66,10 @@ export class RadioManager {
       const status = existing.connection.state.status;
       const sameChannel = existing.channelId === channel.id;
       if (sameChannel && existing.isLive && status === VoiceConnectionStatus.Ready) {
-        if (existing.station.id === station.id) return existing;
+        if (existing.station.id === station.id) {
+          this.remember(guildId, station);
+          return existing;
+        }
         this.logger.info(
           `Switching radio in guild ${guildId}: ${existing.station.name} → ${station.name}`,
         );
@@ -73,6 +81,7 @@ export class RadioManager {
           this.logger.error(`${station.name} failed to start in guild ${guildId}:`, err);
           throw err;
         }
+        this.remember(guildId, station);
         return existing;
       }
       this.logger.warn(
@@ -132,6 +141,15 @@ export class RadioManager {
     this.logger.info(
       `${station.name} started in guild ${guildId} → #${channel.name} (${channel.id})`,
     );
+    this.remember(guildId, station);
     return session;
+  }
+
+  private remember(guildId: string, station: RadioStation): void {
+    try {
+      this.onStation?.(guildId, station);
+    } catch {
+      /* persistence must not break playback */
+    }
   }
 }

@@ -16,6 +16,8 @@ import {
   upcomingQueue,
 } from '../core/embeds';
 import type { Command, Services } from '../core/types';
+import { RADIO_VOTE_PREFIX } from '../kitchen/display';
+import { isStationId } from '../kitchen/votes';
 import type { GuildPlayer } from '../music/GuildPlayer';
 
 export function registerInteractionCreate(
@@ -63,6 +65,11 @@ async function handleButton(interaction: ButtonInteraction, services: Services):
 
   if (interaction.customId.startsWith('radio:')) {
     await handleRadioButton(interaction, services);
+    return;
+  }
+
+  if (interaction.customId.startsWith(RADIO_VOTE_PREFIX)) {
+    await handleRadioVoteButton(interaction, services);
     return;
   }
 
@@ -211,6 +218,37 @@ async function handleRadioButton(
   await interaction.deferUpdate();
   services.radio.stop(guildId);
   services.kitchen.refresh(guildId);
+}
+
+async function handleRadioVoteButton(
+  interaction: ButtonInteraction,
+  services: Services,
+): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({
+      embeds: [buildInfoEmbed('This can only be used in a server.')],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const stationId = interaction.customId.slice(RADIO_VOTE_PREFIX.length);
+  if (!isStationId(stationId)) {
+    await interaction.deferUpdate();
+    return;
+  }
+
+  const result = await services.kitchen.castVote(guildId, interaction.user.id, stationId);
+  if (!result.ok) {
+    await interaction.reply({
+      embeds: [buildInfoEmbed(result.reason)],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await interaction.deferUpdate();
 }
 
 function inSameVoice(interaction: ButtonInteraction, player: GuildPlayer): boolean {
