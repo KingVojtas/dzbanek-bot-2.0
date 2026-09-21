@@ -15,6 +15,7 @@ import { SeenStore } from './deals/seen-store';
 import { SteamDealsService } from './deals/steam/SteamDealsService';
 import { registerEvents } from './events';
 import { KitchenBoard } from './kitchen/KitchenBoard';
+import { KITCHEN_CHART_CRON } from './kitchen/chart';
 import { RADIO_NIGHT_CRON } from './kitchen/display';
 import { StereoPresence } from './kitchen/presence';
 import { MusicManager } from './music/MusicManager';
@@ -93,6 +94,15 @@ async function main(): Promise<void> {
     logger.info(
       `Radio Night: cron "${RADIO_NIGHT_CRON}" (${config.timezone}), next ${radioNightJob.nextRun()?.toISOString() ?? '?'}.`,
     );
+
+    const chartJob = new Cron(KITCHEN_CHART_CRON, cronOpts, () => {
+      void kitchen
+        .runWeeklyCharts(seen)
+        .catch((error) => logger.error('Kitchen chart failed:', error));
+    });
+    logger.info(
+      `Kitchen chart: cron "${KITCHEN_CHART_CRON}" (${config.timezone}), next ${chartJob.nextRun()?.toISOString() ?? '?'}.`,
+    );
     logger.info(`Multi-server ready: in ${client.guilds.cache.size} guild(s).`);
   });
 
@@ -115,7 +125,8 @@ async function handOffIdleToRadio(
     client.guilds.cache.get(guildId) ?? (await client.guilds.fetch(guildId).catch(() => null));
   if (!guild) return;
   const raw =
-    guild.channels.cache.get(channelId) ?? (await guild.channels.fetch(channelId).catch(() => null));
+    guild.channels.cache.get(channelId) ??
+    (await guild.channels.fetch(channelId).catch(() => null));
   if (!raw?.isVoiceBased()) return;
 
   const humans = [...raw.members.values()].filter((member) => !member.user.bot);

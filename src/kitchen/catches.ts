@@ -70,6 +70,33 @@ export class RadioCatchStore {
     return prisma.radioCatch.findUnique({ where: { id } });
   }
 
+  async between(
+    guildId: string,
+    from: Date,
+    to: Date,
+  ): Promise<
+    Array<{
+      artist: string;
+      title: string;
+      artistKey: string;
+      titleKey: string;
+      userId: string;
+      caughtAt: Date;
+    }>
+  > {
+    return prisma.radioCatch.findMany({
+      where: { guildId, caughtAt: { gte: from, lte: to } },
+      select: {
+        artist: true,
+        title: true,
+        artistKey: true,
+        titleKey: true,
+        userId: true,
+        caughtAt: true,
+      },
+    });
+  }
+
   private async trim(guildId: string, userId: string): Promise<void> {
     const rows = await prisma.radioCatch.findMany({
       where: { guildId, userId },

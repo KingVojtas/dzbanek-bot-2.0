@@ -13,11 +13,18 @@ import type { Config } from '../config';
 import type { Logger } from '../core/logger';
 import type { EpicFreeGame, SteamDealItem } from '../core/types';
 import { collectMessageTextContent } from '../core/display';
+import type { SeenStore } from '../deals/seen-store';
 import { resolveGuildSendableChannel } from '../deals/targets';
 import type { GuildSettingsStore } from '../deals/guild-settings';
 import type { MusicManager } from '../music/MusicManager';
 import type { RadioManager } from '../radio/RadioManager';
 import { getStation, type RadioStation, type StationId } from '../radio/station';
+import {
+  buildKitchenChartDisplay,
+  markRadioNightRan,
+  radioNightPlayedStation,
+  rankCatches,
+} from './chart';
 import {
   KITCHEN_COLOR,
   buildKitchenBoardDisplay,
@@ -27,8 +34,8 @@ import {
   type KitchenDealTeaser,
 } from './display';
 import { RadioCatchStore } from './catches';
-import { isRadioVoteOpen, radioNightWeekKey } from './time';
-import { RadioNightVoteStore, isStationId } from './votes';
+import { chartWeek, isRadioVoteOpen, radioNightWeekKey } from './time';
+import { RadioNightVoteStore, isStationId, type VoteCounts } from './votes';
 
 const TICK_MS = 20_000;
 const DEBOUNCE_MS = 1_200;
@@ -187,14 +194,66 @@ export class KitchenBoard {
         lastRadioStation: station.id,
       });
       try {
-        await this.startRadioNight(
+        const started = await this.startRadioNight(
           row.guildId,
           row.radioNightChannelId,
           station,
           total > 0 ? counts : null,
         );
+        if (started) await markRadioNightRan(row.guildId, weekKey, station.id);
       } catch (error) {
         this.logger.error(`Radio Night failed in ${row.guildId}:`, error);
+      }
+    }
+  }
+
+  /** Sunday postcard: this week’s catches and Friday’s Radio Night. */
+  async runWeeklyCharts(seen: SeenStore): Promise<void> {
+    const week = chartWeek(this.config.timezone);
+    const rows = await this.guildSettings.all();
+    for (const row of rows) {
+      if (!row.kitchenEnabled || !row.kitchenChannelId) continue;
+      const scope = `kitchen-chart:${row.guildId}`;
+      if (await seen.has(scope, week.mondayKey)) continue;
+
+      const guild =
+        this.client.guilds.cache.get(row.guildId) ??
+        (await this.client.guilds.fetch(row.guildId).catch(() => null));
+      if (!guild) continue;
+      const channel = await resolveGuildSendableChannel(
+        this.client,
+        row.kitchenChannelId,
+        row.guildId,
+      );
+      if (!channel) {
+        this.logger.warn(`Kitchen chart: channel missing in ${guild.name}.`);
+        continue;
+      }
+
+      const caught = await this.catches.between(row.guildId, week.from, week.to);
+      const songs = rankCatches(caught, (userId) => {
+        const member = guild.members.cache.get(userId);
+        return member ? displayName(member) : '';
+      });
+
+      let night: { counts: VoteCounts; winnerName?: string } | undefined;
+      if (row.radioNightEnabled) {
+        const counts = await this.votes.counts(row.guildId, week.fridayKey);
+        const total = counts.kiss + counts.rock + counts.beat;
+        if (total > 0) {
+          const playedId = await radioNightPlayedStation(row.guildId, week.fridayKey);
+          const winner = playedId ? getStation(playedId) : undefined;
+          night = { counts, winnerName: winner?.name };
+        }
+      }
+
+      const display = buildKitchenChartDisplay({ weekLabel: week.label, songs, night });
+      try {
+        await channel.send({ components: display.components, flags: display.flags });
+        await seen.add(scope, [week.mondayKey]);
+        this.logger.info(`Kitchen chart posted in ${guild.name}.`);
+      } catch (error) {
+        this.logger.error(`Kitchen chart failed in ${guild.name}:`, error);
       }
     }
   }
@@ -204,21 +263,21 @@ export class KitchenBoard {
     voiceChannelId: string,
     station: RadioStation,
     counts: { kiss: number; rock: number; beat: number } | null = null,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const guild = await this.client.guilds.fetch(guildId).catch(() => null);
-    if (!guild) return;
+    if (!guild) return false;
     const raw =
       guild.channels.cache.get(voiceChannelId) ??
       (await guild.channels.fetch(voiceChannelId).catch(() => null));
     if (!raw || !raw.isVoiceBased()) {
       this.logger.warn(`Radio Night: voice channel ${voiceChannelId} missing in ${guild.name}.`);
-      return;
+      return false;
     }
     const channel = raw as VoiceBasedChannel;
     const blocked = missingVoicePermissions(channel);
     if (blocked) {
       this.logger.warn(`Radio Night: ${blocked} (${guild.name})`);
-      return;
+      return false;
     }
 
     const already =
@@ -236,18 +295,23 @@ export class KitchenBoard {
     this.refresh(guildId);
 
     const settings = await this.guildSettings.get(guildId);
-    if (!settings.kitchenEnabled || !settings.kitchenChannelId) return;
-    const text = await resolveGuildSendableChannel(this.client, settings.kitchenChannelId, guildId);
-    if (!text) return;
-    const tally =
-      counts && counts.kiss + counts.rock + counts.beat > 0
-        ? ` Vote: Kiss ${counts.kiss} · Rock ${counts.rock} · Beat ${counts.beat}.`
-        : '';
-    await text
-      .send({
-        content: `🍪 **Radio Night** — **${station.name}** is live in **#${channel.name}**. Hop in.${tally}`,
-      })
-      .catch(() => {});
+    if (settings.kitchenEnabled && settings.kitchenChannelId) {
+      const text = await resolveGuildSendableChannel(
+        this.client,
+        settings.kitchenChannelId,
+        guildId,
+      );
+      const tally =
+        counts && counts.kiss + counts.rock + counts.beat > 0
+          ? ` Vote: Kiss ${counts.kiss} · Rock ${counts.rock} · Beat ${counts.beat}.`
+          : '';
+      await text
+        ?.send({
+          content: `🍪 **Radio Night** — **${station.name}** is live in **#${channel.name}**. Hop in.${tally}`,
+        })
+        .catch(() => {});
+    }
+    return true;
   }
 
   private async push(guildId: string): Promise<void> {

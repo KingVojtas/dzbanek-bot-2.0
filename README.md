@@ -59,6 +59,8 @@ Radio does **not** idle-kick. Switching stations reuses the same connection and 
 
 The bot’s Discord presence follows whichever server is loudest: radio first, then music, then the top Steam headline, otherwise “the kitchen”.
 
+On Sunday at **18:00 Europe/Prague** the kitchen channel gets one chart for the week: the songs people caught, and Friday’s Radio Night tally if anyone voted. It does not replace the living board.
+
 ### Radio Night
 
 `/radio night` (Manage Server) picks a voice channel and a fallback station. On Friday from **12:00 to 20:00 Europe/Prague** the Kitchen Board shows Kiss / Rock / Beat vote buttons, one vote per person, changeable. At **20:00** the winner starts in that channel. A tie uses the scheduled station, then the last station that played, then Beat. `/radio night-off` cancels it.
