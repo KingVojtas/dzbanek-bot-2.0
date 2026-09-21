@@ -54,3 +54,21 @@ model RadioNightVote {
   @@unique([guildId, weekKey, userId])
   @@index([guildId, weekKey])
 }
+
+/// A song a member caught off live radio. One row per person per track.
+model RadioCatch {
+  id        Int      @id @default(autoincrement())
+  guildId   String
+  userId    String
+  stationId String
+  artist    String
+  title     String
+  artistKey String
+  titleKey  String
+  coverUrl  String?
+  caughtAt  DateTime @default(now())
+
+  @@unique([guildId, userId, artistKey, titleKey])
+  @@index([guildId, caughtAt])
+  @@index([guildId, userId, caughtAt])
+}

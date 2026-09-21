@@ -1,4 +1,7 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   Events,
   GuildMember,
   MessageFlags,
@@ -16,9 +19,14 @@ import {
   upcomingQueue,
 } from '../core/embeds';
 import type { Command, Services } from '../core/types';
-import { RADIO_VOTE_PREFIX } from '../kitchen/display';
+import { RadioCatchStore } from '../kitchen/catches';
+import { CATCH_PLAY_PREFIX, RADIO_VOTE_PREFIX } from '../kitchen/display';
 import { isStationId } from '../kitchen/votes';
 import type { GuildPlayer } from '../music/GuildPlayer';
+import { playSearch } from '../music/play-search';
+import { catchBlockReason } from '../radio/now-playing';
+
+const catches = new RadioCatchStore();
 
 export function registerInteractionCreate(
   client: Client,
@@ -70,6 +78,14 @@ async function handleButton(interaction: ButtonInteraction, services: Services):
 
   if (interaction.customId.startsWith(RADIO_VOTE_PREFIX)) {
     await handleRadioVoteButton(interaction, services);
+    return;
+  }
+
+  if (
+    interaction.customId === CATCH_PLAY_PREFIX ||
+    interaction.customId.startsWith(`${CATCH_PLAY_PREFIX}:`)
+  ) {
+    await handleCatchPlay(interaction, services);
     return;
   }
 
@@ -188,6 +204,11 @@ async function handleRadioButton(
     return;
   }
 
+  if (interaction.customId === 'radio:catch') {
+    await handleRadioCatch(interaction, services);
+    return;
+  }
+
   if (interaction.customId !== 'radio:stop') {
     await interaction.deferUpdate();
     return;
@@ -249,6 +270,131 @@ async function handleRadioVoteButton(
   }
 
   await interaction.deferUpdate();
+}
+
+async function handleRadioCatch(interaction: ButtonInteraction, services: Services): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await replyButton(interaction, 'This can only be used in a server.');
+    return;
+  }
+
+  const session = services.radio.get(guildId);
+  if (!session || !services.radio.isPlaying(guildId)) {
+    await replyButton(interaction, '🔇 Radio isn’t on.');
+    return;
+  }
+
+  const track = session.nowPlaying;
+  const reason = catchBlockReason(track, session.station);
+  if (reason || !track?.artist) {
+    await replyButton(interaction, reason ?? 'That’s the show, not a song.');
+    return;
+  }
+
+  await interaction.deferReply();
+  const saved = await catches.save({
+    guildId,
+    userId: interaction.user.id,
+    stationId: session.station.id,
+    artist: track.artist,
+    title: track.title,
+    coverUrl: track.coverUrl,
+  });
+  const who =
+    interaction.member instanceof GuildMember
+      ? interaction.member.displayName
+      : interaction.user.username;
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${CATCH_PLAY_PREFIX}:${saved.id}`)
+      .setLabel('Play')
+      .setEmoji('▶️')
+      .setStyle(ButtonStyle.Primary),
+  );
+  await interaction.editReply({
+    content: `🍪 **${plain(who, 32)}** caught **${plain(track.title, 80)}** — ${plain(track.artist, 80)}`,
+    components: [row],
+  });
+  services.kitchen.refresh(guildId);
+}
+
+async function handleCatchPlay(interaction: ButtonInteraction, services: Services): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await replyButton(interaction, 'This can only be used in a server.');
+    return;
+  }
+
+  const raw = interaction.customId.slice(CATCH_PLAY_PREFIX.length);
+  let saved;
+  if (raw.startsWith(':')) {
+    const id = Number.parseInt(raw.slice(1), 10);
+    if (!Number.isFinite(id)) {
+      await replyButton(interaction, 'That catch is gone.');
+      return;
+    }
+    saved = await catches.get(id);
+  } else {
+    saved = await catches.latest(guildId);
+  }
+
+  if (!saved || saved.guildId !== guildId) {
+    await replyButton(interaction, 'That catch is gone.');
+    return;
+  }
+  if (saved.userId !== interaction.user.id) {
+    await replyButton(interaction, 'That’s someone else’s catch.');
+    return;
+  }
+
+  const member = interaction.member;
+  const voice = member instanceof GuildMember ? member.voice.channel : null;
+  if (!voice) {
+    await replyButton(interaction, '🔇 You need to be in a voice channel to play that.');
+    return;
+  }
+
+  await interaction.deferReply();
+  const who = member instanceof GuildMember ? member.displayName : interaction.user.username;
+  const channel = interaction.channel?.isSendable() ? interaction.channel : null;
+  const result = await playSearch(services, {
+    query: `${saved.artist} ${saved.title}`.slice(0, 200),
+    voiceChannel: voice,
+    requestedBy: who,
+    requestedById: interaction.user.id,
+    announceChannel: channel,
+  });
+  if (!result.ok) {
+    await interaction.editReply({ embeds: [buildInfoEmbed(result.message)] });
+    return;
+  }
+
+  services.kitchen.refresh(guildId);
+  const line = result.queued
+    ? `➕ Queued **${plain(result.title, 80)}**.`
+    : `▶️ Playing **${plain(result.title, 80)}**.`;
+  await interaction.editReply({ content: line });
+}
+
+async function replyButton(interaction: ButtonInteraction, description: string): Promise<void> {
+  const payload: InteractionReplyOptions = {
+    embeds: [buildInfoEmbed(description)],
+    flags: MessageFlags.Ephemeral,
+  };
+  if (interaction.deferred || interaction.replied) {
+    await interaction.followUp(payload);
+  } else {
+    await interaction.reply(payload);
+  }
+}
+
+function plain(value: string, max: number): string {
+  return value
+    .replace(/[\r\n*`_~|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
 }
 
 function inSameVoice(interaction: ButtonInteraction, player: GuildPlayer): boolean {

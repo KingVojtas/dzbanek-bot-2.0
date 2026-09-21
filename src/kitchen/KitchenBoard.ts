@@ -26,6 +26,7 @@ import {
   type KitchenBoardView,
   type KitchenDealTeaser,
 } from './display';
+import { RadioCatchStore } from './catches';
 import { isRadioVoteOpen, radioNightWeekKey } from './time';
 import { RadioNightVoteStore, isStationId } from './votes';
 
@@ -53,6 +54,7 @@ export class KitchenBoard {
   private readonly lastKey = new Map<string, string>();
   private readonly debounce = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly votes = new RadioNightVoteStore();
+  private readonly catches = new RadioCatchStore();
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private presenceTick: (() => void) | null = null;
 
@@ -170,7 +172,8 @@ export class KitchenBoard {
     const weekKey = radioNightWeekKey(this.config.timezone);
     for (const row of rows) {
       if (!row.radioNightEnabled || !row.radioNightChannelId) continue;
-      const tieBreak = pickStationId(row.radioNightStation) ?? pickStationId(row.lastRadioStation) ?? 'beat';
+      const tieBreak =
+        pickStationId(row.radioNightStation) ?? pickStationId(row.lastRadioStation) ?? 'beat';
       const winnerId = await this.votes.winner(row.guildId, weekKey, tieBreak);
       const station = getStation(winnerId);
       if (!station) {
@@ -184,7 +187,12 @@ export class KitchenBoard {
         lastRadioStation: station.id,
       });
       try {
-        await this.startRadioNight(row.guildId, row.radioNightChannelId, station, total > 0 ? counts : null);
+        await this.startRadioNight(
+          row.guildId,
+          row.radioNightChannelId,
+          station,
+          total > 0 ? counts : null,
+        );
       } catch (error) {
         this.logger.error(`Radio Night failed in ${row.guildId}:`, error);
       }
@@ -229,11 +237,7 @@ export class KitchenBoard {
 
     const settings = await this.guildSettings.get(guildId);
     if (!settings.kitchenEnabled || !settings.kitchenChannelId) return;
-    const text = await resolveGuildSendableChannel(
-      this.client,
-      settings.kitchenChannelId,
-      guildId,
-    );
+    const text = await resolveGuildSendableChannel(this.client, settings.kitchenChannelId, guildId);
     if (!text) return;
     const tally =
       counts && counts.kiss + counts.rock + counts.beat > 0
@@ -250,7 +254,9 @@ export class KitchenBoard {
     const settings = await this.guildSettings.get(guildId);
     if (!settings.kitchenEnabled || !settings.kitchenChannelId) return;
 
-    const guild = this.client.guilds.cache.get(guildId) ?? (await this.client.guilds.fetch(guildId).catch(() => null));
+    const guild =
+      this.client.guilds.cache.get(guildId) ??
+      (await this.client.guilds.fetch(guildId).catch(() => null));
     if (!guild) return;
 
     const channel = await resolveGuildSendableChannel(
@@ -260,7 +266,12 @@ export class KitchenBoard {
     );
     if (!channel || !channel.isTextBased()) return;
 
-    const view = await this.buildView(guild, settings.kitchenJoinDate, settings.kitchenJoinCount, settings);
+    const view = await this.buildView(
+      guild,
+      settings.kitchenJoinDate,
+      settings.kitchenJoinCount,
+      settings,
+    );
     const key = kitchenViewKey(view);
     const display = buildKitchenBoardDisplay(view);
     const payload = {
@@ -314,9 +325,7 @@ export class KitchenBoard {
       const mine = [...recent.values()]
         .filter((msg) => msg.author.id === this.client.user?.id)
         .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
-      return (
-        mine.find((msg) => looksLikeKitchenBoard(collectMessageTextContent(msg))) ?? null
-      );
+      return mine.find((msg) => looksLikeKitchenBoard(collectMessageTextContent(msg))) ?? null;
     } catch {
       return null;
     }
@@ -355,6 +364,9 @@ export class KitchenBoard {
       };
     }
 
+    const caught = await this.catches.latest(guild.id);
+    const catcher = caught ? guild.members.cache.get(caught.userId) : undefined;
+
     return {
       stereo,
       listeners: voice.listeners,
@@ -365,6 +377,14 @@ export class KitchenBoard {
       joinsToday,
       radioNight: nightStation ? { stationName: nightStation.name } : undefined,
       radioVote,
+      latestCatch: caught
+        ? {
+            userId: caught.userId,
+            title: caught.title,
+            artist: caught.artist,
+            by: catcher ? displayName(catcher) : 'Someone',
+          }
+        : undefined,
     };
   }
 
@@ -417,7 +437,10 @@ export class KitchenBoard {
     };
   }
 
-  private voiceSnapshot(guild: Guild): { name?: string; listeners: { id: string; name: string }[] } {
+  private voiceSnapshot(guild: Guild): {
+    name?: string;
+    listeners: { id: string; name: string }[];
+  } {
     const guildId = guild.id;
     const channelId =
       this.radio.channelId(guildId) ??

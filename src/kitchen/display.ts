@@ -72,7 +72,10 @@ export interface KitchenBoardView {
   joinsToday: number;
   radioNight?: { stationName: string };
   radioVote?: { counts: VoteCounts; total: number };
+  latestCatch?: { userId: string; title: string; artist: string; by: string };
 }
+
+export const CATCH_PLAY_PREFIX = 'kitchen:catch-play';
 
 export interface KitchenDisplay extends V2Display {
   files?: AttachmentBuilder[];
@@ -138,10 +141,16 @@ function cookieLine(joins: number): string {
   return `🍪 **${joins}** cookies out of the jar today`;
 }
 
-function dealSection(teaser: KitchenDealTeaser | undefined, emptyKicker: string, empty: string): SectionBuilder {
+function dealSection(
+  teaser: KitchenDealTeaser | undefined,
+  emptyKicker: string,
+  empty: string,
+): SectionBuilder {
   if (!teaser) {
     return new SectionBuilder().addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`-# ${emptyKicker}\n*Nothing on the counter yet.*\n-# ${empty}`.slice(0, 4000)),
+      new TextDisplayBuilder().setContent(
+        `-# ${emptyKicker}\n*Nothing on the counter yet.*\n-# ${empty}`.slice(0, 4000),
+      ),
     );
   }
 
@@ -165,7 +174,11 @@ function kitchenFiles(): AttachmentBuilder[] {
   return files;
 }
 
-function resolveQuietArt(stereo: KitchenStereo): { hero?: string; logo?: string; files?: AttachmentBuilder[] } {
+function resolveQuietArt(stereo: KitchenStereo): {
+  hero?: string;
+  logo?: string;
+  files?: AttachmentBuilder[];
+} {
   if (stereo.kind !== 'quiet') {
     return { hero: httpUrl(stereo.heroUrl), logo: httpUrl(stereo.logoUrl) };
   }
@@ -198,10 +211,17 @@ export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay
 
   const footer = [cookieLine(view.joinsToday)];
   if (view.radioVote) {
-    const bits = STATION_LIST.map((station) => `${station.choiceName} **${view.radioVote!.counts[station.id]}**`);
+    const bits = STATION_LIST.map(
+      (station) => `${station.choiceName} **${view.radioVote!.counts[station.id]}**`,
+    );
     footer.push(`📻 **Radio Night vote** · ${bits.join(' · ')} · closes 20:00`);
   } else if (view.radioNight) {
     footer.push(`📻 **Radio Night** · ${RADIO_NIGHT_LABEL} · ${view.radioNight.stationName}`);
+  }
+  if (view.latestCatch) {
+    const title = view.latestCatch.title.slice(0, 80);
+    const artist = view.latestCatch.artist.slice(0, 60);
+    footer.push(`🍪 **${view.latestCatch.by}** caught **${title}** — ${artist}`);
   }
   footer.push('-# The Kitchen · `/radio play` · `/play`');
 
@@ -218,9 +238,7 @@ export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay
   container.addSectionComponents(stereoSection).addSeparatorComponents(largeSep());
 
   const steamEmpty =
-    view.steamCount > 0
-      ? `${view.steamCount} on the board`
-      : 'Waiting for the next Steam poll.';
+    view.steamCount > 0 ? `${view.steamCount} on the board` : 'Waiting for the next Steam poll.';
   container.addSectionComponents(
     dealSection(view.steam, 'STEAM', steamEmpty),
     dealSection(view.epic, 'EPIC', 'Waiting for the next Epic lineup.'),
@@ -228,7 +246,9 @@ export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay
 
   container
     .addSeparatorComponents(largeSep())
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(footer.join('\n').slice(0, 4000)));
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(footer.join('\n').slice(0, 4000)),
+    );
 
   if (view.radioVote) {
     container.addActionRowComponents(voteButtons(view.radioVote.counts));
@@ -243,6 +263,24 @@ export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay
   if (stereo.kind === 'music' && stereo.titleUrl && /^https?:\/\//i.test(stereo.titleUrl)) {
     row.addComponents(
       new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open').setURL(stereo.titleUrl),
+    );
+  }
+  if (stereo.kind === 'radio') {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId('radio:catch')
+        .setLabel('Catch')
+        .setEmoji('🍪')
+        .setStyle(ButtonStyle.Secondary),
+    );
+  }
+  if (view.latestCatch) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(CATCH_PLAY_PREFIX)
+        .setLabel('Play')
+        .setEmoji('▶️')
+        .setStyle(ButtonStyle.Primary),
     );
   }
   if (stereo.kind === 'radio') {
@@ -277,8 +315,13 @@ export function kitchenViewKey(view: KitchenBoardView): string {
     view.epic?.title ?? '',
     String(view.joinsToday),
     view.radioNight?.stationName ?? '',
+    view.latestCatch
+      ? `${view.latestCatch.userId}:${view.latestCatch.title}:${view.latestCatch.artist}`
+      : '',
     view.radioVote
-      ? STATION_LIST.map((station) => `${station.id}:${view.radioVote!.counts[station.id]}`).join(',')
+      ? STATION_LIST.map((station) => `${station.id}:${view.radioVote!.counts[station.id]}`).join(
+          ',',
+        )
       : '',
   ].join('|');
 }

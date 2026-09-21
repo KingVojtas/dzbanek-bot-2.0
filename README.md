@@ -17,16 +17,13 @@ Now Playing is a Components v2 card (album art, progress, transport buttons). Wh
 | Command              | Description                                                                              |
 | -------------------- | ---------------------------------------------------------------------------------------- |
 | `/play <query>`      | Join your voice channel and play a track (or add it to the queue). Optional `play_next`. |
-| `/skip`              | Skip the current track.                                                                  |
 | `/queue`             | Show the upcoming queue (paginated).                                                     |
 | `/stop`              | Stop playback, clear the queue, delete the Now Playing card, and leave.                  |
-| `/pause` / `/resume` | Pause or resume playback.                                                                |
-| `/nowplaying`        | Show the current track.                                                                  |
-| `/shuffle`           | Shuffle the upcoming queue.                                                              |
-| `/loop`              | `off`, `track`, or `queue`.                                                              |
 | `/remove <position>` | Drop a track from the upcoming queue (1-based).                                          |
 
-Idle auto-disconnect after **120 seconds** of silence (configurable). Queue cap is **100** tracks.
+Pause, skip, shuffle, and loop are buttons on the Now Playing card, not slash commands. The Kitchen Board shows the same track.
+
+When the queue goes quiet, the bot waits **120 seconds** (configurable). If people are still in the channel it starts the last radio station (or Beat) instead of leaving. `/setup idle-radio` turns that off. `/stop` still leaves. Queue cap is **100** tracks.
 
 ### Live radio
 
@@ -49,10 +46,22 @@ Beat often only sends a station tag over Icecast. During shows such as **Hard & 
 | ----------------------- | -------------------------------------------------------- |
 | `/radio play <station>` | Join your channel and start Kiss, Rock Radio, or Beat.   |
 | `/radio stop`           | Stop the stream, leave voice, and delete the radio card. |
+| `/radio night`          | Schedule Friday 20:00 Radio Night in a voice channel.    |
+| `/radio night-off`      | Cancel scheduled Radio Night.                            |
 
-The card also has **Website** and **Stop**. You must be in the bot’s voice channel to stop it.
+The card has **Website**, **Catch**, and **Stop**. You must be in the bot’s voice channel to stop it. Catch saves the song that is on air (artist and title) for you. A show name or a station tag is refused — Beat during Hard & Heavy is a show, not a track. The reply has **Play**, which searches that song on YouTube and queues it the same way `/play` does. The Kitchen Board shows the server’s latest catch and a Play button that only the person who caught it can use.
 
 Radio does **not** idle-kick. Switching stations reuses the same connection and deletes the previous card.
+
+### The Kitchen Board
+
+`/setup kitchen` posts one living card in a channel and keeps editing that same message: what’s on the stereo, who’s in the voice channel, the top Steam deal, the Epic free game, how many people joined today, and Radio Night when it’s scheduled.
+
+The bot’s Discord presence follows whichever server is loudest: radio first, then music, then the top Steam headline, otherwise “the kitchen”.
+
+### Radio Night
+
+`/radio night` (Manage Server) picks a voice channel and a fallback station. On Friday from **12:00 to 20:00 Europe/Prague** the Kitchen Board shows Kiss / Rock / Beat vote buttons, one vote per person, changeable. At **20:00** the winner starts in that channel. A tie uses the scheduled station, then the last station that played, then Beat. `/radio night-off` cancels it.
 
 ### Steam daily deals
 
@@ -81,14 +90,16 @@ Requires **Server Members Intent** in the Discord Developer Portal (Bot → Priv
 
 Music and radio already work per guild. Deals and greetings are configured per server:
 
-| Command                                        | Description                             |
-| ---------------------------------------------- | --------------------------------------- |
-| `/setup steam <channel>`                       | Where Steam deals post (Manage Server). |
-| `/setup epic <channel>`                        | Where Epic free games post.             |
-| `/setup welcome <channel>`                     | Where join messages post.               |
-| `/setup goodbye <channel>`                     | Where leave messages post.              |
-| `/setup status`                                | Show this server’s channels.            |
-| `/setup disable steam\|epic\|welcome\|goodbye` | Stop that feed or greeting here.        |
+| Command                      | Description                                                     |
+| ---------------------------- | --------------------------------------------------------------- |
+| `/setup steam <channel>`     | Where Steam deals post (Manage Server).                         |
+| `/setup epic <channel>`      | Where Epic free games post.                                     |
+| `/setup welcome <channel>`   | Where join messages post.                                       |
+| `/setup goodbye <channel>`   | Where leave messages post.                                      |
+| `/setup kitchen <channel>`   | Where the Kitchen Board lives.                                  |
+| `/setup idle-radio <on/off>` | Fade into radio when the music queue goes quiet.                |
+| `/setup status`              | Show this server’s channels.                                    |
+| `/setup disable …`           | Stop one feed, greeting, the board, Radio Night, or idle radio. |
 
 If you never run `/setup`, the bot looks for a text channel named like `#steam`, `#deals`, `#epic`, `#free-games`, `#welcome`, or `#goodbye`. The `channelId` values in `config.json` only seed the server that actually owns those channels.
 
@@ -131,7 +142,7 @@ cp .env.example .env
 
 # 3. Fill in src/config/config.json
 #    - discord.clientId  = Application ID from the Developer Portal
-#    - discord.guildId   = your server ID for instant command deploy (or null for global)
+#    - discord.guildId   = leave null (deploy publishes global commands)
 #    - steam.channelId / epic.channelId = optional legacy channel IDs
 #      (seed that one server; other servers use /setup or auto-detect)
 
@@ -143,7 +154,7 @@ npm run dev       # development — auto-reloads on file changes
 npm start         # production
 ```
 
-`config.json` has `"guildId": null` by default, so `npm run deploy` registers **global** commands (can take up to about an hour to show in Discord). Set `discord.guildId` to your server ID for instant guild commands.
+`npm run deploy` registers **global** commands (can take up to about an hour to show in Discord) and clears any older command list stored on the two kitchen servers, so an old copy cannot hide the new one. Restart the Discord app if the picker still shows removed commands.
 
 ### Optional Spotify
 
@@ -215,11 +226,12 @@ src/
   config/                  Typed config loader (config.json + DISCORD_TOKEN)
   core/                    Client, logger, types, embeds, Components v2 cards
   commands/
-    admin/setup.ts         Per-server deal + greeting channels
-    music/                 One file per music slash command
-    radio.ts               /radio play and /radio stop
+    admin/setup.ts         Per-server deal, greeting, and kitchen channels
+    music/                 /play, /queue, /stop, /remove
+    radio.ts               /radio play, stop, night, night-off
   events/                  ready, interactions, member join/leave
   greetings/               Welcome / goodbye copy and channel resolve
+  kitchen/                 Kitchen Board, Radio Night votes, catches, presence
   music/                   Voice queue, Now Playing, YouTube + Spotify
   radio/                   Icecast session, station catalog, now-playing poll
   db/                      Prisma client + one-shot JSON → SQLite migrate

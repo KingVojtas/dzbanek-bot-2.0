@@ -80,7 +80,12 @@ async function fetchBroadcastSnippet(
 
     if (name.includes(' - ')) return splitIcyTitle(name);
 
-    if (desc && desc.length < 80 && !/[.!?…]['"”)]?$/.test(desc) && !isGenericTitle(desc, station)) {
+    if (
+      desc &&
+      desc.length < 80 &&
+      !/[.!?…]['"”)]?$/.test(desc) &&
+      !isGenericTitle(desc, station)
+    ) {
       return { artist: name, title: desc };
     }
 
@@ -161,6 +166,41 @@ function splitIcyTitle(raw: string): NowPlayingTrack {
     if (artist && title) return { artist, title };
   }
   return { artist: null, title: raw.trim() };
+}
+
+/** Why this on-air text cannot be saved. `null` means Catch may store it. */
+export function catchBlockReason(
+  track: NowPlayingTrack | null,
+  station: RadioStation,
+): string | null {
+  const title = track?.title?.trim() ?? '';
+  const artist = track?.artist?.trim() ?? '';
+  if (!title) return 'Nothing catchable is on air yet.';
+  if (!artist || isGenericTitle(title, station) || isStationCredit(artist, station)) {
+    return 'That’s the show, not a song.';
+  }
+  const keys = catchKeys(artist, title);
+  if (!keys.artistKey || !keys.titleKey) return 'That’s the show, not a song.';
+  return null;
+}
+
+/** Stable identity for de-duplicating a catch. */
+export function catchKeys(artist: string, title: string): { artistKey: string; titleKey: string } {
+  return {
+    artistKey: normalize(artist).slice(0, 160),
+    titleKey: normalize(title).slice(0, 160),
+  };
+}
+
+function isStationCredit(raw: string, station: RadioStation): boolean {
+  const n = normalize(raw);
+  if (!n) return true;
+  const stationName = normalize(station.name);
+  if (n === stationName) return true;
+  if (n.startsWith(stationName) && n.length < stationName.length + 24) return true;
+  if (/radio\s*beat/.test(n) && /classic\s*rock/.test(n)) return true;
+  if (/^radio\s*kiss$/.test(n)) return true;
+  return false;
 }
 
 function isGenericTitle(raw: string, station: RadioStation): boolean {

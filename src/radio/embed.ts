@@ -63,6 +63,11 @@ export function buildRadioPlayingDisplay(
   const row = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
     new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Website').setURL(station.websiteUrl),
     new ButtonBuilder()
+      .setCustomId('radio:catch')
+      .setLabel('Catch')
+      .setEmoji('🍪')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
       .setCustomId('radio:stop')
       .setLabel('Stop')
       .setEmoji('⏹️')
