@@ -146,7 +146,7 @@ async function fetchIcyTitle(streamUrl: string, logger: Logger): Promise<string 
     const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
     if (metaint <= 0 || buf.length <= metaint) return null;
     const metaLen = buf[metaint]! * 16;
-    const meta = buf.subarray(metaint + 1, metaint + 1 + metaLen).toString('latin1');
+    const meta = decodeIcyBytes(buf.subarray(metaint + 1, metaint + 1 + metaLen));
     const match = /StreamTitle='([^']*)'/.exec(meta);
     const title = (match?.[1] ?? '').trim();
     return title || null;
@@ -155,6 +155,15 @@ async function fetchIcyTitle(streamUrl: string, logger: Logger): Promise<string 
     return null;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** UTF-8 StreamTitle, as Icecast 2.4 sends it. Invalid UTF-8 is windows-1250. */
+export function decodeIcyBytes(bytes: Buffer): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder('windows-1250').decode(bytes);
   }
 }
 

@@ -44,9 +44,10 @@ export function buildRadioPlayingDisplay(
   const section = new SectionBuilder().addTextDisplayComponents(
     new TextDisplayBuilder().setContent(body.join('\n').slice(0, 4000)),
   );
-  if (httpUrl(station.logoUrl)) {
+  const logoUrl = httpUrl(station.logoUrl);
+  if (logoUrl && logoUrl !== heroUrl) {
     section.setThumbnailAccessory(
-      new ThumbnailBuilder().setURL(station.logoUrl).setDescription(station.name.slice(0, 100)),
+      new ThumbnailBuilder().setURL(logoUrl).setDescription(station.name.slice(0, 100)),
     );
   }
 

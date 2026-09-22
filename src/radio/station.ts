@@ -47,8 +47,9 @@ export const STATIONS: Record<StationId, RadioStation> = {
     streamUrl: 'http://ice.abradio.cz/rockradio128.mp3',
     websiteUrl: 'https://rockovyradio.cz/',
     color: 0xc8102e,
-    logoUrl: 'https://rockovyradio.cz/design/favicon/android-icon-192x192.png',
-    imageUrl: 'https://rockovyradio.cz/design/favicon/apple-icon-180x180.png',
+    // Favicon PNGs are a crossed-out glyph. This JPEG is the ROCK RADIO wordmark.
+    logoUrl: 'https://rockovyradio.cz/design/img/img-social-networks-default.jpg',
+    imageUrl: 'https://rockovyradio.cz/design/img/img-social-networks-default.jpg',
     nowPlayingUrl: 'https://radia.cz/api/v1/radio/rock-radio/songs/now.json',
   },
   beat: {
