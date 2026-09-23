@@ -8,3 +8,8 @@ data/*
 !data/.gitkeep
 *.db
 *.db-journal
+
+# /update-dzbanek deploy skill - holds a secret deploy token, never commit
+.grok/skills/update-dzbanek/
+/dzbanek-grok-skill.zip
+/update-dzbanek/
