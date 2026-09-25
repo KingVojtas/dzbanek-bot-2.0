@@ -1,3 +1,4 @@
+import './radio/ffmpeg-bin';
 import ffmpegPath from 'ffmpeg-static';
 import '@snazzah/davey';
 import 'libsodium-wrappers';
@@ -22,7 +23,9 @@ import { MusicManager } from './music/MusicManager';
 import { RadioManager } from './radio/RadioManager';
 import { getStation } from './radio/station';
 
-if (ffmpegPath) {
+// ffmpeg-bin sets FFMPEG_BIN before this import resolves, so the path above is
+// the binary that survived a real transcode. Keep FFMPEG_PATH pointed at it.
+if (ffmpegPath && !process.env.FFMPEG_PATH) {
   process.env.FFMPEG_PATH = ffmpegPath;
 }
 

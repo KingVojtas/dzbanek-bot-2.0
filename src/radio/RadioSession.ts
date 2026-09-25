@@ -1,5 +1,6 @@
 import {
   AudioPlayerStatus,
+  StreamType,
   VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
@@ -9,17 +10,23 @@ import type { AudioPlayer, VoiceConnection } from '@discordjs/voice';
 import type { Message } from 'discord.js';
 import type { Logger } from '../core/logger';
 import { buildRadioPlayingDisplay } from './embed';
+import { ffmpegProblem } from './ffmpeg-bin';
+import { openIcecastDecoder, type IcecastDecoder } from './icecast-ffmpeg';
 import { fetchNowPlaying, trackKey, type NowPlayingTrack } from './now-playing';
 import type { RadioStation } from './station';
 
 const RECONNECT_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const NOW_PLAYING_POLL_MS = 20_000;
+/** A blip of Playing must not clear the failure counter. */
+const STABLE_PLAY_MS = 10_000;
+/** How long Playing has to hold before the station counts as started. */
+const START_HOLD_MS = 800;
 
 /**
  * One live Icecast session for a guild: voice connection, audio player, and
  * reconnect-on-drop. AudioPlayer has no destroy() — cleanup is stop + drop
- * listeners + connection.destroy().
+ * listeners + kill the FFmpeg child + connection.destroy().
  */
 export class RadioSession {
   private readonly player: AudioPlayer;
@@ -29,6 +36,9 @@ export class RadioSession {
   private reconnectScheduled = false;
   /** Skip the Idle caused by swapping the current Icecast resource. */
   private ignoreIdle = false;
+  private decoder: IcecastDecoder | null = null;
+  /** When the player last entered Playing. 0 while idle. */
+  private playingSince = 0;
   private currentStation: RadioStation;
   private nowPlayingMessage: Message | null = null;
   private metadataTimer: ReturnType<typeof setInterval> | null = null;
@@ -78,7 +88,12 @@ export class RadioSession {
 
   start(): void {
     if (this.destroyed) return;
-    this.playResource();
+    try {
+      this.playResource();
+    } catch (error) {
+      this.logger.error(`${this.currentStation.name} failed to open the stream:`, error);
+      this.scheduleReconnect();
+    }
     this.startNowPlayingLoop();
   }
 
@@ -102,17 +117,27 @@ export class RadioSession {
 
   async waitForStart(timeoutMs = 15_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
+    let heldSince = 0;
     while (Date.now() < deadline) {
       if (this.destroyed) {
         throw new Error(`${this.currentStation.name} stopped before audio started.`);
       }
-      if (this.player.state.status === AudioPlayerStatus.Playing) return;
+      if (this.player.state.status === AudioPlayerStatus.Playing) {
+        if (heldSince === 0) heldSince = Date.now();
+        if (Date.now() - heldSince >= START_HOLD_MS) return;
+      } else {
+        heldSince = 0;
+      }
       await new Promise((r) => setTimeout(r, 50));
     }
-    if (this.player.state.status === AudioPlayerStatus.Playing) return;
+    const detail = [this.decoder?.failure(), this.decoder?.stderr(), ffmpegProblem()]
+      .filter((part) => part && part.length > 0)
+      .join(' ');
     this.destroy();
     throw new Error(
-      `Timed out waiting for ${this.currentStation.name} to start. Make sure FFmpeg is available.`,
+      `Timed out waiting for ${this.currentStation.name} to start. Make sure FFmpeg is available.${
+        detail ? ` ${detail.slice(0, 300)}` : ''
+      }`,
     );
   }
 
@@ -132,6 +157,7 @@ export class RadioSession {
     if (this.destroyed) return;
     this.destroyed = true;
     this.clearReconnectTimer();
+    this.stopDecoder();
     this.stopNowPlayingLoop();
     this.reconnectScheduled = false;
     this.deleteNowPlaying();
@@ -166,17 +192,20 @@ export class RadioSession {
       if (this.destroyed) return;
 
       if (newState.status === AudioPlayerStatus.Playing) {
-        this.reconnectFailures = 0;
+        this.playingSince = Date.now();
         this.reconnectScheduled = false;
         this.clearReconnectTimer();
         return;
       }
 
       if (newState.status === AudioPlayerStatus.Idle) {
+        const playedMs = this.playingSince === 0 ? 0 : Date.now() - this.playingSince;
+        this.playingSince = 0;
         if (this.ignoreIdle) {
           this.ignoreIdle = false;
           return;
         }
+        if (playedMs >= STABLE_PLAY_MS) this.reconnectFailures = 0;
         this.scheduleReconnect();
       }
     });
@@ -241,8 +270,29 @@ export class RadioSession {
 
   private playResource(): void {
     if (this.destroyed) return;
-    const resource = createAudioResource(this.currentStation.streamUrl, { inlineVolume: true });
+    this.stopDecoder();
+
+    const decoder = openIcecastDecoder(this.currentStation.streamUrl);
+    this.decoder = decoder;
+    const stationName = this.currentStation.name;
+    void decoder.exited.then(({ code, signal }) => {
+      if (this.destroyed || this.decoder !== decoder) return;
+      const detail = decoder.stderr();
+      this.logger.warn(
+        `${stationName} ffmpeg exited (code=${code ?? 'null'}, signal=${signal ?? 'none'})${
+          detail ? `: ${detail}` : ''
+        }`,
+      );
+    });
+
+    const resource = createAudioResource(decoder.stdout, { inputType: StreamType.Raw });
     this.player.play(resource);
+  }
+
+  private stopDecoder(): void {
+    const current = this.decoder;
+    this.decoder = null;
+    current?.stop();
   }
 
   private scheduleReconnect(): void {
