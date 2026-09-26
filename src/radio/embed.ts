@@ -41,15 +41,9 @@ export function buildRadioPlayingDisplay(
     `-# ${station.slogan} · Icecast 128 kbps`,
   ];
 
-  const section = new SectionBuilder().addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(body.join('\n').slice(0, 4000)),
-  );
+  const text = new TextDisplayBuilder().setContent(body.join('\n').slice(0, 4000));
   const logoUrl = httpUrl(station.logoUrl);
-  if (logoUrl && logoUrl !== heroUrl) {
-    section.setThumbnailAccessory(
-      new ThumbnailBuilder().setURL(logoUrl).setDescription(station.name.slice(0, 100)),
-    );
-  }
+  const distinctLogo = logoUrl && logoUrl !== heroUrl ? logoUrl : undefined;
 
   const container = new ContainerBuilder().setAccentColor(station.color);
 
@@ -59,6 +53,20 @@ export function buildRadioPlayingDisplay(
         new MediaGalleryItemBuilder().setURL(heroUrl).setDescription(songTitle.slice(0, 100)),
       ),
     );
+  }
+
+  // A Section accessory is required. Rock Radio uses one image for hero and logo,
+  // so the text sits on its own instead of a section with no thumbnail.
+  if (distinctLogo) {
+    container.addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(text)
+        .setThumbnailAccessory(
+          new ThumbnailBuilder().setURL(distinctLogo).setDescription(station.name.slice(0, 100)),
+        ),
+    );
+  } else {
+    container.addTextDisplayComponents(text);
   }
 
   const row = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
@@ -76,7 +84,6 @@ export function buildRadioPlayingDisplay(
   );
 
   container
-    .addSectionComponents(section)
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
     .addActionRowComponents(row);
 
