@@ -41,9 +41,17 @@ export function buildRadioPlayingDisplay(
     `-# ${station.slogan} · Icecast 128 kbps`,
   ];
 
-  const text = new TextDisplayBuilder().setContent(body.join('\n').slice(0, 4000));
-  const logoUrl = httpUrl(station.logoUrl);
-  const distinctLogo = logoUrl && logoUrl !== heroUrl ? logoUrl : undefined;
+  const section = new SectionBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(body.join('\n').slice(0, 4000)),
+  );
+  // A section has to carry a thumbnail or a button. Use the logo even when it
+  // matches the hero, so Rock Radio keeps the same layout as the other stations.
+  const thumbUrl = httpUrl(station.logoUrl) ?? heroUrl;
+  if (thumbUrl) {
+    section.setThumbnailAccessory(
+      new ThumbnailBuilder().setURL(thumbUrl).setDescription(station.name.slice(0, 100)),
+    );
+  }
 
   const container = new ContainerBuilder().setAccentColor(station.color);
 
@@ -55,19 +63,7 @@ export function buildRadioPlayingDisplay(
     );
   }
 
-  // A Section accessory is required. Rock Radio uses one image for hero and logo,
-  // so the text sits on its own instead of a section with no thumbnail.
-  if (distinctLogo) {
-    container.addSectionComponents(
-      new SectionBuilder()
-        .addTextDisplayComponents(text)
-        .setThumbnailAccessory(
-          new ThumbnailBuilder().setURL(distinctLogo).setDescription(station.name.slice(0, 100)),
-        ),
-    );
-  } else {
-    container.addTextDisplayComponents(text);
-  }
+  container.addSectionComponents(section);
 
   const row = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
     new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Website').setURL(station.websiteUrl),
