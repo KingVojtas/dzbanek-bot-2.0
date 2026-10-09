@@ -2,11 +2,28 @@ import type { SteamDealItem } from '../../core/types';
 import { extractAppId, parseDiscountPercent } from './SteamPriceApi';
 import { isGoodReview, type SteamReviewInfo } from './SteamReviewApi';
 
-export function compareSteamDiscount(a: SteamDealItem, b: SteamDealItem): number {
-  const da = parseDiscountPercent(a.discount) ?? 0;
-  const db = parseDiscountPercent(b.discount) ?? 0;
-  if (db !== da) return db - da;
+export function steamDiscountPercent(item: SteamDealItem): number {
+  return parseDiscountPercent(item.discount) ?? 0;
+}
+
+/**
+ * Deepest discount first. `weight` breaks ties (review count). Equal weights
+ * fall back to the game name so the lineup stays stable.
+ */
+export function compareSteamDeals(
+  a: SteamDealItem,
+  b: SteamDealItem,
+  weight: (item: SteamDealItem) => number = () => 0,
+): number {
+  const delta = steamDiscountPercent(b) - steamDiscountPercent(a);
+  if (delta !== 0) return delta;
+  const byWeight = weight(b) - weight(a);
+  if (byWeight !== 0) return byWeight;
   return a.gameName.localeCompare(b.gameName);
+}
+
+export function compareSteamDiscount(a: SteamDealItem, b: SteamDealItem): number {
+  return compareSteamDeals(a, b);
 }
 
 /** Keep the first listing for each Steam app so the digest never repeats a game. */
@@ -33,7 +50,8 @@ export function selectSteamDigest(
   size: number,
 ): SteamDealItem[] {
   if (size <= 0) return [];
-  const sorted = [...items].sort(compareSteamDiscount);
+  const weight = (item: SteamDealItem): number => reviewMap.get(item.id)?.totalReviews ?? 0;
+  const sorted = [...items].sort((a, b) => compareSteamDeals(a, b, weight));
   const passing: SteamDealItem[] = [];
   const rest: SteamDealItem[] = [];
   for (const item of sorted) {

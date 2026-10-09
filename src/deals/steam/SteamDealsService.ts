@@ -14,13 +14,18 @@ import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
 import { resolveDealTargets, type DealTarget } from '../targets';
 import { SteamFeedReader } from './SteamFeedReader';
+import { SteamSpecialsReader } from './SteamSpecialsReader';
 import { extractAppId, fetchSteamPrice, formatSteamPrice } from './SteamPriceApi';
 import { fetchSteamReview, formatReview, type SteamReviewInfo } from './SteamReviewApi';
 import {
+  compareSteamDeals,
   selectSteamDigest,
   steamDigestFingerprint,
   uniqueSteamApps,
 } from './select-digest';
+
+/** Deepest discounts we ask Steam about before picking the 10-game card. */
+const STEAM_REVIEW_WINDOW = 40;
 
 function steamDigestScope(guildId: string): string {
   return `steam-digest:${guildId}`;
@@ -29,6 +34,7 @@ function steamDigestScope(guildId: string): string {
 /** Daily Steam deals digest. Always aims for STEAM_DIGEST_SIZE games per post. */
 export class SteamDealsService {
   private readonly reader = new SteamFeedReader();
+  private readonly specials = new SteamSpecialsReader();
   private pollInFlight: Promise<void> | null = null;
   private kitchen: KitchenBoard | null = null;
 
@@ -65,22 +71,49 @@ export class SteamDealsService {
       return;
     }
 
-    let items: SteamDealItem[];
+    let feedItems: SteamDealItem[] = [];
     try {
-      items = await this.reader.read();
+      feedItems = await this.reader.read();
     } catch (error) {
       this.logger.error('Steam: failed to fetch RSS feed:', error);
+    }
+
+    let specials: SteamDealItem[] = [];
+    let reviewCounts = new Map<string, number>();
+    try {
+      const list = await this.specials.read();
+      specials = list.items;
+      reviewCounts = list.reviewCounts;
+    } catch (error) {
+      this.logger.error('Steam: failed to fetch specials search:', error);
+    }
+
+    const pool = uniqueSteamApps(
+      [...feedItems, ...specials].filter((item) => Boolean(item.id) && Boolean(item.link)),
+    );
+    if (pool.length === 0) {
+      this.logger.info('Steam: no deals from the feed or specials — sending nothing.');
       return;
     }
 
-    const withIds = uniqueSteamApps(items.filter((item) => Boolean(item.id)));
-    if (withIds.length === 0) {
-      this.logger.info('Steam: feed empty — sending nothing.');
-      return;
+    const ranked = [...pool].sort((a, b) =>
+      compareSteamDeals(a, b, (item) => reviewCounts.get(extractAppId(item.link) ?? '') ?? 0),
+    );
+    const candidates = ranked.slice(0, STEAM_REVIEW_WINDOW);
+    const seen = new Set(candidates.map((item) => item.id));
+    for (const item of feedItems) {
+      const appId = extractAppId(item.link);
+      const kept = pool.find((entry) => extractAppId(entry.link) === appId) ?? item;
+      if (!kept.id || seen.has(kept.id)) continue;
+      candidates.push(kept);
+      seen.add(kept.id);
     }
+    this.logger.info(
+      `Steam: ${pool.length} discounted game(s) (${feedItems.length} from the feed, ${specials.length} from specials); reviewing ${candidates.length}.`,
+    );
 
-    const reviewMap = await this.fetchReviews(withIds);
-    const top = selectSteamDigest(withIds, reviewMap, STEAM_DIGEST_SIZE);
+    const reviewMap = await this.fetchReviews(candidates);
+    const top = selectSteamDigest(candidates, reviewMap, STEAM_DIGEST_SIZE);
     if (top.length === 0) {
       this.logger.info('Steam: nothing to put in the digest — sending nothing.');
       return;
@@ -88,7 +121,7 @@ export class SteamDealsService {
 
     if (top.length < STEAM_DIGEST_SIZE) {
       this.logger.warn(
-        `Steam: digest only has ${top.length}/${STEAM_DIGEST_SIZE} games (feed has ${withIds.length}).`,
+        `Steam: digest only has ${top.length}/${STEAM_DIGEST_SIZE} games (pool has ${pool.length}).`,
       );
     }
 
@@ -127,7 +160,9 @@ export class SteamDealsService {
     }
 
     if (await this.store.has(scope, fingerprint)) {
-      this.logger.info(`Steam: same ${top.length}-game digest already posted in ${target.guildName}.`);
+      this.logger.info(
+        `Steam: same ${top.length}-game digest already posted in ${target.guildName}.`,
+      );
       return false;
     }
 
@@ -162,9 +197,7 @@ export class SteamDealsService {
     }
   }
 
-  private async fetchReviews(
-    items: SteamDealItem[],
-  ): Promise<Map<string, SteamReviewInfo | null>> {
+  private async fetchReviews(items: SteamDealItem[]): Promise<Map<string, SteamReviewInfo | null>> {
     const entries = await mapPool(items, 6, async (item) => {
       const appId = extractAppId(item.link);
       const review = appId ? await fetchSteamReview(appId) : null;
@@ -198,7 +231,8 @@ export class SteamDealsService {
             looksLikeSteamDigest(blob) ||
             msg.embeds.some(
               (e) =>
-                /steam daily deals/i.test(e.title ?? '') || /steam deals/i.test(e.footer?.text ?? ''),
+                /steam daily deals/i.test(e.title ?? '') ||
+                /steam deals/i.test(e.footer?.text ?? ''),
             )
           );
         }) ?? null
@@ -217,7 +251,8 @@ export class SteamDealsService {
     }
     const newTitles = top.map((item) => item.gameName);
     return (
-      lastTitles.length === newTitles.length && lastTitles.every((title, i) => title === newTitles[i])
+      lastTitles.length === newTitles.length &&
+      lastTitles.every((title, i) => title === newTitles[i])
     );
   }
 }

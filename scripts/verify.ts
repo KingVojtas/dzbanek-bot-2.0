@@ -8,6 +8,7 @@ import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { DISCORD_TOKEN, config } from '../src/config';
 import { STEAM_DIGEST_SIZE } from '../src/core/display';
 import { SteamFeedReader } from '../src/deals/steam/SteamFeedReader';
+import { SteamSpecialsReader } from '../src/deals/steam/SteamSpecialsReader';
 import { extractAppId, fetchSteamPrice } from '../src/deals/steam/SteamPriceApi';
 import { fetchSteamReview, isGoodReview } from '../src/deals/steam/SteamReviewApi';
 import { selectSteamDigest, uniqueSteamApps } from '../src/deals/steam/select-digest';
@@ -51,7 +52,10 @@ async function checkYoutube(): Promise<void> {
     }
     ok('youtube-resolve-url', track.title);
   } catch (error) {
-    fail('youtube-resolve-url', error instanceof Error ? error.message.slice(0, 400) : String(error));
+    fail(
+      'youtube-resolve-url',
+      error instanceof Error ? error.message.slice(0, 400) : String(error),
+    );
   }
 
   try {
@@ -128,15 +132,21 @@ async function checkSpotify(): Promise<void> {
 async function checkSteam(): Promise<void> {
   try {
     const items = await new SteamFeedReader().read();
-    if (items.length === 0) {
-      fail('steam-rss', 'feed returned 0 items');
-      return;
-    }
-    ok('steam-rss', `${items.length} deal(s), e.g. ${items[0]?.gameName}`);
-    if (items.length < STEAM_DIGEST_SIZE) {
-      fail('steam-digest-size', `feed has ${items.length} items, need ${STEAM_DIGEST_SIZE}`);
+    if (items.length === 0) fail('steam-rss', 'feed returned 0 items');
+    else ok('steam-rss', `${items.length} deal(s), e.g. ${items[0]?.gameName}`);
+    const specials = await new SteamSpecialsReader().read();
+    if (specials.items.length === 0) {
+      fail('steam-specials', 'specials search returned 0 discounted games');
     } else {
-      const unique = uniqueSteamApps(items);
+      ok(
+        'steam-specials',
+        `${specials.items.length} discounted game(s), e.g. ${specials.items[0]?.gameName}`,
+      );
+    }
+    const unique = uniqueSteamApps([...items, ...specials.items]);
+    if (unique.length < STEAM_DIGEST_SIZE) {
+      fail('steam-digest-size', `pool has ${unique.length} games, need ${STEAM_DIGEST_SIZE}`);
+    } else {
       const passing: SteamReviewInfo = {
         score: 8,
         scoreDesc: 'Very Positive',
@@ -155,7 +165,7 @@ async function checkSteam(): Promise<void> {
       }
     }
 
-    const withApp = items.find((item) => extractAppId(item.link));
+    const withApp = unique.find((item) => extractAppId(item.link));
     const appId = withApp ? extractAppId(withApp.link) : null;
     if (!appId) {
       fail('steam-enrich', 'no Steam app ID in feed');
@@ -212,7 +222,10 @@ async function checkDiscord(): Promise<void> {
       `${tag} in ${guilds} guild(s); clientId config=${config.discord.clientId} userId=${client.user?.id}`,
     );
     if (client.user?.id !== config.discord.clientId) {
-      fail('discord-clientId', `config clientId ${config.discord.clientId} != logged-in ${client.user?.id}`);
+      fail(
+        'discord-clientId',
+        `config clientId ${config.discord.clientId} != logged-in ${client.user?.id}`,
+      );
     }
   } catch (error) {
     fail('discord-login', error instanceof Error ? error.message : String(error));

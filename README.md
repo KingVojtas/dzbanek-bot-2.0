@@ -67,9 +67,9 @@ On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for t
 
 ### 💸 Steam daily deals
 
-Every day at **03:33 Europe/Prague** Dzbanek reads Steam discounts from [game-deals.app](https://game-deals.app) and posts a fresh **10-game** digest in every server that has a Steam channel.
+Every day at **03:33 Europe/Prague** Dzbanek reads Steam discounts from [game-deals.app](https://game-deals.app) and the current Steam specials list, then posts a fresh **10-game** digest in every server that has a Steam channel.
 
-Very Positive games (score ≥ 8, or ≥ 80% positive with at least 10 reviews) sit at the top, deepest discount first. The rest of the feed fills any empty seats so the card stays a full plate. Prices use the German storefront (`cc=de` → EUR).
+Very Positive games (score ≥ 8, or ≥ 80% positive with at least 10 reviews) sit at the top, deepest discount first. When the curated feed is shorter than 10, current Steam specials fill the empty seats — deepest discount, then the most reviews. Prices use the German storefront (`cc=de` → EUR).
 
 The same 10-game lineup is remembered per server. A repeat stays in the pot. An empty feed stays quiet too.
 
