@@ -13,6 +13,7 @@ import type { KitchenBoard } from '../../kitchen/KitchenBoard';
 import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
 import { resolveDealTargets, type DealTarget } from '../targets';
+import { attachSteamArtwork } from './SteamArtwork';
 import { SteamFeedReader } from './SteamFeedReader';
 import { SteamSpecialsReader } from './SteamSpecialsReader';
 import { extractAppId, fetchSteamPrice, formatSteamPrice } from './SteamPriceApi';
@@ -126,7 +127,11 @@ export class SteamDealsService {
     }
 
     const fingerprint = steamDigestFingerprint(top);
-    const prices = await this.fetchPrices(top);
+    const [prices] = await Promise.all([this.fetchPrices(top), attachSteamArtwork(top)]);
+    const missingArt = top.filter((item) => !item.image).length;
+    if (missingArt > 0) {
+      this.logger.warn(`Steam: no artwork for ${missingArt} of ${top.length} games.`);
+    }
     const reviews = new Map<string, string>();
     for (const item of top) {
       const review = reviewMap.get(item.id);
@@ -244,7 +249,7 @@ export class SteamDealsService {
   private isDuplicateDigest(lastMessage: Message, top: SteamDealItem[]): boolean {
     if (top.length === 0) return false;
     const blob = collectMessageTextContent(lastMessage);
-    if (!/live prices in EUR/i.test(blob)) return false;
+    if (!/EUR on the German store/i.test(blob)) return false;
     let lastTitles = extractHeadingTitles(blob);
     if (lastTitles.length === 0 && lastMessage.embeds[0]) {
       lastTitles = lastMessage.embeds[0].fields.map((f) => f.name.replace(/^\d+\.\s*/, '').trim());

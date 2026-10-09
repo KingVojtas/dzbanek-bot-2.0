@@ -26,15 +26,28 @@ export function compareSteamDiscount(a: SteamDealItem, b: SteamDealItem): number
   return compareSteamDeals(a, b);
 }
 
+/** The search-row capsule. A guessed library filename is not one of these. */
+function isLiveStoreImage(url: string | undefined): boolean {
+  return Boolean(url && /store_item_assets|\/capsule_\d+x\d+/i.test(url));
+}
+
 /** Keep the first listing for each Steam app so the digest never repeats a game. */
 export function uniqueSteamApps(items: SteamDealItem[]): SteamDealItem[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, SteamDealItem>();
   const out: SteamDealItem[] = [];
   for (const item of items) {
     const key = extractAppId(item.link) ?? item.id;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push(item);
+    if (!key) continue;
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, item);
+      out.push(item);
+      continue;
+    }
+    // The RSS row only has a guessed library URL. Keep the search capsule.
+    if (isLiveStoreImage(item.image) && !isLiveStoreImage(existing.image)) {
+      existing.image = item.image;
+    }
   }
   return out;
 }
@@ -70,7 +83,7 @@ export function selectSteamDigest(
 }
 
 /** Bump when the card layout changes so today's post is replaced once. */
-const STEAM_DIGEST_LAYOUT = 'shelf';
+const STEAM_DIGEST_LAYOUT = 'art';
 
 export function steamDigestFingerprint(items: SteamDealItem[]): string {
   return `${STEAM_DIGEST_LAYOUT}:${items.map((item) => item.id).join('|')}`;

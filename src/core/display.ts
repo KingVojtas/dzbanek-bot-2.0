@@ -234,14 +234,9 @@ function thumbnailFor(url: string | undefined, alt: string): ThumbnailBuilder | 
   return new ThumbnailBuilder().setURL(url).setDescription(alt.slice(0, 100));
 }
 
-function steamAppId(item: SteamDealItem): string | undefined {
-  return item.image?.match(/\/apps\/(\d+)\//)?.[1] ?? item.link?.match(/\/app\/(\d+)/)?.[1];
-}
-
-function steamArt(item: SteamDealItem, file: string): string | undefined {
-  const appId = steamAppId(item);
-  if (!appId) return undefined;
-  return `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/${file}`;
+function httpImage(url: string | undefined): string | undefined {
+  if (!url || !/^https?:\/\//i.test(url)) return undefined;
+  return url;
 }
 
 function discountLabel(item: SteamDealItem, apiPrice: string | null): string {
@@ -255,6 +250,37 @@ function discountLabel(item: SteamDealItem, apiPrice: string | null): string {
 /** Drop the trailing percent. The row already leads with a discount badge. */
 function tidyPrice(price: string): string {
   return price.replace(/\s*\(-?\d+%\)\s*$/, '').trim();
+}
+
+function priceParts(price: string): { pay: string; was: string } {
+  return {
+    pay: price.match(/\*\*([^*]+)\*\*/)?.[1]?.trim() ?? '',
+    was: price.match(/~~([^~]+)~~/)?.[1]?.trim() ?? '',
+  };
+}
+
+/** What you pay, then the old price. The featured row puts the percent on its own line. */
+function shelfMoney(discount: string, price: string, featured: boolean): string[] {
+  const { pay, was } = priceParts(price);
+  if (!pay && !was) {
+    if (featured) return [discount ? `## ${discount}` : '', price].filter(Boolean);
+    const plain = [discount, price].filter(Boolean).join('  ·  ');
+    return plain ? [plain] : [];
+  }
+  const cost = [pay ? `**${pay}**` : '', was ? `~~${was}~~` : ''].filter(Boolean).join('  ·  ');
+  if (featured) {
+    return [discount ? `## ${discount}` : '', cost].filter(Boolean);
+  }
+  const line = [discount ? `\`${discount}\`` : '', cost].filter(Boolean).join('  ·  ');
+  return line ? [line] : [];
+}
+
+function shelfDate(): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'Europe/Prague',
+  }).format(new Date());
 }
 
 function prettyExpiry(value: string): string {
@@ -282,15 +308,10 @@ function buildSteamDealSection(
   const price = tidyPrice(apiPrice ?? fallbackPriceLine(item));
   const lead = index === 0;
 
-  const lines = [lead ? '-# 1  ·  the deepest cut' : `-# ${index + 1}`, `### ${name}`];
-
-  if (lead && discount) {
-    lines.push(`## ${discount}`);
-    if (price) lines.push(price);
-  } else {
-    const money = [discount ? `**${discount}**` : '', price].filter(Boolean).join('  ·  ');
-    if (money) lines.push(money);
-  }
+  const lines = [
+    lead ? `### ${name}` : `### ${index + 1} · ${name}`,
+    ...shelfMoney(discount, price, lead),
+  ];
 
   const meta: string[] = [];
   if (reviewStr) meta.push(reviewStr.slice(0, 80));
@@ -304,7 +325,9 @@ function buildSteamDealSection(
     new TextDisplayBuilder().setContent(lines.join('\n').slice(0, 4000)),
   );
 
-  const thumb = thumbnailFor(item.image || steamArt(item, 'library_600x900.jpg'), title);
+  const thumbUrl = httpImage(item.image);
+  const banner = lead ? (httpImage(item.heroImage) ?? thumbUrl) : undefined;
+  const thumb = banner && thumbUrl === banner ? null : thumbnailFor(thumbUrl, title);
   if (thumb) section.setThumbnailAccessory(thumb);
   else if (item.link) {
     section.setButtonAccessory(
@@ -315,7 +338,8 @@ function buildSteamDealSection(
 }
 
 /**
- * Steam digest: wide banner of the top cut, then a ranked shelf of ten.
+ * Steam digest: masthead, a wide banner of the top cut, that deal, then the
+ * other nine. Every image URL has already been checked.
  */
 export function buildSteamDealsDisplay(
   items: SteamDealItem[],
@@ -325,7 +349,12 @@ export function buildSteamDealsDisplay(
   const top = items.slice(0, STEAM_DIGEST_SIZE);
   const best = topDiscountPct(top);
   const heroItem = top[0];
-  const hero = heroItem ? steamArt(heroItem, 'header.jpg') : undefined;
+  const hero = heroItem ? (httpImage(heroItem.heroImage) ?? httpImage(heroItem.image)) : undefined;
+  const heroPrice = heroItem
+    ? tidyPrice(prices.get(heroItem.id) ?? fallbackPriceLine(heroItem))
+    : '';
+  const heroPay = priceParts(heroPrice).pay;
+  const heroDiscount = heroItem ? discountLabel(heroItem, prices.get(heroItem.id) ?? null) : '';
 
   const intro = [
     `## [Steam Daily Deals](${STEAM_SPECIALS_URL})`,
@@ -334,31 +363,32 @@ export function buildSteamDealsDisplay(
       : best > 0
         ? `**Up to ${best}% off** · **${top.length}** on the shelf`
         : `**${top.length}** on the shelf`,
-    '-# Deepest cuts first · live prices in EUR',
+    `-# ${shelfDate()} · Deepest cuts first · EUR on the German store`,
   ].join('\n');
 
-  const container = new ContainerBuilder().setAccentColor(STEAM_COLOR);
+  const container = new ContainerBuilder()
+    .setAccentColor(STEAM_COLOR)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(intro.slice(0, 4000)));
 
   if (hero && heroItem) {
-    const badge = discountLabel(heroItem, prices.get(heroItem.id) ?? null);
+    const caption = [heroItem.gameName, heroDiscount, heroPay].filter(Boolean).join(' · ');
     container.addMediaGalleryComponents(
       new MediaGalleryBuilder().addItems(
-        new MediaGalleryItemBuilder()
-          .setURL(hero)
-          .setDescription(`${heroItem.gameName} · ${badge || 'Steam deal'}`.slice(0, 100)),
+        new MediaGalleryItemBuilder().setURL(hero).setDescription(caption.slice(0, 100)),
       ),
     );
-  }
-
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(intro.slice(0, 4000)));
-
-  if (top.length > 0) {
+  } else if (top.length > 0) {
     container.addSeparatorComponents(
       new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large),
     );
   }
 
   top.forEach((item, index) => {
+    if (index === 1) {
+      container.addSeparatorComponents(
+        new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small),
+      );
+    }
     container.addSectionComponents(
       buildSteamDealSection(item, index, prices.get(item.id) ?? null, reviews.get(item.id)),
     );
@@ -548,8 +578,10 @@ export function collectMessageTextContent(message: {
 
 export function extractHeadingTitles(blob: string): string[] {
   const titles: string[] = [];
-  for (const m of blob.matchAll(/###\s+\[([^\]]+)\]|###\s+([^\n]+)/g)) {
-    const t = (m[1] ?? m[2] ?? '').trim();
+  for (const m of blob.matchAll(
+    /###\s+(?:\d+\s*·\s*)?\[([^\]]+)\]|###\s+(?:\d+\s*·\s*)?([^\n]+)/g,
+  )) {
+    const t = (m[1] ?? m[2] ?? '').replace(/^\d+\s*·\s*/, '').trim();
     if (t && !/^coming next/i.test(t) && t !== 'This week') titles.push(t);
   }
   return titles;

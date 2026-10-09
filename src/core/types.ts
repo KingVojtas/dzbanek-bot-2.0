@@ -97,6 +97,9 @@ export interface SteamDealItem {
   dealScore?: string;
   genres?: string;
   description?: string;
+  /** Thumbnail that Discord can fetch. A portrait capsule when Steam has one. */
   image?: string;
+  /** Wide banner for the top deal. */
+  heroImage?: string;
   isoDate?: string;
 }

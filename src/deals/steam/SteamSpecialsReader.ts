@@ -119,11 +119,12 @@ function mergeSpecials(left: CollectedSpecials, right: CollectedSpecials): Colle
 /** Pull discounted games out of a Steam search `results_html` blob. */
 export function parseSteamSearchHtml(html: string): CollectedSpecials {
   const rowRe =
-    /<a href="https:\/\/store\.steampowered\.com\/app\/(\d+)\/[^"]*"[\s\S]*?<span class="title">([^<]+)<\/span>([\s\S]*?)(?=<a href="https:\/\/store\.steampowered\.com\/|$)/g;
+    /<a href="https:\/\/store\.steampowered\.com\/app\/(\d+)\/[^"]*"([\s\S]*?)<span class="title">([^<]+)<\/span>([\s\S]*?)(?=<a href="https:\/\/store\.steampowered\.com\/|$)/g;
   const batch = emptySpecials();
   for (const match of html.matchAll(rowRe)) {
     const appId = match[1];
-    const block = match[3] ?? '';
+    const beforeTitle = match[2] ?? '';
+    const block = match[4] ?? '';
     if (!appId) continue;
     const discount = block.match(/data-discount="(\d+)"/);
     const percent = discount ? Number(discount[1]) : 0;
@@ -131,7 +132,8 @@ export function parseSteamSearchHtml(html: string): CollectedSpecials {
 
     const original = block.match(/discount_original_price"[^>]*>\s*([^<]+)/);
     const finalPrice = block.match(/discount_final_price"[^>]*>\s*([^<]+)/);
-    const name = decodeHtml(match[2] ?? '');
+    const name = decodeHtml(match[3] ?? '');
+    const capsule = decodeHtml(beforeTitle.match(/<img[^>]*\ssrc="([^"]+)"/i)?.[1] ?? '');
     batch.items.push({
       id: `steam_${appId}`,
       title: name,
@@ -140,7 +142,7 @@ export function parseSteamSearchHtml(html: string): CollectedSpecials {
       salePrice: finalPrice?.[1]?.trim(),
       originalPrice: original?.[1]?.trim(),
       discount: `-${percent}%`,
-      image: `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/library_600x900.jpg`,
+      image: /^https?:\/\//i.test(capsule) ? capsule : undefined,
     });
 
     const tooltip = decodeHtml(block.match(/data-tooltip-html="([^"]*)"/)?.[1] ?? '');
