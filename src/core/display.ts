@@ -18,7 +18,8 @@ import type { EpicFreeGame, LoopMode, SteamDealItem, Track } from './types';
 
 const STEAM_COLOR = 0x66c0f4;
 const STEAM_SPECIALS_URL = 'https://store.steampowered.com/specials';
-const EPIC_COLOR = 0x2f2d2e;
+const EPIC_COLOR = 0x26bbff;
+const EPIC_LATER_COLOR = 0x8b93a7;
 const EPIC_FREE_URL = 'https://store.epicgames.com/en-US/free-games';
 
 /** Discord V2 nested-component budget. */
@@ -211,15 +212,13 @@ function fallbackPriceLine(item: SteamDealItem): string {
 }
 
 function epicDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString('en-GB', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    });
-  } catch {
-    return iso;
-  }
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
+  });
 }
 
 function fitRows(desired: number, perRow: number, overhead: number): number {
@@ -259,23 +258,44 @@ function priceParts(price: string): { pay: string; was: string } {
   };
 }
 
-/** What you pay, then the old price. The featured row puts the percent on its own line. */
-function shelfMoney(discount: string, price: string, featured: boolean): string[] {
-  const { pay, was } = priceParts(price);
-  if (!pay && !was) {
-    if (featured) return [discount ? `## ${discount}` : '', price].filter(Boolean);
-    const plain = [discount, price].filter(Boolean).join('  ·  ');
-    return plain ? [plain] : [];
-  }
-  const cost = [pay ? `**${pay}**` : '', was ? `~~${was}~~` : ''].filter(Boolean).join('  ·  ');
-  if (featured) {
-    return [discount ? `## ${discount}` : '', cost].filter(Boolean);
-  }
-  const line = [discount ? `\`${discount}\`` : '', cost].filter(Boolean).join('  ·  ');
-  return line ? [line] : [];
+const ANSI = '\u001b';
+
+/** Gray struck-through price inside an ANSI chip. Markdown strike does not render there. */
+function strikeAnsi(value: string): string {
+  return [...value].map((ch) => (ch === ' ' ? ch : `${ch}\u0336`)).join('');
 }
 
-function dealBlurb(value: string | undefined): string {
+/**
+ * Steam discount block: lime percent on green, muted original, bright sale price.
+ * The featured row pads the percent so it still leads.
+ */
+function steamPriceChip(discount: string, pay: string, was: string, featured: boolean): string {
+  const pad = featured ? '  ' : ' ';
+  const bits = [`${ANSI}[1;92;42m${pad}${discount}${pad}${ANSI}[0m`];
+  if (was) bits.push(`${ANSI}[0;90m${strikeAnsi(was)}${ANSI}[0m`);
+  if (pay) bits.push(`${ANSI}[1;97m${pay}${ANSI}[0m`);
+  return `\`\`\`ansi\n${bits.join(' ')}\n\`\`\``;
+}
+
+/** Masthead sale banner. Same green as the per-game percent. */
+function steamGreenBadge(label: string): string {
+  return `\`\`\`ansi\n${ANSI}[1;92;42m  ${label}  ${ANSI}[0m\n\`\`\``;
+}
+
+/** Green discount chip when the game is on sale. Plain markdown prices otherwise. */
+function shelfMoney(discount: string, price: string, featured: boolean): string[] {
+  const { pay, was } = priceParts(price);
+  if (discount) {
+    const chip = steamPriceChip(discount, pay, was, featured);
+    if (!pay && !was && price) return [chip, price];
+    return [chip];
+  }
+  if (!pay && !was) return price ? [price] : [];
+  const cost = [pay ? `**${pay}**` : '', was ? `~~${was}~~` : ''].filter(Boolean).join('  ·  ');
+  return cost ? [cost] : [];
+}
+
+function dealBlurb(value: string | undefined, limit = 150): string {
   if (!value) return '';
   const text = value
     .replace(/<br\s*\/?>/gi, ' ')
@@ -283,8 +303,8 @@ function dealBlurb(value: string | undefined): string {
     .replace(/[*_`[\]]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-  if (text.length <= 150) return text;
-  const cut = text.slice(0, 149);
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, limit - 1);
   const word = cut.lastIndexOf(' ');
   return `${(word > 80 ? cut.slice(0, word) : cut).trimEnd()}…`;
 }
@@ -379,10 +399,14 @@ export function buildSteamDealsDisplay(
     top.length === 0
       ? 'The shelf is empty right now.'
       : best > 0
-        ? `**Up to ${best}% off** · **${top.length}** on the shelf`
-        : `**${top.length}** on the shelf`,
-    `-# ${shelfDate()} · Big releases first · EUR on the German store`,
-  ].join('\n');
+        ? steamGreenBadge(`Up to ${best}% off`)
+        : '',
+    top.length === 0
+      ? `-# ${shelfDate()} · Big releases first · EUR on the German store`
+      : `-# ${shelfDate()} · ${top.length} on the shelf · Big releases first · EUR on the German store`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   const container = new ContainerBuilder()
     .setAccentColor(STEAM_COLOR)
@@ -427,40 +451,124 @@ export function buildSteamDealsDisplay(
   return { components: [container], flags: MessageFlags.IsComponentsV2 };
 }
 
-function buildEpicGameSection(game: EpicFreeGame): SectionBuilder {
-  const title = game.title.slice(0, 120);
+/** Skip a missing or zero store price. Epic still sends "$0.00" for some rows. */
+function epicWorth(price: string | undefined): string {
+  const value = price?.replace(/\s+/g, ' ').trim() ?? '';
+  if (!value || /^[^0-9]*0+([.,]0+)?$/.test(value)) return '';
+  return value;
+}
+
+/** Live countdown. Falls back to a plain date when the store time is unreadable. */
+function discordWhen(iso: string | undefined, style: 'R' | 'D'): string {
+  if (!iso) return '';
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return epicDate(iso);
+  return `<t:${Math.floor(ms / 1000)}:${style}>`;
+}
+
+/** White FREE on Epic blue, then the struck store price in gray. */
+function epicFreeChip(was: string, featured: boolean): string {
+  const pad = featured ? '  ' : ' ';
+  const bits = [`${ANSI}[1;97;44m${pad}FREE${pad}${ANSI}[0m`];
+  if (was) bits.push(`${ANSI}[0;90m${strikeAnsi(was)}${ANSI}[0m`);
+  return `\`\`\`ansi\n${bits.join(' ')}\n\`\`\``;
+}
+
+/** Masthead and upcoming status. Blue for what you can claim, gray for later. */
+function epicBadge(label: string, tone: 'blue' | 'muted'): string {
+  const color = tone === 'blue' ? '1;97;44' : '1;37;100';
+  return `\`\`\`ansi\n${ANSI}[${color}m  ${label}  ${ANSI}[0m\n\`\`\``;
+}
+
+function epicKicker(current: number, upcoming: number): string {
+  const bits = ['Yours to keep once claimed'];
+  if (current > 0) bits.push(`${current} free now`);
+  if (upcoming > 0) bits.push(`${upcoming} coming next`);
+  if (current === 0 && upcoming === 0) bits.push('check the store');
+  return `-# ${bits.join(' · ')}`;
+}
+
+function epicGallery(games: EpicFreeGame[], limit: number): MediaGalleryBuilder | null {
+  const gallery = new MediaGalleryBuilder();
+  const seen = new Set<string>();
+  for (const game of games) {
+    const url = httpImage(game.heroImage) ?? httpImage(game.image);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    const worth = epicWorth(game.originalPrice);
+    const tag = game.isUpcoming ? 'Coming soon' : 'FREE';
+    gallery.addItems(
+      new MediaGalleryItemBuilder()
+        .setURL(url)
+        .setDescription([game.title, tag, worth].filter(Boolean).join(' · ').slice(0, 100)),
+    );
+    if (seen.size >= limit) break;
+  }
+  return seen.size > 0 ? gallery : null;
+}
+
+function claimLabel(title: string): string {
+  const label = `Claim ${title.replace(/\s+/g, ' ').trim()}`;
+  return label.length <= 80 ? label : `${label.slice(0, 79).trimEnd()}…`;
+}
+
+function epicActionRow(
+  claim: EpicFreeGame | undefined,
+): ActionRowBuilder<MessageActionRowComponentBuilder> {
+  const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
+  if (claim?.storeUrl && claim.storeUrl !== EPIC_FREE_URL) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setStyle(ButtonStyle.Link)
+        .setLabel(claimLabel(claim.title))
+        .setURL(claim.storeUrl),
+    );
+  }
+  row.addComponents(
+    new ButtonBuilder()
+      .setStyle(ButtonStyle.Link)
+      .setLabel('Browse free games')
+      .setEmoji('🎁')
+      .setURL(EPIC_FREE_URL),
+  );
+  return row;
+}
+
+function buildEpicGameSection(game: EpicFreeGame, lead: boolean): SectionBuilder {
+  const title = game.title.replace(/\s+/g, ' ').trim().slice(0, 120);
   const lines: string[] = [game.storeUrl ? `### [${title}](${game.storeUrl})` : `### ${title}`];
+  const worth = epicWorth(game.originalPrice);
 
   if (game.isUpcoming) {
-    const worth = game.originalPrice ? `Worth **${game.originalPrice}**` : 'Free soon';
-    lines.push(`**Coming soon**  ·  ${worth}`);
-    if (game.seller) lines.push(game.seller.slice(0, 80));
-
-    const extras: string[] = [];
-    if (game.upcomingStartDate) extras.push(`From **${epicDate(game.upcomingStartDate)}**`);
-    if (game.endDate) extras.push(`Until **${epicDate(game.endDate)}**`);
-    if (game.storeUrl) extras.push(`[Store →](${game.storeUrl})`);
-    if (extras.length) lines.push(extras.join(' · '));
+    lines.push(epicBadge('SOON', 'muted'));
+    const meta: string[] = [];
+    if (worth) meta.push(`Worth **${worth}**`);
+    const freeAt = discordWhen(game.upcomingStartDate, 'R');
+    const through = discordWhen(game.endDate, 'D');
+    if (freeAt) meta.push(`free ${freeAt}`);
+    if (through) meta.push(`through ${through}`);
+    if (meta.length) lines.push(meta.join('  ·  '));
   } else {
-    const priceLine = game.originalPrice ? `~~${game.originalPrice}~~ → **FREE**` : '**FREE**';
-    lines.push(`**100% OFF**  ·  ${priceLine}`);
-    if (game.seller) lines.push(game.seller.slice(0, 80));
-
-    const extras: string[] = [];
-    if (game.endDate) extras.push(`Until **${epicDate(game.endDate)}**`);
-    if (game.storeUrl) extras.push(`[Claim →](${game.storeUrl})`);
-    if (extras.length) lines.push(extras.join(' · '));
+    lines.push(epicFreeChip(worth, lead));
+    const endRel = discordWhen(game.endDate, 'R');
+    const endDate = lead ? discordWhen(game.endDate, 'D') : '';
+    const when = [endRel ? `Ends ${endRel}` : '', endDate].filter(Boolean).join('  ·  ');
+    if (when) lines.push(when);
   }
 
-  if (game.description) {
-    const short = game.description.replace(/\s+/g, ' ').trim().slice(0, 110);
-    if (short) lines.push(`-# ${short}${game.description.length > 110 ? '…' : ''}`);
+  const seller = game.seller?.replace(/\s+/g, ' ').trim().slice(0, 80) ?? '';
+  const blurb = dealBlurb(game.description, lead ? 240 : 120);
+  if (lead) {
+    if (seller) lines.push(seller);
+    if (blurb) lines.push(blurb);
+  } else {
+    const quiet = [seller, blurb].filter(Boolean).join(' · ');
+    if (quiet) lines.push(`-# ${quiet.slice(0, 200)}`);
   }
 
   const section = new SectionBuilder().addTextDisplayComponents(
     new TextDisplayBuilder().setContent(lines.join('\n').slice(0, 4000)),
   );
-
   const thumb = thumbnailFor(game.image, title);
   if (thumb) section.setThumbnailAccessory(thumb);
   return section;
@@ -471,9 +579,12 @@ function selectEpicLineup(games: EpicFreeGame[]): EpicFreeGame[] {
   const upcomingAll = games.filter((g) => g.isUpcoming);
   let current = freeAll.slice(0, Math.min(freeAll.length, EPIC_DIGEST_MAX));
   let upcoming = upcomingAll.slice(0, Math.max(0, EPIC_DIGEST_MAX - current.length));
-  const overhead = 2 + (upcoming.length > 0 ? 2 : 0) + (current.length === 0 ? 2 : 0);
+  // Free card: container, intro, two gallery items, divider, button row, two buttons.
+  // Later card: container, header, one gallery item. Upcoming-only uses one larger card.
+  const overhead =
+    (current.length > 0 ? 9 : 0) + (upcoming.length > 0 ? (current.length > 0 ? 4 : 8) : 0);
   const total = current.length + upcoming.length;
-  const fit = fitRows(total, 4, overhead);
+  const fit = fitRows(total, 3, overhead);
   if (fit < total) {
     const drop = total - fit;
     if (upcoming.length >= drop) upcoming = upcoming.slice(0, upcoming.length - drop);
@@ -486,75 +597,93 @@ function selectEpicLineup(games: EpicFreeGame[]): EpicFreeGame[] {
   return [...current, ...upcoming];
 }
 
+function epicIntro(current: number, upcoming: number, badge: string): string {
+  return [`## [Epic Free Games](${EPIC_FREE_URL})`, badge, epicKicker(current, upcoming)]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function addEpicFooter(container: ContainerBuilder, claim: EpicFreeGame | undefined): void {
+  container
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addActionRowComponents(epicActionRow(claim));
+}
+
 /**
- * Epic digest: matches the “2 Free Now / Coming next” card layout with cover art.
+ * Epic digest: a blue Free Now card, then a quieter Coming next card.
+ * Each offer carries a live countdown and the store's FREE chip.
  */
 export function buildEpicFreeGamesDisplay(games: EpicFreeGame[]): V2Display {
   const lineup = selectEpicLineup(games);
   const current = lineup.filter((g) => !g.isUpcoming);
   const upcoming = lineup.filter((g) => g.isUpcoming);
-
-  const heading =
-    current.length > 0
-      ? `## [Epic Free Games — ${current.length} Free Now](${EPIC_FREE_URL})`
-      : `## [Epic Free Games](${EPIC_FREE_URL})`;
-
-  const countBits: string[] = [];
-  if (current.length > 0) countBits.push(`**${current.length}** free now`);
-  if (upcoming.length > 0) countBits.push(`**${upcoming.length}** coming next`);
-  const subtitle =
-    countBits.length > 0
-      ? `${countBits.join(' · ')} · claim on the Epic Games Store`
-      : 'No free games listed right now — check back soon.';
-
-  const intro = [heading, subtitle, '-# Free to keep when claimed during the promo window.'].join(
-    '\n',
-  );
-
-  const container = new ContainerBuilder()
-    .setAccentColor(EPIC_COLOR)
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(intro.slice(0, 4000)));
-
-  const hero = (current[0] ?? upcoming[0])?.heroImage || (current[0] ?? upcoming[0])?.image;
-  if (hero) {
-    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-    container.addMediaGalleryComponents(
-      new MediaGalleryBuilder().addItems(
-        new MediaGalleryItemBuilder()
-          .setURL(hero)
-          .setDescription((current[0] ?? upcoming[0])!.title.slice(0, 100)),
-      ),
-    );
-  }
+  const components: ContainerBuilder[] = [];
 
   if (current.length > 0) {
-    for (const game of current) {
-      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-      container.addSectionComponents(buildEpicGameSection(game));
-    }
-  } else {
-    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        '### This week\n🕐 Nothing free right now — see upcoming below or check the store.',
-      ),
+    const free = new ContainerBuilder()
+      .setAccentColor(EPIC_COLOR)
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          epicIntro(current.length, upcoming.length, epicBadge('FREE NOW', 'blue')).slice(0, 4000),
+        ),
+      );
+    const gallery = epicGallery(current, 2);
+    if (gallery) free.addMediaGalleryComponents(gallery);
+    current.forEach((game, index) =>
+      free.addSectionComponents(buildEpicGameSection(game, index === 0)),
     );
+    addEpicFooter(free, current[0]);
+    components.push(free);
   }
 
-  if (upcoming.length > 0) {
-    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-    container.addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        `-# 🔜 **Coming next** · ${upcoming.length} title${upcoming.length === 1 ? '' : 's'}`,
-      ),
-    );
-    for (const game of upcoming) {
-      container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-      container.addSectionComponents(buildEpicGameSection(game));
-    }
+  if (upcoming.length > 0 && current.length > 0) {
+    const later = new ContainerBuilder()
+      .setAccentColor(EPIC_LATER_COLOR)
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          ['## Coming next', `-# ${upcoming.length} title${upcoming.length === 1 ? '' : 's'}`].join(
+            '\n',
+          ),
+        ),
+      );
+    const gallery = epicGallery(upcoming, 1);
+    if (gallery) later.addMediaGalleryComponents(gallery);
+    for (const game of upcoming) later.addSectionComponents(buildEpicGameSection(game, false));
+    components.push(later);
+  } else if (upcoming.length > 0) {
+    const later = new ContainerBuilder()
+      .setAccentColor(EPIC_COLOR)
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          [
+            epicIntro(0, upcoming.length, epicBadge('COMING SOON', 'muted')),
+            'Nothing free right now.',
+          ].join('\n'),
+        ),
+      );
+    const gallery = epicGallery(upcoming, 1);
+    if (gallery) later.addMediaGalleryComponents(gallery);
+    for (const game of upcoming) later.addSectionComponents(buildEpicGameSection(game, false));
+    addEpicFooter(later, undefined);
+    components.push(later);
   }
 
-  return { components: [container], flags: MessageFlags.IsComponentsV2 };
+  if (components.length === 0) {
+    const empty = new ContainerBuilder()
+      .setAccentColor(EPIC_COLOR)
+      .addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+          [epicIntro(0, 0, ''), 'No free games listed right now.']
+            .filter(Boolean)
+            .join('\n')
+            .slice(0, 4000),
+        ),
+      );
+    addEpicFooter(empty, undefined);
+    components.push(empty);
+  }
+
+  return { components, flags: MessageFlags.IsComponentsV2 };
 }
 
 /** Flatten Components V2 + legacy embeds to plain text for duplicate detection. */

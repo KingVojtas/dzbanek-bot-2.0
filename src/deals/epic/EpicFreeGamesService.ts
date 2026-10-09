@@ -66,11 +66,15 @@ interface RawApiResponse {
   data: { Catalog: { searchStore: { elements: RawElement[] } } };
 }
 
+/** Bump when the card layout changes so the current lineup is posted once. */
+const EPIC_LAYOUT = 'shelf';
+
 function lineupFingerprint(games: EpicFreeGame[]): string {
-  return games
+  const body = games
     .map((g) => `${g.isUpcoming ? 'U' : 'C'}:${g.title.trim().toLowerCase()}`)
     .sort()
     .join('|');
+  return `${EPIC_LAYOUT}:${body}`;
 }
 
 /** Polls Epic's free-games API. Posts nothing when the weekly lineup is unchanged. */
@@ -218,7 +222,8 @@ export class EpicFreeGamesService {
           return (
             looksLikeEpicDigest(blob) ||
             msg.embeds.some(
-              (e) => /epic games/i.test(e.title ?? '') || /epic games store/i.test(e.footer?.text ?? ''),
+              (e) =>
+                /epic games/i.test(e.title ?? '') || /epic games store/i.test(e.footer?.text ?? ''),
             )
           );
         }) ?? null
@@ -230,6 +235,7 @@ export class EpicFreeGamesService {
 
   private titlesMatch(lastMessage: Message, games: EpicFreeGame[]): boolean {
     const blob = collectMessageTextContent(lastMessage);
+    if (!/Yours to keep once claimed/i.test(blob)) return false;
     let lastTitles = extractHeadingTitles(blob);
     if (lastTitles.length === 0 && lastMessage.embeds[0]) {
       lastTitles = lastMessage.embeds[0].fields
@@ -238,7 +244,8 @@ export class EpicFreeGamesService {
     }
     const newTitles = games.map((g) => g.title);
     return (
-      lastTitles.length === newTitles.length && lastTitles.every((title, i) => title === newTitles[i])
+      lastTitles.length === newTitles.length &&
+      lastTitles.every((title, i) => title === newTitles[i])
     );
   }
 }
