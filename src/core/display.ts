@@ -275,6 +275,20 @@ function shelfMoney(discount: string, price: string, featured: boolean): string[
   return line ? [line] : [];
 }
 
+function dealBlurb(value: string | undefined): string {
+  if (!value) return '';
+  const text = value
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[*_`[\]]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length <= 150) return text;
+  const cut = text.slice(0, 149);
+  const word = cut.lastIndexOf(' ');
+  return `${(word > 80 ? cut.slice(0, word) : cut).trimEnd()}…`;
+}
+
 function shelfDate(): string {
   return new Intl.DateTimeFormat('en-GB', {
     day: 'numeric',
@@ -318,8 +332,12 @@ function buildSteamDealSection(
   if (item.expires) meta.push(`until ${prettyExpiry(item.expires)}`);
   if (meta.length) lines.push(meta.join('  ·  '));
 
-  const genres = item.genres?.replace(/\s+/g, ' ').trim();
-  if (genres) lines.push(`-# ${genres.slice(0, 80)}`);
+  const blurb = dealBlurb(item.description);
+  if (blurb) lines.push(blurb);
+  else {
+    const genres = item.genres?.replace(/\s+/g, ' ').trim();
+    if (genres) lines.push(`-# ${genres.slice(0, 80)}`);
+  }
 
   const section = new SectionBuilder().addTextDisplayComponents(
     new TextDisplayBuilder().setContent(lines.join('\n').slice(0, 4000)),
@@ -363,7 +381,7 @@ export function buildSteamDealsDisplay(
       : best > 0
         ? `**Up to ${best}% off** · **${top.length}** on the shelf`
         : `**${top.length}** on the shelf`,
-    `-# ${shelfDate()} · Deepest cuts first · EUR on the German store`,
+    `-# ${shelfDate()} · Big releases first · EUR on the German store`,
   ].join('\n');
 
   const container = new ContainerBuilder()

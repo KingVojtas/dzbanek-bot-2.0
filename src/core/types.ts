@@ -97,6 +97,8 @@ export interface SteamDealItem {
   dealScore?: string;
   genres?: string;
   description?: string;
+  /** Major-studio or full-priced blockbuster. The daily card prefers these. */
+  blockbuster?: boolean;
   /** Thumbnail that Discord can fetch. A portrait capsule when Steam has one. */
   image?: string;
   /** Wide banner for the top deal. */

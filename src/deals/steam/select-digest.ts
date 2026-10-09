@@ -71,9 +71,9 @@ export function uniqueSteamApps(items: SteamDealItem[]): SteamDealItem[] {
 }
 
 /**
- * Build a fixed-size digest: Very Positive (or better) first, deepest
- * discounts first. If that is still short of `size`, fill from the rest of
- * the feed so the card is never a single leftover sale.
+ * Build a fixed-size digest. Blockbusters come first (God of War, Red Dead,
+ * and the other full-priced studio games), then the best-reviewed sales.
+ * Deepest discount wins inside each group. The card is still filled to `size`.
  */
 export function selectSteamDigest(
   items: SteamDealItem[],
@@ -82,18 +82,24 @@ export function selectSteamDigest(
 ): SteamDealItem[] {
   if (size <= 0) return [];
   const weight = (item: SteamDealItem): number => reviewMap.get(item.id)?.totalReviews ?? 0;
-  const sorted = [...items].sort((a, b) => compareSteamDeals(a, b, weight));
-  const passing: SteamDealItem[] = [];
-  const rest: SteamDealItem[] = [];
-  for (const item of sorted) {
+  const byDeal = (a: SteamDealItem, b: SteamDealItem): number => compareSteamDeals(a, b, weight);
+  const good = (item: SteamDealItem): boolean => {
     const review = reviewMap.get(item.id);
-    if (review && isGoodReview(review)) passing.push(item);
-    else rest.push(item);
-  }
-  const picked = passing.slice(0, size);
-  if (picked.length < size) {
-    for (const item of rest) {
-      if (picked.length >= size) break;
+    return Boolean(review && isGoodReview(review));
+  };
+  const buckets = [
+    items.filter((item) => item.blockbuster && good(item)),
+    items.filter((item) => item.blockbuster),
+    items.filter((item) => good(item)),
+    items,
+  ];
+  const picked: SteamDealItem[] = [];
+  const seen = new Set<string>();
+  for (const bucket of buckets) {
+    for (const item of [...bucket].sort(byDeal)) {
+      if (picked.length >= size) return picked;
+      if (!item.id || seen.has(item.id)) continue;
+      seen.add(item.id);
       picked.push(item);
     }
   }
@@ -101,7 +107,7 @@ export function selectSteamDigest(
 }
 
 /** Bump when the card layout changes so today's post is replaced once. */
-const STEAM_DIGEST_LAYOUT = 'price';
+const STEAM_DIGEST_LAYOUT = 'aaa';
 
 export function steamDigestFingerprint(items: SteamDealItem[]): string {
   return `${STEAM_DIGEST_LAYOUT}:${items.map((item) => item.id).join('|')}`;

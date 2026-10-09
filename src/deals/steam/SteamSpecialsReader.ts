@@ -2,6 +2,8 @@ import { STEAM_DIGEST_SIZE } from '../../core/display';
 import type { SteamDealItem } from '../../core/types';
 import { isSteamFloorPrice, uniqueSteamApps } from './select-digest';
 
+const FEATURED_URL = 'https://store.steampowered.com/api/featuredcategories?cc=de&l=english';
+
 export interface SteamSpecialsList {
   items: SteamDealItem[];
   /** Search-row review counts, keyed by app id. Used to pick which sales to look up. */
@@ -9,17 +11,31 @@ export interface SteamSpecialsList {
 }
 
 /**
- * Steam's public search has no "sort by discount" option. The cheapest page
- * is entirely the 0,49€ minimum, so the digest is built from the best-reviewed
- * specials. Price_ASC is only a backfill when that pool is short.
+ * Steam's public search has no "sort by discount" option. Reviews_DESC is
+ * dominated by small games, and the cheapest page is the 0,49€ floor. The
+ * expensive specials plus Steam's featured deals are where the blockbusters sit.
  */
 const SEARCH_URL = 'https://store.steampowered.com/search/results/';
 const PAGE_SIZE = 50;
 const POPULAR_PAGES = [0, PAGE_SIZE];
+const PREMIUM_PAGES = [0, PAGE_SIZE];
 
 interface SearchPage {
-  sort: 'Price_ASC' | 'Reviews_DESC';
+  sort: 'Price_ASC' | 'Price_DESC' | 'Reviews_DESC';
   start: number;
+}
+
+interface FeaturedItem {
+  id?: number;
+  type?: number;
+  name?: string;
+  discounted?: boolean;
+  discount_percent?: number;
+  original_price?: number;
+  final_price?: number;
+  large_capsule_image?: string;
+  header_image?: string;
+  discount_expiration?: number;
 }
 
 interface SearchResponse {
@@ -33,10 +49,12 @@ interface SearchResponse {
  */
 export class SteamSpecialsReader {
   async read(): Promise<SteamSpecialsList> {
-    const popular = await this.collect(
-      POPULAR_PAGES.map((start) => ({ sort: 'Reviews_DESC', start })),
-    );
-    let batch = popular;
+    const [featured, premium, popular] = await Promise.all([
+      this.readFeatured(),
+      this.collect(PREMIUM_PAGES.map((start) => ({ sort: 'Price_DESC', start }))),
+      this.collect(POPULAR_PAGES.map((start) => ({ sort: 'Reviews_DESC', start }))),
+    ]);
+    let batch = mergeSpecials(mergeSpecials(featured, premium), popular);
     const aboveFloor = batch.items.filter((item) => !isSteamFloorPrice(item)).length;
     if (aboveFloor < STEAM_DIGEST_SIZE) {
       const backup = await this.collect([
@@ -45,11 +63,53 @@ export class SteamSpecialsReader {
       ]);
       batch = mergeSpecials(batch, backup);
       if (batch.items.length === 0) {
-        const error = popular.error ?? backup.error;
+        const error = popular.error ?? premium.error ?? backup.error;
         if (error) throw error;
       }
     }
     return { items: batch.items, reviewCounts: batch.reviewCounts };
+  }
+
+  /** Featured discounts and top sellers. This is where Red Dead shows up. */
+  private async readFeatured(): Promise<CollectedSpecials> {
+    try {
+      const response = await fetch(FEATURED_URL, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!response.ok) return emptySpecials();
+      const json = (await response.json()) as {
+        specials?: { items?: FeaturedItem[] };
+        top_sellers?: { items?: FeaturedItem[] };
+      };
+      const rows = [...(json.specials?.items ?? []), ...(json.top_sellers?.items ?? [])];
+      const batch = emptySpecials();
+      for (const row of rows) {
+        const appId = row.id ? String(row.id) : '';
+        const percent = Number(row.discount_percent) || 0;
+        if (!appId || !percent || row.discounted === false) continue;
+        if (row.type != null && row.type !== 0) continue;
+        const name = (row.name ?? '').replace(/\s+/g, ' ').trim();
+        const expires =
+          row.discount_expiration && row.discount_expiration > 0
+            ? new Date(row.discount_expiration * 1000).toISOString().slice(0, 10)
+            : undefined;
+        batch.items.push({
+          id: `steam_${appId}`,
+          title: name || `App ${appId}`,
+          gameName: name || `App ${appId}`,
+          link: `https://store.steampowered.com/app/${appId}/`,
+          discount: `-${percent}%`,
+          salePrice: formatEuroCents(row.final_price),
+          originalPrice: formatEuroCents(row.original_price),
+          image: row.large_capsule_image || row.header_image,
+          expires,
+        });
+      }
+      return { ...batch, items: uniqueSteamApps(batch.items) };
+    } catch {
+      return emptySpecials();
+    }
   }
 
   private async collect(pages: SearchPage[]): Promise<CollectedSpecials> {
@@ -159,6 +219,13 @@ export function parseSteamSearchHtml(html: string): CollectedSpecials {
     }
   }
   return batch;
+}
+
+function formatEuroCents(cents: number | undefined): string | undefined {
+  if (cents == null || !Number.isFinite(cents)) return undefined;
+  const whole = Math.trunc(cents / 100);
+  const frac = String(Math.abs(cents) % 100).padStart(2, '0');
+  return `${whole},${frac}€`;
 }
 
 function decodeHtml(value: string): string {

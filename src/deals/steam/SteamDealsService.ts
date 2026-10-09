@@ -14,6 +14,7 @@ import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
 import { resolveDealTargets, type DealTarget } from '../targets';
 import { attachSteamArtwork } from './SteamArtwork';
+import { attachSteamBlurbs, attachStoreProfiles, type SteamStoreProfile } from './SteamBlockbuster';
 import { SteamFeedReader } from './SteamFeedReader';
 import { SteamSpecialsReader } from './SteamSpecialsReader';
 import { extractAppId, fetchSteamPrice, formatSteamPrice } from './SteamPriceApi';
@@ -106,9 +107,18 @@ export class SteamDealsService {
       );
     }
 
-    const ranked = [...shelf].sort((a, b) =>
-      compareSteamDeals(a, b, (item) => reviewCounts.get(extractAppId(item.link) ?? '') ?? 0),
-    );
+    const profiles = new Map<string, SteamStoreProfile | null>();
+    await attachStoreProfiles(shelf, profiles);
+
+    const ranked = [...shelf].sort((a, b) => {
+      const tier = Number(Boolean(b.blockbuster)) - Number(Boolean(a.blockbuster));
+      if (tier !== 0) return tier;
+      return compareSteamDeals(
+        a,
+        b,
+        (item) => reviewCounts.get(extractAppId(item.link) ?? '') ?? 0,
+      );
+    });
     const candidates = ranked.slice(0, STEAM_REVIEW_WINDOW);
     const seen = new Set(candidates.map((item) => item.id));
     for (const item of feedItems) {
@@ -137,7 +147,13 @@ export class SteamDealsService {
     }
 
     const fingerprint = steamDigestFingerprint(top);
-    const [prices] = await Promise.all([this.fetchPrices(top), attachSteamArtwork(top)]);
+    const blockbusters = top.filter((item) => item.blockbuster).length;
+    this.logger.info(`Steam: ${blockbusters} blockbuster(s) in this ${top.length}-game digest.`);
+    const [prices] = await Promise.all([
+      this.fetchPrices(top),
+      attachSteamArtwork(top),
+      attachSteamBlurbs(top, profiles),
+    ]);
     const missingArt = top.filter((item) => !item.image).length;
     if (missingArt > 0) {
       this.logger.warn(`Steam: no artwork for ${missingArt} of ${top.length} games.`);
