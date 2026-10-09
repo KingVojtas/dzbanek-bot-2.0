@@ -20,6 +20,7 @@ import { extractAppId, fetchSteamPrice, formatSteamPrice } from './SteamPriceApi
 import { fetchSteamReview, formatReview, type SteamReviewInfo } from './SteamReviewApi';
 import {
   compareSteamDeals,
+  isSteamFloorPrice,
   selectSteamDigest,
   steamDigestFingerprint,
   uniqueSteamApps,
@@ -97,7 +98,15 @@ export class SteamDealsService {
       return;
     }
 
-    const ranked = [...pool].sort((a, b) =>
+    const aboveFloor = pool.filter((item) => !isSteamFloorPrice(item));
+    const shelf = aboveFloor.length >= STEAM_DIGEST_SIZE ? aboveFloor : pool;
+    if (shelf !== pool) {
+      this.logger.info(
+        `Steam: left out ${pool.length - aboveFloor.length} game(s) at the 0,49€ minimum.`,
+      );
+    }
+
+    const ranked = [...shelf].sort((a, b) =>
       compareSteamDeals(a, b, (item) => reviewCounts.get(extractAppId(item.link) ?? '') ?? 0),
     );
     const candidates = ranked.slice(0, STEAM_REVIEW_WINDOW);
@@ -106,6 +115,7 @@ export class SteamDealsService {
       const appId = extractAppId(item.link);
       const kept = pool.find((entry) => extractAppId(entry.link) === appId) ?? item;
       if (!kept.id || seen.has(kept.id)) continue;
+      if (shelf !== pool && isSteamFloorPrice(kept)) continue;
       candidates.push(kept);
       seen.add(kept.id);
     }

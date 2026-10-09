@@ -1,6 +1,6 @@
 import { STEAM_DIGEST_SIZE } from '../../core/display';
 import type { SteamDealItem } from '../../core/types';
-import { uniqueSteamApps } from './select-digest';
+import { isSteamFloorPrice, uniqueSteamApps } from './select-digest';
 
 export interface SteamSpecialsList {
   items: SteamDealItem[];
@@ -9,13 +9,13 @@ export interface SteamSpecialsList {
 }
 
 /**
- * Steam's public search has no "sort by discount" option. The cheapest sale
- * prices are where the 80–90% offs sit, so two pages of Price_ASC give the
- * digest a deep pool. Reviews_DESC is only a backfill when that pool is short.
+ * Steam's public search has no "sort by discount" option. The cheapest page
+ * is entirely the 0,49€ minimum, so the digest is built from the best-reviewed
+ * specials. Price_ASC is only a backfill when that pool is short.
  */
 const SEARCH_URL = 'https://store.steampowered.com/search/results/';
 const PAGE_SIZE = 50;
-const PRICE_PAGES = [0, PAGE_SIZE];
+const POPULAR_PAGES = [0, PAGE_SIZE];
 
 interface SearchPage {
   sort: 'Price_ASC' | 'Reviews_DESC';
@@ -33,13 +33,19 @@ interface SearchResponse {
  */
 export class SteamSpecialsReader {
   async read(): Promise<SteamSpecialsList> {
-    const price = await this.collect(PRICE_PAGES.map((start) => ({ sort: 'Price_ASC', start })));
-    let batch = price;
-    if (batch.items.length < STEAM_DIGEST_SIZE) {
-      const backup = await this.collect([{ sort: 'Reviews_DESC', start: 0 }]);
+    const popular = await this.collect(
+      POPULAR_PAGES.map((start) => ({ sort: 'Reviews_DESC', start })),
+    );
+    let batch = popular;
+    const aboveFloor = batch.items.filter((item) => !isSteamFloorPrice(item)).length;
+    if (aboveFloor < STEAM_DIGEST_SIZE) {
+      const backup = await this.collect([
+        { sort: 'Price_ASC', start: 0 },
+        { sort: 'Price_ASC', start: PAGE_SIZE },
+      ]);
       batch = mergeSpecials(batch, backup);
       if (batch.items.length === 0) {
-        const error = price.error ?? backup.error;
+        const error = popular.error ?? backup.error;
         if (error) throw error;
       }
     }

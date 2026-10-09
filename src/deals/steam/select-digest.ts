@@ -26,6 +26,24 @@ export function compareSteamDiscount(a: SteamDealItem, b: SteamDealItem): number
   return compareSteamDeals(a, b);
 }
 
+/**
+ * Steam will not sell a normal game below this. The cheapest specials page is
+ * nothing but that floor, so those rows are not useful daily deals.
+ */
+const STEAM_FLOOR_CENTS = 49;
+
+export function isSteamFloorPrice(item: SteamDealItem): boolean {
+  const cents = parseMoneyCents(item.salePrice);
+  return cents != null && cents <= STEAM_FLOOR_CENTS;
+}
+
+function parseMoneyCents(value: string | undefined): number | null {
+  if (!value) return null;
+  const match = value.replace(/\s/g, '').match(/(\d+)[,.](\d{2})/);
+  if (!match) return null;
+  return Number(match[1]) * 100 + Number(match[2]);
+}
+
 /** The search-row capsule. A guessed library filename is not one of these. */
 function isLiveStoreImage(url: string | undefined): boolean {
   return Boolean(url && /store_item_assets|\/capsule_\d+x\d+/i.test(url));
@@ -83,7 +101,7 @@ export function selectSteamDigest(
 }
 
 /** Bump when the card layout changes so today's post is replaced once. */
-const STEAM_DIGEST_LAYOUT = 'art';
+const STEAM_DIGEST_LAYOUT = 'price';
 
 export function steamDigestFingerprint(items: SteamDealItem[]): string {
   return `${STEAM_DIGEST_LAYOUT}:${items.map((item) => item.id).join('|')}`;
