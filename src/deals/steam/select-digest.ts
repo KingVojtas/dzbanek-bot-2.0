@@ -69,6 +69,9 @@ export function selectSteamDigest(
   return picked;
 }
 
+/** Bump when the card layout changes so today's post is replaced once. */
+const STEAM_DIGEST_LAYOUT = 'shelf';
+
 export function steamDigestFingerprint(items: SteamDealItem[]): string {
-  return items.map((item) => item.id).join('|');
+  return `${STEAM_DIGEST_LAYOUT}:${items.map((item) => item.id).join('|')}`;
 }

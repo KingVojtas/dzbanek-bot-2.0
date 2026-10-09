@@ -173,20 +173,19 @@ export class SteamDealsService {
       return false;
     }
 
-    if (lastDigest) {
-      try {
-        await lastDigest.delete();
-      } catch {
-        /* ignore */
-      }
-    }
-
     try {
       const display = buildSteamDealsDisplay(top, prices, reviews);
       const sent = await target.channel.send({
         components: display.components,
         flags: display.flags,
       });
+      if (lastDigest) {
+        try {
+          await lastDigest.delete();
+        } catch {
+          /* ignore */
+        }
+      }
       await this.store.add(scope, [fingerprint]);
       this.logger.info(`Steam: posted ${top.length} deal(s) to ${target.guildName}.`);
       await reactQuietly(sent, ['🔥', '💰', '👍']);
@@ -245,6 +244,7 @@ export class SteamDealsService {
   private isDuplicateDigest(lastMessage: Message, top: SteamDealItem[]): boolean {
     if (top.length === 0) return false;
     const blob = collectMessageTextContent(lastMessage);
+    if (!/live prices in EUR/i.test(blob)) return false;
     let lastTitles = extractHeadingTitles(blob);
     if (lastTitles.length === 0 && lastMessage.embeds[0]) {
       lastTitles = lastMessage.embeds[0].fields.map((f) => f.name.replace(/^\d+\.\s*/, '').trim());

@@ -8,6 +8,7 @@ import {
   MessageFlags,
   SectionBuilder,
   SeparatorBuilder,
+  SeparatorSpacingSize,
   TextDisplayBuilder,
   ThumbnailBuilder,
   type MessageActionRowComponentBuilder,
@@ -15,7 +16,7 @@ import {
 import { formatClock, formatDuration, formatViews } from './embeds';
 import type { EpicFreeGame, LoopMode, SteamDealItem, Track } from './types';
 
-const STEAM_COLOR = 0x1b2838;
+const STEAM_COLOR = 0x66c0f4;
 const STEAM_SPECIALS_URL = 'https://store.steampowered.com/specials';
 const EPIC_COLOR = 0x2f2d2e;
 const EPIC_FREE_URL = 'https://store.epicgames.com/en-US/free-games';
@@ -24,8 +25,8 @@ const EPIC_FREE_URL = 'https://store.epicgames.com/en-US/free-games';
 const V2_COMPONENT_MAX = 40;
 
 /**
- * Deals shown per Steam digest. Layout uses one intro + one section per game
- * (no per-row separators) so 10 games stay under Discord's 40-component cap.
+ * Deals shown per Steam digest. One hero, one intro, ten thumbnail rows, and
+ * a link button stay under Discord's 40-component cap. No per-row separators.
  */
 export const STEAM_DIGEST_SIZE = 10;
 const EPIC_DIGEST_MAX = 6;
@@ -174,10 +175,7 @@ export function buildQueuedTrackDisplay(
     : `### ${track.title.slice(0, 200)}`;
   const artist = (track.uploader ?? '').slice(0, 80);
 
-  const lines = [
-    `**${opts.label}** · ${musicSourceLabel(track.source)}`,
-    titleLine,
-  ];
+  const lines = [`**${opts.label}** · ${musicSourceLabel(track.source)}`, titleLine];
   if (artist) lines.push(`*${artist}*`);
   lines.push(`\`${formatDuration(track.durationSec)}\` · ${track.requestedBy}`);
   if (opts.footer) lines.push(`-# ${opts.footer}`);
@@ -236,45 +234,88 @@ function thumbnailFor(url: string | undefined, alt: string): ThumbnailBuilder | 
   return new ThumbnailBuilder().setURL(url).setDescription(alt.slice(0, 100));
 }
 
+function steamAppId(item: SteamDealItem): string | undefined {
+  return item.image?.match(/\/apps\/(\d+)\//)?.[1] ?? item.link?.match(/\/app\/(\d+)/)?.[1];
+}
+
+function steamArt(item: SteamDealItem, file: string): string | undefined {
+  const appId = steamAppId(item);
+  if (!appId) return undefined;
+  return `https://cdn.akamai.steamstatic.com/steam/apps/${appId}/${file}`;
+}
+
+function discountLabel(item: SteamDealItem, apiPrice: string | null): string {
+  const fromPrice = apiPrice?.match(/\((-?\d+)%\)\s*$/)?.[1];
+  const raw = item.discount ?? fromPrice ?? '';
+  const n = parseInt(String(raw).replace(/\D/g, ''), 10);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return `-${n}%`;
+}
+
+/** Drop the trailing percent. The row already leads with a discount badge. */
+function tidyPrice(price: string): string {
+  return price.replace(/\s*\(-?\d+%\)\s*$/, '').trim();
+}
+
+function prettyExpiry(value: string): string {
+  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!iso) return value.replace(/\s+/g, ' ').trim();
+  const date = new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])));
+  const thisYear = new Date().getUTCFullYear();
+  return date.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: date.getUTCFullYear() === thisYear ? undefined : 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
 function buildSteamDealSection(
   item: SteamDealItem,
+  index: number,
   apiPrice: string | null,
   reviewStr: string | undefined,
 ): SectionBuilder {
-  const discount = item.discount?.replace(/[()]/g, '').trim() || '';
-  const priceLine = apiPrice ?? fallbackPriceLine(item);
-  const title = item.gameName.slice(0, 120);
+  const title = item.gameName.replace(/\s+/g, ' ').trim().slice(0, 80);
+  const name = item.link ? `[${title}](${item.link})` : title;
+  const discount = discountLabel(item, apiPrice);
+  const price = tidyPrice(apiPrice ?? fallbackPriceLine(item));
+  const lead = index === 0;
 
-  const lines = [
-    item.link ? `### [${title}](${item.link})` : `### ${title}`,
-    discount ? `**${discount}**  ·  ${priceLine}` : priceLine,
-  ];
+  const lines = [lead ? '-# 1  ·  the deepest cut' : `-# ${index + 1}`, `### ${name}`];
 
-  if (reviewStr) lines.push(reviewStr.slice(0, 140));
-
-  const extras: string[] = [];
-  if (item.expires) extras.push(`Until **${item.expires}**`);
-  if (item.link) extras.push(`[Store →](${item.link})`);
-  if (extras.length) lines.push(extras.join(' · '));
-
-  if (item.genres) {
-    lines.push(`-# ${item.genres.replace(/\s+/g, ' ').trim().slice(0, 80)}`);
-  } else if (item.description) {
-    const short = item.description.replace(/\s+/g, ' ').trim().slice(0, 100);
-    if (short) lines.push(`-# ${short}${item.description.length > 100 ? '…' : ''}`);
+  if (lead && discount) {
+    lines.push(`## ${discount}`);
+    if (price) lines.push(price);
+  } else {
+    const money = [discount ? `**${discount}**` : '', price].filter(Boolean).join('  ·  ');
+    if (money) lines.push(money);
   }
+
+  const meta: string[] = [];
+  if (reviewStr) meta.push(reviewStr.slice(0, 80));
+  if (item.expires) meta.push(`until ${prettyExpiry(item.expires)}`);
+  if (meta.length) lines.push(meta.join('  ·  '));
+
+  const genres = item.genres?.replace(/\s+/g, ' ').trim();
+  if (genres) lines.push(`-# ${genres.slice(0, 80)}`);
 
   const section = new SectionBuilder().addTextDisplayComponents(
     new TextDisplayBuilder().setContent(lines.join('\n').slice(0, 4000)),
   );
 
-  const thumb = thumbnailFor(item.image, title);
+  const thumb = thumbnailFor(item.image || steamArt(item, 'library_600x900.jpg'), title);
   if (thumb) section.setThumbnailAccessory(thumb);
+  else if (item.link) {
+    section.setButtonAccessory(
+      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Store').setURL(item.link),
+    );
+  }
   return section;
 }
 
 /**
- * Steam digest: header + one card per deal with box-art thumbnail on the right.
+ * Steam digest: wide banner of the top cut, then a ranked shelf of ten.
  */
 export function buildSteamDealsDisplay(
   items: SteamDealItem[],
@@ -283,33 +324,57 @@ export function buildSteamDealsDisplay(
 ): V2Display {
   const top = items.slice(0, STEAM_DIGEST_SIZE);
   const best = topDiscountPct(top);
-
-  const title =
-    best > 0
-      ? `## [Steam Daily Deals — up to ${best}% off](${STEAM_SPECIALS_URL})`
-      : `## [Steam Daily Deals](${STEAM_SPECIALS_URL})`;
+  const heroItem = top[0];
+  const hero = heroItem ? steamArt(heroItem, 'header.jpg') : undefined;
 
   const intro = [
-    title,
-    top.length > 0
-      ? `**${top.length}** sale${top.length !== 1 ? 's' : ''} · deepest discounts first`
-      : 'No deals matched the quality filter.',
-    '-# Live Steam prices · Very Positive or better when available',
+    `## [Steam Daily Deals](${STEAM_SPECIALS_URL})`,
+    top.length === 0
+      ? 'The shelf is empty right now.'
+      : best > 0
+        ? `**Up to ${best}% off** · **${top.length}** on the shelf`
+        : `**${top.length}** on the shelf`,
+    '-# Deepest cuts first · live prices in EUR',
   ].join('\n');
 
-  const container = new ContainerBuilder()
-    .setAccentColor(STEAM_COLOR)
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(intro.slice(0, 4000)));
+  const container = new ContainerBuilder().setAccentColor(STEAM_COLOR);
 
-  if (top.length > 0) {
-    container.addSeparatorComponents(new SeparatorBuilder().setDivider(true));
-  }
-
-  for (const item of top) {
-    container.addSectionComponents(
-      buildSteamDealSection(item, prices.get(item.id) ?? null, reviews.get(item.id)),
+  if (hero && heroItem) {
+    const badge = discountLabel(heroItem, prices.get(heroItem.id) ?? null);
+    container.addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(
+        new MediaGalleryItemBuilder()
+          .setURL(hero)
+          .setDescription(`${heroItem.gameName} · ${badge || 'Steam deal'}`.slice(0, 100)),
+      ),
     );
   }
+
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(intro.slice(0, 4000)));
+
+  if (top.length > 0) {
+    container.addSeparatorComponents(
+      new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large),
+    );
+  }
+
+  top.forEach((item, index) => {
+    container.addSectionComponents(
+      buildSteamDealSection(item, index, prices.get(item.id) ?? null, reviews.get(item.id)),
+    );
+  });
+
+  container
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addActionRowComponents(
+      new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+        new ButtonBuilder()
+          .setStyle(ButtonStyle.Link)
+          .setLabel('Browse specials')
+          .setEmoji('💸')
+          .setURL(STEAM_SPECIALS_URL),
+      ),
+    );
 
   return { components: [container], flags: MessageFlags.IsComponentsV2 };
 }
