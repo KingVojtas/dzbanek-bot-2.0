@@ -216,7 +216,38 @@ function checkSteamRows(): void {
     fail('steam-row-card', 'plain game picked up a release line');
     return;
   }
-  ok('steam-row-card', 'store row, prices, and no hero chip');
+
+  const full: SteamDealItem[] = Array.from({ length: STEAM_DIGEST_SIZE }, (_, index) => ({
+    id: `steam_${index}`,
+    title: `Game ${index}`,
+    gameName: `Game ${index}`,
+    link: `https://store.steampowered.com/app/${index}/`,
+    discount: '-50%',
+    tags: 'Action · Adventure',
+    released: '1 Jan, 2020',
+    image: `https://cdn.akamai.steamstatic.com/steam/apps/${index}/library_600x900.jpg`,
+  }));
+  const fullDisplay = buildSteamDealsDisplay(
+    full,
+    new Map(full.map((item) => [item.id, '~~39,99€~~ → **19,99€** (-50%)'])),
+  );
+  const fullCount = countComponents(fullDisplay.components.map((component) => component.toJSON()));
+  if (fullCount > 40) {
+    fail('steam-row-card', `10-game card has ${fullCount} components, Discord allows 40`);
+    return;
+  }
+  ok('steam-row-card', `store row, prices, and ${fullCount} components`);
+}
+
+function countComponents(node: unknown): number {
+  if (!node || typeof node !== 'object') return 0;
+  if (Array.isArray(node)) return node.reduce((sum, child) => sum + countComponents(child), 0);
+  const obj = node as Record<string, unknown>;
+  let count = typeof obj.type === 'number' ? 1 : 0;
+  if (Array.isArray(obj.components)) count += countComponents(obj.components);
+  if (obj.accessory) count += countComponents(obj.accessory);
+  if (Array.isArray(obj.items)) count += countComponents(obj.items);
+  return count;
 }
 
 async function checkSteam(): Promise<void> {

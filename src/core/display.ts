@@ -8,7 +8,6 @@ import {
   MessageFlags,
   SectionBuilder,
   SeparatorBuilder,
-  SeparatorSpacingSize,
   TextDisplayBuilder,
   ThumbnailBuilder,
   type MessageActionRowComponentBuilder,
@@ -26,8 +25,9 @@ const EPIC_FREE_URL = 'https://store.epicgames.com/en-US/free-games';
 const V2_COMPONENT_MAX = 40;
 
 /**
- * Deals shown per Steam digest. One intro, ten rows, a divider between each,
- * and a link button stay under Discord's 40-component cap.
+ * Deals shown per Steam digest. One intro, ten thumbnail rows, a footer
+ * divider, and a link button stay under Discord's 40-component cap.
+ * A divider between every row does not fit.
  */
 export const STEAM_DIGEST_SIZE = 10;
 
@@ -378,14 +378,9 @@ export function buildSteamDealsDisplay(
     .setAccentColor(STEAM_COLOR)
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(intro.slice(0, 4000)));
 
-  top.forEach((item, index) => {
-    if (index > 0) {
-      container.addSeparatorComponents(
-        new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small),
-      );
-    }
+  for (const item of top) {
     container.addSectionComponents(buildSteamDealSection(item, prices.get(item.id) ?? null));
-  });
+  }
 
   container
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
