@@ -172,6 +172,7 @@ function checkSteamRows(): void {
     ...kept,
     tags: 'Open World · Western · Story Rich · Action',
     image: 'https://cdn.akamai.steamstatic.com/steam/apps/1174180/library_600x900.jpg',
+    expires: '2026-10-19',
   };
   const quiet: SteamDealItem = {
     id: 'steam_1',
@@ -193,7 +194,7 @@ function checkSteamRows(): void {
     STEAM_SHELF_MARKER,
     '### [Red Dead Redemption 2](https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/)',
     '-# Open World · Western · Story Rich · Action',
-    '-# Released 5 Dec 2019',
+    '-# Released 5 Dec 2019  ·  Ends 19 Oct',
     '`-75%`  ~~59,99€~~  **14,99€**',
     '### [Plain Game](https://store.steampowered.com/app/1/Plain/)',
     '**9,99€**',

@@ -291,6 +291,23 @@ function formatReleased(value: string | undefined): string {
   return `Released ${Number(day)} ${month} ${year}`;
 }
 
+/** "2026-10-19" → "Ends 19 Oct". The year stays when it is not this year. */
+function formatSaleEnd(value: string | undefined): string {
+  const text = value?.replace(/\s+/g, ' ').trim() ?? '';
+  if (!text) return '';
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!iso) return `Ends ${text.replace(/^(ends|until)\s+/i, '')}`;
+  const date = new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])));
+  const thisYear = new Date().getUTCFullYear();
+  const formatted = date.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: date.getUTCFullYear() === thisYear ? undefined : 'numeric',
+    timeZone: 'UTC',
+  });
+  return `Ends ${formatted}`;
+}
+
 /** Discount in inline code, struck original, bold sale price. */
 function steamPriceLine(discount: string, price: string): string {
   const { pay, was } = priceParts(price);
@@ -331,13 +348,15 @@ function buildSteamDealSection(item: SteamDealItem, apiPrice: string | null): Se
   const discount = discountLabel(item, apiPrice);
   const price = tidyPrice(apiPrice ?? fallbackPriceLine(item));
   const tags = item.tags?.replace(/\s+/g, ' ').trim() ?? '';
-  const released = formatReleased(item.released);
+  const when = [formatReleased(item.released), formatSaleEnd(item.expires)]
+    .filter(Boolean)
+    .join('  ·  ');
   const money = steamPriceLine(discount, price);
 
   const lines = [
     `### ${name}`,
     tags ? `-# ${tags.slice(0, 180)}` : '',
-    released ? `-# ${released}` : '',
+    when ? `-# ${when}` : '',
     money,
   ].filter(Boolean);
 

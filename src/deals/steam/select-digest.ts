@@ -68,6 +68,7 @@ export function uniqueSteamApps(items: SteamDealItem[]): SteamDealItem[] {
     }
     // Featured and RSS rows have no store tags. The search row does.
     if (!existing.released && item.released) existing.released = item.released;
+    if (!existing.expires && item.expires) existing.expires = item.expires;
     if ((existing.tagIds?.length ?? 0) === 0 && (item.tagIds?.length ?? 0) > 0) {
       existing.tagIds = item.tagIds;
     }
@@ -112,7 +113,7 @@ export function selectSteamDigest(
 }
 
 /** Bump when the card layout changes so today's post is replaced once. */
-const STEAM_DIGEST_LAYOUT = 'aac';
+const STEAM_DIGEST_LAYOUT = 'aad';
 
 export function steamDigestFingerprint(items: SteamDealItem[]): string {
   return `${STEAM_DIGEST_LAYOUT}:${items.map((item) => item.id).join('|')}`;

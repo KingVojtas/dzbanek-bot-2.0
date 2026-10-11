@@ -21,7 +21,7 @@ import {
   type SteamStoreProfile,
 } from './SteamBlockbuster';
 import { SteamFeedReader } from './SteamFeedReader';
-import { SteamSpecialsReader } from './SteamSpecialsReader';
+import { SteamSpecialsReader, attachSteamSaleEnds } from './SteamSpecialsReader';
 import { extractAppId, fetchSteamPrice, formatSteamPrice } from './SteamPriceApi';
 import { fetchSteamReview, formatReview, type SteamReviewInfo } from './SteamReviewApi';
 import {
@@ -158,6 +158,7 @@ export class SteamDealsService {
       this.fetchPrices(top),
       attachSteamArtwork(top),
       attachSteamShelfMeta(top, profiles),
+      attachSteamSaleEnds(top),
     ]);
     const missingArt = top.filter((item) => !item.image).length;
     if (missingArt > 0) {
