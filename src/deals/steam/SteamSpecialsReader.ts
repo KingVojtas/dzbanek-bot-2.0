@@ -200,6 +200,12 @@ export function parseSteamSearchHtml(html: string): CollectedSpecials {
     const finalPrice = block.match(/discount_final_price"[^>]*>\s*([^<]+)/);
     const name = decodeHtml(match[3] ?? '');
     const capsule = decodeHtml(beforeTitle.match(/<img[^>]*\ssrc="([^"]+)"/i)?.[1] ?? '');
+    const released = decodeHtml(block.match(/search_released[^>]*>\s*([^<]+)/i)?.[1] ?? '');
+    const tagRaw = beforeTitle.match(/data-ds-tagids="\[([0-9,\s]*)\]"/i);
+    const tagIds = (tagRaw?.[1] ?? '')
+      .split(',')
+      .map((part) => Number(part.trim()))
+      .filter((id) => Number.isInteger(id) && id > 0);
     batch.items.push({
       id: `steam_${appId}`,
       title: name,
@@ -209,6 +215,8 @@ export function parseSteamSearchHtml(html: string): CollectedSpecials {
       originalPrice: original?.[1]?.trim(),
       discount: `-${percent}%`,
       image: /^https?:\/\//i.test(capsule) ? capsule : undefined,
+      released: released || undefined,
+      tagIds: tagIds.length > 0 ? tagIds : undefined,
     });
 
     const tooltip = decodeHtml(block.match(/data-tooltip-html="([^"]*)"/)?.[1] ?? '');

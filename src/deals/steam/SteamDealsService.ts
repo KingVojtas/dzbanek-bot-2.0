@@ -2,6 +2,7 @@ import type { Client, Message, SendableChannels, TextBasedChannel } from 'discor
 import type { Config } from '../../config';
 import {
   STEAM_DIGEST_SIZE,
+  STEAM_SHELF_MARKER,
   buildSteamDealsDisplay,
   collectMessageTextContent,
   extractHeadingTitles,
@@ -14,7 +15,11 @@ import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
 import { resolveDealTargets, type DealTarget } from '../targets';
 import { attachSteamArtwork } from './SteamArtwork';
-import { attachSteamBlurbs, attachStoreProfiles, type SteamStoreProfile } from './SteamBlockbuster';
+import {
+  attachSteamShelfMeta,
+  attachStoreProfiles,
+  type SteamStoreProfile,
+} from './SteamBlockbuster';
 import { SteamFeedReader } from './SteamFeedReader';
 import { SteamSpecialsReader } from './SteamSpecialsReader';
 import { extractAppId, fetchSteamPrice, formatSteamPrice } from './SteamPriceApi';
@@ -152,7 +157,7 @@ export class SteamDealsService {
     const [prices] = await Promise.all([
       this.fetchPrices(top),
       attachSteamArtwork(top),
-      attachSteamBlurbs(top, profiles),
+      attachSteamShelfMeta(top, profiles),
     ]);
     const missingArt = top.filter((item) => !item.image).length;
     if (missingArt > 0) {
@@ -167,7 +172,7 @@ export class SteamDealsService {
     let posted = 0;
     for (const target of targets) {
       this.kitchen?.recordSteam(target.guildId, top, prices, reviews);
-      const sent = await this.postToGuild(target, top, fingerprint, prices, reviews);
+      const sent = await this.postToGuild(target, top, fingerprint, prices);
       if (sent) posted += 1;
       this.kitchen?.refresh(target.guildId);
     }
@@ -180,7 +185,6 @@ export class SteamDealsService {
     top: SteamDealItem[],
     fingerprint: string,
     prices: Map<string, string | null>,
-    reviews: Map<string, string>,
   ): Promise<boolean> {
     const scope = steamDigestScope(target.guildId);
 
@@ -205,7 +209,7 @@ export class SteamDealsService {
     }
 
     try {
-      const display = buildSteamDealsDisplay(top, prices, reviews);
+      const display = buildSteamDealsDisplay(top, prices);
       const sent = await target.channel.send({
         components: display.components,
         flags: display.flags,
@@ -275,7 +279,7 @@ export class SteamDealsService {
   private isDuplicateDigest(lastMessage: Message, top: SteamDealItem[]): boolean {
     if (top.length === 0) return false;
     const blob = collectMessageTextContent(lastMessage);
-    if (!/EUR on the German store/i.test(blob)) return false;
+    if (!blob.includes(STEAM_SHELF_MARKER)) return false;
     let lastTitles = extractHeadingTitles(blob);
     if (lastTitles.length === 0 && lastMessage.embeds[0]) {
       lastTitles = lastMessage.embeds[0].fields.map((f) => f.name.replace(/^\d+\.\s*/, '').trim());

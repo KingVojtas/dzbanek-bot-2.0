@@ -66,6 +66,11 @@ export function uniqueSteamApps(items: SteamDealItem[]): SteamDealItem[] {
     if (isLiveStoreImage(item.image) && !isLiveStoreImage(existing.image)) {
       existing.image = item.image;
     }
+    // Featured and RSS rows have no store tags. The search row does.
+    if (!existing.released && item.released) existing.released = item.released;
+    if ((existing.tagIds?.length ?? 0) === 0 && (item.tagIds?.length ?? 0) > 0) {
+      existing.tagIds = item.tagIds;
+    }
   }
   return out;
 }
@@ -107,7 +112,7 @@ export function selectSteamDigest(
 }
 
 /** Bump when the card layout changes so today's post is replaced once. */
-const STEAM_DIGEST_LAYOUT = 'aab';
+const STEAM_DIGEST_LAYOUT = 'aac';
 
 export function steamDigestFingerprint(items: SteamDealItem[]): string {
   return `${STEAM_DIGEST_LAYOUT}:${items.map((item) => item.id).join('|')}`;

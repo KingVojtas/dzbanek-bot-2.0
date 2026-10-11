@@ -26,10 +26,13 @@ const EPIC_FREE_URL = 'https://store.epicgames.com/en-US/free-games';
 const V2_COMPONENT_MAX = 40;
 
 /**
- * Deals shown per Steam digest. One hero, one intro, ten thumbnail rows, and
- * a link button stay under Discord's 40-component cap. No per-row separators.
+ * Deals shown per Steam digest. One intro, ten rows, a divider between each,
+ * and a link button stay under Discord's 40-component cap.
  */
 export const STEAM_DIGEST_SIZE = 10;
+
+/** On the current Steam card. An older kicker means the layout still needs a refresh. */
+export const STEAM_SHELF_MARKER = 'on the shelf · EUR';
 const EPIC_DIGEST_MAX = 6;
 
 export interface V2Display {
@@ -194,14 +197,6 @@ export function buildQueuedTrackDisplay(
   return { components: [container], flags: MessageFlags.IsComponentsV2 };
 }
 
-function topDiscountPct(items: SteamDealItem[]): number {
-  return items.reduce((max, item) => {
-    if (!item.discount) return max;
-    const n = parseInt(item.discount.replace(/\D/g, ''), 10);
-    return !Number.isNaN(n) && n > max ? n : max;
-  }, 0);
-}
-
 function fallbackPriceLine(item: SteamDealItem): string {
   if (item.salePrice && item.originalPrice) {
     return `~~${item.originalPrice}~~ → **${item.salePrice}**`;
@@ -265,34 +260,47 @@ function strikeAnsi(value: string): string {
   return [...value].map((ch) => (ch === ' ' ? ch : `${ch}\u0336`)).join('');
 }
 
-/**
- * Steam discount block: lime percent on green, muted original, bright sale price.
- * The featured row pads the percent so it still leads.
- */
-function steamPriceChip(discount: string, pay: string, was: string, featured: boolean): string {
-  const pad = featured ? '  ' : ' ';
-  const bits = [`${ANSI}[1;92;42m${pad}${discount}${pad}${ANSI}[0m`];
-  if (was) bits.push(`${ANSI}[0;90m${strikeAnsi(was)}${ANSI}[0m`);
-  if (pay) bits.push(`${ANSI}[1;97m${pay}${ANSI}[0m`);
-  return `\`\`\`ansi\n${bits.join(' ')}\n\`\`\``;
+const RELEASE_MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/** "5 Dec, 2019" or "Dec 5, 2019" → "Released 5 Dec 2019". Empty when Steam has no date. */
+function formatReleased(value: string | undefined): string {
+  const text = value?.replace(/\s+/g, ' ').trim() ?? '';
+  if (!text || /coming soon/i.test(text)) return '';
+  const dayFirst = text.match(/^(\d{1,2})\s+([A-Za-z]{3,})\.?,?\s+(\d{4})$/);
+  const monthFirst = text.match(/^([A-Za-z]{3,})\.?\s+(\d{1,2}),?\s+(\d{4})$/);
+  const day = dayFirst?.[1] ?? monthFirst?.[2];
+  const monthName = dayFirst?.[2] ?? monthFirst?.[1];
+  const year = dayFirst?.[3] ?? monthFirst?.[3];
+  const month = monthName
+    ? RELEASE_MONTHS.find((name) => name.toLowerCase() === monthName.slice(0, 3).toLowerCase())
+    : undefined;
+  if (!day || !month || !year) return `Released ${text.replace(/,/g, '')}`;
+  return `Released ${Number(day)} ${month} ${year}`;
 }
 
-/** Masthead sale banner. Same green as the per-game percent. */
-function steamGreenBadge(label: string): string {
-  return `\`\`\`ansi\n${ANSI}[1;92;42m  ${label}  ${ANSI}[0m\n\`\`\``;
-}
-
-/** Green discount chip when the game is on sale. Plain markdown prices otherwise. */
-function shelfMoney(discount: string, price: string, featured: boolean): string[] {
+/** Discount in inline code, struck original, bold sale price. */
+function steamPriceLine(discount: string, price: string): string {
   const { pay, was } = priceParts(price);
-  if (discount) {
-    const chip = steamPriceChip(discount, pay, was, featured);
-    if (!pay && !was && price) return [chip, price];
-    return [chip];
-  }
-  if (!pay && !was) return price ? [price] : [];
-  const cost = [pay ? `**${pay}**` : '', was ? `~~${was}~~` : ''].filter(Boolean).join('  ·  ');
-  return cost ? [cost] : [];
+  const bits = [
+    discount ? `\`${discount}\`` : '',
+    was ? `~~${was}~~` : '',
+    pay ? `**${pay}**` : '',
+  ].filter(Boolean);
+  if (bits.length > 0) return bits.join('  ');
+  return price;
 }
 
 function dealBlurb(value: string | undefined, limit = 150): string {
@@ -317,55 +325,27 @@ function shelfDate(): string {
   }).format(new Date());
 }
 
-function prettyExpiry(value: string): string {
-  const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!iso) return value.replace(/\s+/g, ' ').trim();
-  const date = new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])));
-  const thisYear = new Date().getUTCFullYear();
-  return date.toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: date.getUTCFullYear() === thisYear ? undefined : 'numeric',
-    timeZone: 'UTC',
-  });
-}
-
-function buildSteamDealSection(
-  item: SteamDealItem,
-  index: number,
-  apiPrice: string | null,
-  reviewStr: string | undefined,
-): SectionBuilder {
+function buildSteamDealSection(item: SteamDealItem, apiPrice: string | null): SectionBuilder {
   const title = item.gameName.replace(/\s+/g, ' ').trim().slice(0, 80);
   const name = item.link ? `[${title}](${item.link})` : title;
   const discount = discountLabel(item, apiPrice);
   const price = tidyPrice(apiPrice ?? fallbackPriceLine(item));
-  const lead = index === 0;
+  const tags = item.tags?.replace(/\s+/g, ' ').trim() ?? '';
+  const released = formatReleased(item.released);
+  const money = steamPriceLine(discount, price);
 
   const lines = [
-    lead ? `### ${name}` : `### ${index + 1} · ${name}`,
-    ...shelfMoney(discount, price, lead),
-  ];
-
-  const meta: string[] = [];
-  if (reviewStr) meta.push(reviewStr.slice(0, 80));
-  if (item.expires) meta.push(`until ${prettyExpiry(item.expires)}`);
-  if (meta.length) lines.push(meta.join('  ·  '));
-
-  const blurb = dealBlurb(item.description);
-  if (blurb) lines.push(blurb);
-  else {
-    const genres = item.genres?.replace(/\s+/g, ' ').trim();
-    if (genres) lines.push(`-# ${genres.slice(0, 80)}`);
-  }
+    `### ${name}`,
+    tags ? `-# ${tags.slice(0, 180)}` : '',
+    released ? `-# ${released}` : '',
+    money,
+  ].filter(Boolean);
 
   const section = new SectionBuilder().addTextDisplayComponents(
     new TextDisplayBuilder().setContent(lines.join('\n').slice(0, 4000)),
   );
 
-  const thumbUrl = httpImage(item.image);
-  const banner = lead ? (httpImage(item.heroImage) ?? thumbUrl) : undefined;
-  const thumb = banner && thumbUrl === banner ? null : thumbnailFor(thumbUrl, title);
+  const thumb = thumbnailFor(httpImage(item.image), title);
   if (thumb) section.setThumbnailAccessory(thumb);
   else if (item.link) {
     section.setButtonAccessory(
@@ -376,34 +356,20 @@ function buildSteamDealSection(
 }
 
 /**
- * Steam digest: masthead, a wide banner of the top cut, that deal, then the
- * other nine. Every image URL has already been checked.
+ * Steam digest: masthead, then one store row per game. Every image URL has
+ * already been checked.
  */
 export function buildSteamDealsDisplay(
   items: SteamDealItem[],
   prices: Map<string, string | null>,
-  reviews: Map<string, string>,
 ): V2Display {
   const top = items.slice(0, STEAM_DIGEST_SIZE);
-  const best = topDiscountPct(top);
-  const heroItem = top[0];
-  const hero = heroItem ? (httpImage(heroItem.heroImage) ?? httpImage(heroItem.image)) : undefined;
-  const heroPrice = heroItem
-    ? tidyPrice(prices.get(heroItem.id) ?? fallbackPriceLine(heroItem))
-    : '';
-  const heroPay = priceParts(heroPrice).pay;
-  const heroDiscount = heroItem ? discountLabel(heroItem, prices.get(heroItem.id) ?? null) : '';
-
   const intro = [
     `## [Steam Daily Deals](${STEAM_SPECIALS_URL})`,
+    top.length === 0 ? 'The shelf is empty right now.' : '',
     top.length === 0
-      ? 'The shelf is empty right now.'
-      : best > 0
-        ? steamGreenBadge(`Up to ${best}% off`)
-        : '',
-    top.length === 0
-      ? `-# ${shelfDate()} · Big releases first · EUR on the German store`
-      : `-# ${shelfDate()} · ${top.length} on the shelf · Big releases first · EUR on the German store`,
+      ? `-# ${shelfDate()}`
+      : `-# ${shelfDate()} · ${top.length} ${STEAM_SHELF_MARKER}`,
   ]
     .filter(Boolean)
     .join('\n');
@@ -412,28 +378,13 @@ export function buildSteamDealsDisplay(
     .setAccentColor(STEAM_COLOR)
     .addTextDisplayComponents(new TextDisplayBuilder().setContent(intro.slice(0, 4000)));
 
-  if (hero && heroItem) {
-    const caption = [heroItem.gameName, heroDiscount, heroPay].filter(Boolean).join(' · ');
-    container.addMediaGalleryComponents(
-      new MediaGalleryBuilder().addItems(
-        new MediaGalleryItemBuilder().setURL(hero).setDescription(caption.slice(0, 100)),
-      ),
-    );
-  } else if (top.length > 0) {
-    container.addSeparatorComponents(
-      new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large),
-    );
-  }
-
   top.forEach((item, index) => {
-    if (index === 1) {
+    if (index > 0) {
       container.addSeparatorComponents(
         new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small),
       );
     }
-    container.addSectionComponents(
-      buildSteamDealSection(item, index, prices.get(item.id) ?? null, reviews.get(item.id)),
-    );
+    container.addSectionComponents(buildSteamDealSection(item, prices.get(item.id) ?? null));
   });
 
   container

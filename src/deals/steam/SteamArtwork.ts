@@ -119,12 +119,9 @@ export async function attachSteamArtwork(items: SteamDealItem[]): Promise<void> 
     return pending;
   };
 
-  const liveByItem = new Map<SteamDealItem, string | undefined>();
-
   await mapPool(items, 4, async (item) => {
     const appId = extractAppId(item.link);
     const live = liveStoreImage(item.image);
-    liveByItem.set(item, live);
     const sharp = await firstHit(
       [
         appId ? classicArt(appId, 'library_600x900.jpg') : undefined,
@@ -149,32 +146,6 @@ export async function attachSteamArtwork(items: SteamDealItem[]): Promise<void> 
 
     item.image = live && (await classify(live, cache)) !== 'miss' ? live : undefined;
   });
-
-  const lead = items[0];
-  if (!lead) return;
-  const appId = extractAppId(lead.link);
-  const live = liveByItem.get(lead);
-  const wide = await firstHit(
-    [
-      appId ? classicArt(appId, 'library_hero.jpg') : undefined,
-      appId ? classicArt(appId, 'capsule_616x353.jpg') : undefined,
-      appId ? classicArt(appId, 'header.jpg') : undefined,
-      siblingArt(live, 'library_hero.jpg'),
-      siblingArt(live, 'capsule_616x353.jpg'),
-      siblingArt(live, 'header.jpg'),
-    ],
-    cache,
-  );
-  if (wide) {
-    lead.heroImage = wide;
-    return;
-  }
-  const official = appId ? await officialFor(appId) : undefined;
-  if (official && (await classify(official, cache)) === 'hit') {
-    lead.heroImage = official;
-    return;
-  }
-  lead.heroImage = live && (await classify(live, cache)) !== 'miss' ? live : lead.image;
 }
 
 async function mapPool<T>(

@@ -6,9 +6,10 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { DISCORD_TOKEN, config } from '../src/config';
-import { STEAM_DIGEST_SIZE } from '../src/core/display';
+import { STEAM_DIGEST_SIZE, STEAM_SHELF_MARKER, buildSteamDealsDisplay } from '../src/core/display';
+import type { SteamDealItem } from '../src/core/types';
 import { SteamFeedReader } from '../src/deals/steam/SteamFeedReader';
-import { SteamSpecialsReader } from '../src/deals/steam/SteamSpecialsReader';
+import { SteamSpecialsReader, parseSteamSearchHtml } from '../src/deals/steam/SteamSpecialsReader';
 import { extractAppId, fetchSteamPrice } from '../src/deals/steam/SteamPriceApi';
 import { fetchSteamReview, isGoodReview } from '../src/deals/steam/SteamReviewApi';
 import { selectSteamDigest, uniqueSteamApps } from '../src/deals/steam/select-digest';
@@ -129,6 +130,95 @@ async function checkSpotify(): Promise<void> {
   }
 }
 
+const SEARCH_ROW = `
+<a href="https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/"
+ data-ds-appid="1174180" data-ds-tagids="[1695,3841,1659,19]">
+  <div class="search_capsule"><img src="https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1174180/capsule_231x87.jpg"></div>
+  <div class="search_name ellipsis"><span class="title">Red Dead Redemption 2</span></div>
+  <div class="search_released responsive_secondrow">5 Dec, 2019</div>
+  <div class="discount_block" data-discount="75">
+    <div class="discount_pct">-75%</div>
+    <div class="discount_original_price">59,99€</div>
+    <div class="discount_final_price">14,99€</div>
+  </div>
+</a>`;
+
+function checkSteamRows(): void {
+  const parsed = parseSteamSearchHtml(SEARCH_ROW).items[0];
+  if (
+    !parsed ||
+    parsed.released !== '5 Dec, 2019' ||
+    parsed.tagIds?.join(',') !== '1695,3841,1659,19'
+  ) {
+    fail(
+      'steam-row-parse',
+      `released=${parsed?.released ?? 'missing'} tags=${parsed?.tagIds?.join(',') ?? 'missing'}`,
+    );
+    return;
+  }
+  const featured: SteamDealItem = {
+    id: 'steam_1174180',
+    title: 'Red Dead Redemption 2',
+    gameName: 'Red Dead Redemption 2',
+    link: 'https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/',
+  };
+  const kept = uniqueSteamApps([featured, parsed])[0];
+  if (kept?.released !== '5 Dec, 2019' || kept.tagIds?.join(',') !== '1695,3841,1659,19') {
+    fail('steam-row-merge', 'featured row did not keep the search release date and tag ids');
+    return;
+  }
+
+  const priced: SteamDealItem = {
+    ...kept,
+    tags: 'Open World · Western · Story Rich · Action',
+    image: 'https://cdn.akamai.steamstatic.com/steam/apps/1174180/library_600x900.jpg',
+  };
+  const quiet: SteamDealItem = {
+    id: 'steam_1',
+    title: 'Plain Game',
+    gameName: 'Plain Game',
+    link: 'https://store.steampowered.com/app/1/Plain/',
+    salePrice: '9,99€',
+  };
+  const display = buildSteamDealsDisplay(
+    [priced, quiet],
+    new Map([
+      [priced.id, '~~59,99€~~ → **14,99€** (-75%)'],
+      [quiet.id, '**9,99€**'],
+    ]),
+  );
+  const blob = JSON.stringify(display.components.map((component) => component.toJSON()));
+  const wants = [
+    'Steam Daily Deals',
+    STEAM_SHELF_MARKER,
+    '### [Red Dead Redemption 2](https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/)',
+    '-# Open World · Western · Story Rich · Action',
+    '-# Released 5 Dec 2019',
+    '`-75%`  ~~59,99€~~  **14,99€**',
+    '### [Plain Game](https://store.steampowered.com/app/1/Plain/)',
+    '**9,99€**',
+  ];
+  const missing = wants.filter((part) => !blob.includes(part));
+  if (missing.length > 0 || blob.includes('92;42') || blob.includes('"type":12')) {
+    fail(
+      'steam-row-card',
+      missing.length > 0
+        ? `missing ${missing.join(' | ')}`
+        : 'hero gallery or green chip still present',
+    );
+    return;
+  }
+  if (
+    blob.includes('Released') &&
+    blob.includes('Plain Game') &&
+    /Plain Game[\s\S]{0,200}Released/.test(blob)
+  ) {
+    fail('steam-row-card', 'plain game picked up a release line');
+    return;
+  }
+  ok('steam-row-card', 'store row, prices, and no hero chip');
+}
+
 async function checkSteam(): Promise<void> {
   try {
     const items = await new SteamFeedReader().read();
@@ -236,6 +326,7 @@ async function checkDiscord(): Promise<void> {
 
 async function main(): Promise<void> {
   console.log('Running live verification (no Discord posts)…\n');
+  checkSteamRows();
   await checkFfmpeg();
   await checkSpotify();
   await checkSteam();

@@ -103,5 +103,11 @@ export interface SteamDealItem {
   image?: string;
   /** Wide banner for the top deal. */
   heroImage?: string;
+  /** Store release date as Steam prints it, e.g. "5 Dec, 2019". */
+  released?: string;
+  /** Steam store tag ids, most relevant first. */
+  tagIds?: number[];
+  /** Up to four tag or genre names for the digest row. */
+  tags?: string;
   isoDate?: string;
 }

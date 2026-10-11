@@ -79,6 +79,9 @@ export interface SteamStoreProfile {
   discountPercent: number;
   initialFormatted?: string;
   finalFormatted?: string;
+  /** Store release date, omitted for unreleased games. */
+  releaseDate?: string;
+  genres: string[];
 }
 
 interface RawApp {
@@ -96,8 +99,13 @@ interface RawApp {
       initial_formatted?: string;
       final_formatted?: string;
     };
+    release_date?: { coming_soon?: boolean; date?: string };
+    genres?: Array<{ description?: string }>;
   };
 }
+
+const STEAM_TAG_URL = 'https://store.steampowered.com/tagdata/populartags/english';
+const SHELF_TAG_LIMIT = 4;
 
 /** Store blurb, one sentence, safe to drop into a Discord text row. */
 export function cleanSteamBlurb(value: string | undefined, max = 150): string {
@@ -186,19 +194,74 @@ export async function attachStoreProfiles(
   });
 }
 
-/** Fill Steam blurbs for rows that were not part of the blockbuster lookup. */
-export async function attachSteamBlurbs(
+/**
+ * Tag line and release date for the digest rows. Search tags win. Genres from
+ * the store profile fill a row whose tag ids did not resolve.
+ */
+export async function attachSteamShelfMeta(
   items: SteamDealItem[],
   cache = new Map<string, SteamStoreProfile | null>(),
 ): Promise<void> {
-  const missing = items.filter((item) => !cleanSteamBlurb(item.description));
-  await mapPool(missing, 4, async (item) => {
+  const names = await fetchSteamTagNames();
+  await mapPool(items, 4, async (item) => {
+    const fromTags = tagLine(item.tagIds, names);
+    if (fromTags) item.tags = fromTags;
+    if (item.released && item.tags) return;
     const appId = extractAppId(item.link);
-    if (!appId) return;
-    const profile = await loadProfile(appId, cache);
-    if (!profile?.shortDescription) return;
-    item.description = cleanSteamBlurb(profile.shortDescription);
+    if (appId) {
+      const profile = await loadProfile(appId, cache);
+      if (profile) {
+        if (!item.released && profile.releaseDate) item.released = profile.releaseDate;
+        if (!item.tags && profile.genres.length > 0) {
+          item.tags = profile.genres.slice(0, SHELF_TAG_LIMIT).join(' · ');
+        }
+      }
+    }
+    if (!item.tags && item.genres) {
+      const genres = item.genres
+        .split(/[,·]/)
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0)
+        .slice(0, SHELF_TAG_LIMIT);
+      if (genres.length > 0) item.tags = genres.join(' · ');
+    }
   });
+}
+
+async function fetchSteamTagNames(): Promise<Map<number, string>> {
+  const names = new Map<number, string>();
+  try {
+    const response = await fetch(STEAM_TAG_URL, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!response.ok) return names;
+    const json = (await response.json()) as Array<{ tagid?: number; name?: string }>;
+    if (!Array.isArray(json)) return names;
+    for (const row of json) {
+      const name = row.name?.replace(/\s+/g, ' ').trim();
+      if (typeof row.tagid === 'number' && name) names.set(row.tagid, name);
+    }
+  } catch {
+    return names;
+  }
+  return names;
+}
+
+function tagLine(ids: number[] | undefined, names: Map<number, string>): string {
+  if (!ids?.length || names.size === 0) return '';
+  const picked: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    const name = names.get(id);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    picked.push(name);
+    if (picked.length === SHELF_TAG_LIMIT) break;
+  }
+  return picked.join(' · ');
 }
 
 function applyProfile(item: SteamDealItem, profile: SteamStoreProfile): void {
@@ -249,6 +312,12 @@ async function fetchProfile(appId: string): Promise<SteamStoreProfile | null> {
         discountPercent: price?.discount_percent ?? 0,
         initialFormatted: price?.initial_formatted,
         finalFormatted: price?.final_formatted,
+        releaseDate: data.release_date?.coming_soon
+          ? undefined
+          : data.release_date?.date?.replace(/\s+/g, ' ').trim() || undefined,
+        genres: (data.genres ?? [])
+          .map((genre) => genre.description?.replace(/\s+/g, ' ').trim() ?? '')
+          .filter((genre) => genre.length > 0),
       };
     } catch {
       return null;
