@@ -3,12 +3,13 @@ import ffmpegPath from 'ffmpeg-static';
 import '@snazzah/davey';
 import 'libsodium-wrappers';
 import { Cron } from 'croner';
-import { Events, type Client } from 'discord.js';
+import { ChannelType, Events, type Client } from 'discord.js';
 import { buildCommandCollection } from './commands';
 import { DISCORD_TOKEN, config } from './config';
 import { createClient } from './core/client';
 import { logger, type Logger } from './core/logger';
 import type { Services } from './core/types';
+import { ensureGuildSettingsColumns } from './db/client';
 import { migrateJsonStoresIfNeeded } from './db/migrate-json';
 import { EpicFreeGamesService } from './deals/epic/EpicFreeGamesService';
 import { GuildSettingsStore } from './deals/guild-settings';
@@ -33,6 +34,7 @@ async function main(): Promise<void> {
   const client = createClient();
   const commands = buildCommandCollection();
 
+  await ensureGuildSettingsColumns();
   await migrateJsonStoresIfNeeded();
 
   const guildSettings = new GuildSettingsStore();
@@ -43,11 +45,18 @@ async function main(): Promise<void> {
   const kitchen = new KitchenBoard(client, music, radio, guildSettings, config, logger);
   const presence = new StereoPresence(client, music, radio, kitchen, logger);
   kitchen.setPresenceTick(() => presence.tick());
-  radio.setOnStation((guildId, station) => {
-    void guildSettings.upsert(guildId, { lastRadioStation: station.id }).catch((error) => {
-      logger.debug('Failed to remember last radio station:', error);
-    });
+  radio.setOnStation((guildId, station, channelId) => {
+    void guildSettings
+      .upsert(guildId, { lastRadioStation: station.id, lastRadioChannelId: channelId })
+      .catch((error) => {
+        logger.debug('Failed to remember last radio station:', error);
+      });
     presence.tick();
+  });
+  radio.setOnLeave((guildId) => {
+    void guildSettings.upsert(guildId, { lastRadioChannelId: null }).catch((error) => {
+      logger.debug('Failed to forget last radio channel:', error);
+    });
   });
   music.setIdleHandoff((guildId, channelId) => {
     void handOffIdleToRadio(client, radio, kitchen, guildSettings, logger, guildId, channelId);
@@ -87,6 +96,9 @@ async function main(): Promise<void> {
 
     kitchen.attach();
     presence.attach();
+    void resumeRadios(client, radio, kitchen, guildSettings, logger).catch((error) => {
+      logger.error('Radio resume failed:', error);
+    });
     void Promise.all([runSteam('Initial'), runEpic('Initial')]).finally(() => {
       void kitchen.refreshAll();
     });
@@ -110,6 +122,48 @@ async function main(): Promise<void> {
   });
 
   await client.login(DISCORD_TOKEN);
+}
+
+async function resumeRadios(
+  client: Client,
+  radio: RadioManager,
+  kitchen: KitchenBoard,
+  guildSettings: GuildSettingsStore,
+  logger: Logger,
+): Promise<void> {
+  const rows = await guildSettings.all();
+  for (const row of rows) {
+    if (!row.idleRadioEnabled || !row.lastRadioChannelId || !row.lastRadioStation) continue;
+    const station = getStation(row.lastRadioStation);
+    if (!station) continue;
+
+    const guild =
+      client.guilds.cache.get(row.guildId) ??
+      (await client.guilds.fetch(row.guildId).catch(() => null));
+    if (!guild) continue;
+
+    const raw =
+      guild.channels.cache.get(row.lastRadioChannelId) ??
+      (await guild.channels.fetch(row.lastRadioChannelId).catch(() => null));
+    if (!raw?.isVoiceBased() || raw.type === ChannelType.GuildStageVoice) {
+      logger.info(`Radio resume skipped in ${guild.name}: channel is not a voice channel.`);
+      continue;
+    }
+
+    const humans = [...raw.members.values()].filter((member) => !member.user.bot);
+    if (humans.length === 0) {
+      logger.info(`Radio resume skipped in ${guild.name}: voice channel empty.`);
+      continue;
+    }
+
+    try {
+      await radio.play(raw, station);
+      logger.info(`Radio resume: ${station.name} in ${guild.name} (#${raw.name}).`);
+      kitchen.refresh(row.guildId);
+    } catch (error) {
+      logger.error(`Radio resume failed in ${guild.name}:`, error);
+    }
+  }
 }
 
 async function handOffIdleToRadio(

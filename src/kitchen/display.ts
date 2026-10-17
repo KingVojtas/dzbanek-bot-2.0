@@ -141,28 +141,55 @@ function cookieLine(joins: number): string {
   return `🍪 **${joins}** cookies out of the jar today`;
 }
 
-function dealSection(
+function addDeal(
+  container: ContainerBuilder,
   teaser: KitchenDealTeaser | undefined,
   emptyKicker: string,
   empty: string,
-): SectionBuilder {
+): void {
   if (!teaser) {
-    return new SectionBuilder().addTextDisplayComponents(
+    container.addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         `-# ${emptyKicker}\n*Nothing on the counter yet.*\n-# ${empty}`.slice(0, 4000),
       ),
     );
+    return;
   }
 
   const title = teaser.title.slice(0, 120);
   const headingLine = teaser.url ? `### [${title}](${teaser.url})` : `### ${title}`;
   const lines = [`-# ${teaser.kicker}`, headingLine, teaser.line.slice(0, 200)];
+  addTextOrSection(container, lines.join('\n'), teaser.image, title, teaser.url);
+}
+
+/**
+ * A section has to carry a thumbnail or a button. Text with neither stays a
+ * plain text block so an empty cupboard or a missing image still posts.
+ */
+function addTextOrSection(
+  container: ContainerBuilder,
+  text: string,
+  thumbUrl: string | undefined,
+  alt: string,
+  link?: string,
+): void {
+  const content = text.slice(0, 4000);
+  const thumb = thumbnailFor(thumbUrl, alt);
+  const href = link && /^https?:\/\//i.test(link) ? link : undefined;
+  if (!thumb && !href) {
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(content));
+    return;
+  }
   const section = new SectionBuilder().addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(lines.join('\n').slice(0, 4000)),
+    new TextDisplayBuilder().setContent(content),
   );
-  const thumb = thumbnailFor(teaser.image, title);
   if (thumb) section.setThumbnailAccessory(thumb);
-  return section;
+  else {
+    section.setButtonAccessory(
+      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open').setURL(href!),
+    );
+  }
+  container.addSectionComponents(section);
 }
 
 function kitchenFiles(): AttachmentBuilder[] {
@@ -202,13 +229,6 @@ export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay
   stereoLines.push('');
   stereoLines.push(listenerBlock(view));
 
-  const stereoSection = new SectionBuilder().addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(stereoLines.join('\n').slice(0, 4000)),
-  );
-  const logo = art.logo && art.logo !== art.hero ? art.logo : undefined;
-  const stereoThumb = thumbnailFor(logo, stereo.sourceLabel || stereo.title);
-  if (stereoThumb) stereoSection.setThumbnailAccessory(stereoThumb);
-
   const footer = [cookieLine(view.joinsToday)];
   if (view.radioVote) {
     const bits = STATION_LIST.map(
@@ -235,14 +255,21 @@ export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay
     );
   }
 
-  container.addSectionComponents(stereoSection).addSeparatorComponents(largeSep());
+  // Keep the logo even when it is the same file as the hero. Rock Radio uses one
+  // JPEG for both, and a section with no thumbnail fails to serialize.
+  addTextOrSection(
+    container,
+    stereoLines.join('\n'),
+    art.logo ?? art.hero,
+    stereo.sourceLabel || stereo.title,
+    stereo.websiteUrl ?? stereo.titleUrl,
+  );
+  container.addSeparatorComponents(largeSep());
 
   const steamEmpty =
     view.steamCount > 0 ? `${view.steamCount} on the board` : 'Waiting for the next Steam poll.';
-  container.addSectionComponents(
-    dealSection(view.steam, 'STEAM', steamEmpty),
-    dealSection(view.epic, 'EPIC', 'Waiting for the next Epic lineup.'),
-  );
+  addDeal(container, view.steam, 'STEAM', steamEmpty);
+  addDeal(container, view.epic, 'EPIC', 'Waiting for the next Epic lineup.');
 
   container
     .addSeparatorComponents(largeSep())
@@ -312,7 +339,9 @@ export function kitchenViewKey(view: KitchenBoardView): string {
     view.voiceChannelName ?? '',
     view.listeners.map((m) => m.id).join(','),
     view.steam?.title ?? '',
+    view.steam?.line ?? '',
     view.epic?.title ?? '',
+    view.epic?.line ?? '',
     String(view.joinsToday),
     view.radioNight?.stationName ?? '',
     view.latestCatch

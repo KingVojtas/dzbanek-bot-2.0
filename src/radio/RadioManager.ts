@@ -14,12 +14,19 @@ const JOIN_TIMEOUT_MS = 20_000;
 /** Tracks one live-radio session per guild. */
 export class RadioManager {
   private readonly sessions = new Map<string, RadioSession>();
-  private onStation: ((guildId: string, station: RadioStation) => void) | null = null;
+  private onStation: ((guildId: string, station: RadioStation, channelId: string) => void) | null =
+    null;
+  private onLeave: ((guildId: string) => void) | null = null;
 
   constructor(private readonly logger: Logger) {}
 
-  setOnStation(fn: (guildId: string, station: RadioStation) => void): void {
+  setOnStation(fn: (guildId: string, station: RadioStation, channelId: string) => void): void {
     this.onStation = fn;
+  }
+
+  /** Fired when radio is stopped on purpose, so a later restart does not rejoin. */
+  setOnLeave(fn: (guildId: string) => void): void {
+    this.onLeave = fn;
   }
 
   isPlaying(guildId: string): boolean {
@@ -42,7 +49,7 @@ export class RadioManager {
     return this.sessions.get(guildId);
   }
 
-  stop(guildId: string): void {
+  stop(guildId: string, opts?: { forgetChannel?: boolean }): void {
     const session = this.sessions.get(guildId);
     if (!session) return;
     try {
@@ -51,6 +58,12 @@ export class RadioManager {
       /* ignore */
     }
     this.sessions.delete(guildId);
+    if (opts?.forgetChannel === false) return;
+    try {
+      this.onLeave?.(guildId);
+    } catch {
+      /* persistence must not break playback */
+    }
   }
 
   /**
@@ -67,7 +80,7 @@ export class RadioManager {
       const sameChannel = existing.channelId === channel.id;
       if (sameChannel && existing.isLive && status === VoiceConnectionStatus.Ready) {
         if (existing.station.id === station.id) {
-          this.remember(guildId, station);
+          this.remember(guildId, station, channel.id);
           return existing;
         }
         this.logger.info(
@@ -81,13 +94,13 @@ export class RadioManager {
           this.logger.error(`${station.name} failed to start in guild ${guildId}:`, err);
           throw err;
         }
-        this.remember(guildId, station);
+        this.remember(guildId, station, channel.id);
         return existing;
       }
       this.logger.warn(
         `Replacing radio session for ${guildId} (status=${status}, sameChannel=${sameChannel})`,
       );
-      this.stop(guildId);
+      this.stop(guildId, { forgetChannel: false });
     }
 
     try {
@@ -141,13 +154,13 @@ export class RadioManager {
     this.logger.info(
       `${station.name} started in guild ${guildId} → #${channel.name} (${channel.id})`,
     );
-    this.remember(guildId, station);
+    this.remember(guildId, station, channel.id);
     return session;
   }
 
-  private remember(guildId: string, station: RadioStation): void {
+  private remember(guildId: string, station: RadioStation, channelId: string): void {
     try {
-      this.onStation?.(guildId, station);
+      this.onStation?.(guildId, station, channelId);
     } catch {
       /* persistence must not break playback */
     }

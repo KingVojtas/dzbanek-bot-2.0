@@ -22,6 +22,20 @@ function createPrismaClient(): PrismaClient {
 
 export const prisma = global.prisma ?? createPrismaClient();
 
+/**
+ * The Mac mini keeps its own SQLite file across deploys, and the container
+ * does not run `prisma db push`. Add columns the current client selects.
+ */
+export async function ensureGuildSettingsColumns(): Promise<void> {
+  const columns = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
+    'PRAGMA table_info("GuildSettings")',
+  );
+  if (columns.some((column) => column.name === 'lastRadioChannelId')) return;
+  await prisma.$executeRawUnsafe(
+    'ALTER TABLE "GuildSettings" ADD COLUMN "lastRadioChannelId" TEXT',
+  );
+}
+
 if (process.env.NODE_ENV !== 'production') {
   global.prisma = prisma;
 }

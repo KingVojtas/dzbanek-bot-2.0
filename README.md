@@ -17,7 +17,7 @@ Now Playing is a Components v2 card: album art, a progress bar, and transport bu
 | Command              | What it does                                                                            |
 | -------------------- | --------------------------------------------------------------------------------------- |
 | `/play <query>`      | Join your voice channel and play a track, or add it to the queue. Optional `play_next`. |
-| `/queue`             | Show the upcoming queue, page by page.                                                  |
+| `/queue`             | Show the current track and the upcoming queue as a card, page by page.                  |
 | `/stop`              | Stop playback, clear the queue, delete the Now Playing card, and leave.                 |
 | `/remove <position>` | Drop one upcoming track (1-based).                                                      |
 
@@ -53,9 +53,11 @@ The card has **Website**, **Catch**, and **Stop**. Stop wants you in the bot’s
 
 Radio stays up. It does not wander off during a quiet stretch. Switching stations reuses the same connection and retires the previous card.
 
+A restart puts that station back on if idle-radio is still on and people are still in the voice channel. `/radio stop` clears the channel, so a restart after a stop stays quiet. The first boot after this change has no channel saved yet, so `/radio play` is needed once.
+
 ### 🍪 The Kitchen Board
 
-`/setup kitchen` hangs one living card in a channel and keeps editing that same message: the stereo, who’s in voice, the top Steam deal, the Epic free game, how many people joined today, and Radio Night when it’s on the calendar.
+`/setup kitchen` hangs one living card in a channel and keeps editing that same message: the stereo, who’s in voice, the top Steam deal (price, review, and when the sale ends), the Epic free game, how many people joined today, and Radio Night when it’s on the calendar.
 
 Discord presence follows the loudest server. Radio first 🎧, then music 🎵, then the top Steam headline 💸, and a quiet kitchen when the house is still.
 

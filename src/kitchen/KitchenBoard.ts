@@ -12,7 +12,7 @@ import {
 import type { Config } from '../config';
 import type { Logger } from '../core/logger';
 import type { EpicFreeGame, SteamDealItem } from '../core/types';
-import { collectMessageTextContent } from '../core/display';
+import { collectMessageTextContent, formatSaleEnd } from '../core/display';
 import type { SeenStore } from '../deals/seen-store';
 import { resolveGuildSendableChannel } from '../deals/targets';
 import type { GuildSettingsStore } from '../deals/guild-settings';
@@ -531,8 +531,9 @@ function steamTeaser(snap: SteamSnapshot | undefined): KitchenDealTeaser | undef
   const discount = item.discount?.replace(/[()]/g, '').trim();
   const price = snap?.prices.get(item.id);
   const review = snap?.reviews.get(item.id);
+  const ends = formatSaleEnd(item.expires);
   const extra = snap.items.length > 1 ? ` · ${snap.items.length} on sale` : '';
-  const bits = [price, review].filter(Boolean);
+  const bits = [price, review, ends].filter(Boolean);
   return {
     title: item.gameName,
     kicker: `${discount ? `STEAM · ${discount}` : 'STEAM'}${extra}`,

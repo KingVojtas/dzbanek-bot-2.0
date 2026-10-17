@@ -38,6 +38,8 @@ model GuildSettings {
   radioNightChannelId  String?
   radioNightStation    String?
   lastRadioStation     String?
+  /// Voice channel playing radio. Cleared on /radio stop. Used to rejoin after a restart.
+  lastRadioChannelId   String?
   idleRadioEnabled     Boolean  @default(true)
   updatedAt            DateTime @updatedAt
 }

@@ -19,6 +19,7 @@ export interface GuildSettings {
   radioNightChannelId: string | null;
   radioNightStation: string | null;
   lastRadioStation: string | null;
+  lastRadioChannelId: string | null;
   idleRadioEnabled: boolean;
 }
 
@@ -42,6 +43,7 @@ function defaults(guildId: string): GuildSettings {
     radioNightChannelId: null,
     radioNightStation: null,
     lastRadioStation: null,
+    lastRadioChannelId: null,
     idleRadioEnabled: true,
   };
 }
@@ -66,6 +68,7 @@ function fromRow(row: GuildSettings): GuildSettings {
     radioNightChannelId: row.radioNightChannelId,
     radioNightStation: row.radioNightStation,
     lastRadioStation: row.lastRadioStation,
+    lastRadioChannelId: row.lastRadioChannelId,
     idleRadioEnabled: row.idleRadioEnabled,
   };
 }
@@ -109,6 +112,7 @@ export class GuildSettingsStore {
         radioNightChannelId: next.radioNightChannelId,
         radioNightStation: next.radioNightStation,
         lastRadioStation: next.lastRadioStation,
+        lastRadioChannelId: next.lastRadioChannelId,
         idleRadioEnabled: next.idleRadioEnabled,
       },
     });

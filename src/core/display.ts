@@ -12,7 +12,14 @@ import {
   ThumbnailBuilder,
   type MessageActionRowComponentBuilder,
 } from 'discord.js';
-import { formatClock, formatDuration, formatViews } from './embeds';
+import {
+  QUEUE_PAGE_SIZE,
+  formatClock,
+  formatDuration,
+  formatViews,
+  queueTotalPages,
+  upcomingQueue,
+} from './embeds';
 import type { EpicFreeGame, LoopMode, SteamDealItem, Track } from './types';
 
 const STEAM_COLOR = 0x66c0f4;
@@ -168,6 +175,87 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): V2Displa
   return { components: [container], flags: MessageFlags.IsComponentsV2 };
 }
 
+/** Page buttons on the queue card. `queue:page:0` is the first page. */
+export const QUEUE_BUTTON_PREFIX = 'queue:page:';
+
+/**
+ * Queue card: current track and its art, one page of what follows, and the
+ * page buttons inside the card.
+ */
+export function buildQueueDisplay(current: Track | null, queue: Track[], page = 0): V2Display {
+  const upcoming = upcomingQueue(current, queue);
+  const totalPages = queueTotalPages(upcoming.length, QUEUE_PAGE_SIZE);
+  const safePage = Math.min(Math.max(0, page), totalPages - 1);
+  const start = safePage * QUEUE_PAGE_SIZE;
+  const pageTracks = upcoming.slice(start, start + QUEUE_PAGE_SIZE);
+  const accent = musicAccent(current?.source);
+
+  const lines: string[] = [];
+  if (current) {
+    const url = current.sourceUrl || current.url;
+    const title = current.title.slice(0, 200);
+    const artist = current.uploader ? `*${current.uploader.slice(0, 80)}*` : '';
+    lines.push(
+      `**Now playing** · ${musicSourceLabel(current.source)}`,
+      url ? `### [${title}](${url})` : `### ${title}`,
+    );
+    if (artist) lines.push(artist);
+    lines.push(`\`${formatDuration(current.durationSec)}\` · ${current.requestedBy}`);
+  } else {
+    lines.push('**Nothing playing**');
+  }
+
+  if (pageTracks.length > 0) {
+    lines.push('', `**Up next** · page **${safePage + 1}/${totalPages}**`);
+    pageTracks.forEach((track, i) => {
+      const n = start + i + 1;
+      const url = track.sourceUrl || track.url;
+      const title = track.title.slice(0, 70);
+      const artist = track.uploader ? ` · ${track.uploader.slice(0, 40)}` : '';
+      const linked = url ? `[${title}](${url})` : title;
+      lines.push(
+        `\` ${String(n).padStart(2, ' ')} \` ${linked} \`${formatDuration(track.durationSec)}\`${artist}`,
+      );
+    });
+  } else if (current) {
+    lines.push('', '*Queue is empty after this track.*');
+  } else {
+    lines.push('', 'The queue is empty.');
+  }
+
+  const container = new ContainerBuilder().setAccentColor(accent);
+  const hero =
+    current?.thumbnail && /^https?:\/\//i.test(current.thumbnail) ? current.thumbnail : '';
+  if (hero) {
+    container.addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(
+        new MediaGalleryItemBuilder()
+          .setURL(hero)
+          .setDescription((current?.title ?? 'Queue').slice(0, 100)),
+      ),
+    );
+  }
+
+  addTextOrSection(container, lines.join('\n'), hero || undefined, current?.title ?? 'Queue');
+
+  container.addSeparatorComponents(new SeparatorBuilder().setDivider(true)).addActionRowComponents(
+    new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${QUEUE_BUTTON_PREFIX}${safePage - 1}`)
+        .setLabel('◀ Prev')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safePage <= 0),
+      new ButtonBuilder()
+        .setCustomId(`${QUEUE_BUTTON_PREFIX}${safePage + 1}`)
+        .setLabel('Next ▶')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safePage >= totalPages - 1),
+    ),
+  );
+
+  return { components: [container], flags: MessageFlags.IsComponentsV2 };
+}
+
 /** Compact “added to queue” card (no transport buttons). */
 export function buildQueuedTrackDisplay(
   track: Track,
@@ -226,6 +314,36 @@ function fitRows(desired: number, perRow: number, overhead: number): number {
 function thumbnailFor(url: string | undefined, alt: string): ThumbnailBuilder | null {
   if (!url || !/^https?:\/\//i.test(url)) return null;
   return new ThumbnailBuilder().setURL(url).setDescription(alt.slice(0, 100));
+}
+
+/**
+ * A section must carry a thumbnail or a button. Text with neither is a plain
+ * text block, which still renders.
+ */
+function addTextOrSection(
+  container: ContainerBuilder,
+  text: string,
+  thumbUrl: string | undefined,
+  alt: string,
+  link?: string,
+): void {
+  const content = text.slice(0, 4000);
+  const thumb = thumbnailFor(thumbUrl, alt);
+  const href = link && /^https?:\/\//i.test(link) ? link : undefined;
+  if (!thumb && !href) {
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(content));
+    return;
+  }
+  const section = new SectionBuilder().addTextDisplayComponents(
+    new TextDisplayBuilder().setContent(content),
+  );
+  if (thumb) section.setThumbnailAccessory(thumb);
+  else {
+    section.setButtonAccessory(
+      new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Open').setURL(href!),
+    );
+  }
+  container.addSectionComponents(section);
 }
 
 function httpImage(url: string | undefined): string | undefined {
@@ -292,7 +410,7 @@ function formatReleased(value: string | undefined): string {
 }
 
 /** "2026-10-19" → "Ends 19 Oct". The year stays when it is not this year. */
-function formatSaleEnd(value: string | undefined): string {
+export function formatSaleEnd(value: string | undefined): string {
   const text = value?.replace(/\s+/g, ' ').trim() ?? '';
   if (!text) return '';
   const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);

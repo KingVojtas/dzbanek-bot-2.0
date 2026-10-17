@@ -2,22 +2,18 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ContainerBuilder,
   Events,
   GuildMember,
   MessageFlags,
+  TextDisplayBuilder,
   type ButtonInteraction,
   type Client,
   type Collection,
   type InteractionReplyOptions,
 } from 'discord.js';
-import { QUEUE_BUTTON_PREFIX, queueButtons } from '../commands/music/queue';
-import {
-  QUEUE_PAGE_SIZE,
-  buildInfoEmbed,
-  buildQueueEmbed,
-  queueTotalPages,
-  upcomingQueue,
-} from '../core/embeds';
+import { QUEUE_BUTTON_PREFIX, buildQueueDisplay } from '../core/display';
+import { buildInfoEmbed } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { RadioCatchStore } from '../kitchen/catches';
 import { CATCH_PLAY_PREFIX, RADIO_VOTE_PREFIX } from '../kitchen/display';
@@ -100,22 +96,22 @@ async function handleButton(interaction: ButtonInteraction, services: Services):
   const player = services.music.get(interaction.guildId);
   if (!player) {
     await interaction.update({
-      content: 'The queue is no longer active.',
       embeds: [],
-      components: [],
+      components: [
+        new ContainerBuilder().addTextDisplayComponents(
+          new TextDisplayBuilder().setContent('The queue is no longer active.'),
+        ),
+      ],
+      flags: MessageFlags.IsComponentsV2,
     });
     return;
   }
 
-  const totalPages = queueTotalPages(
-    upcomingQueue(player.current, player.queue).length,
-    QUEUE_PAGE_SIZE,
-  );
-  const safePage = Math.min(Math.max(0, page), totalPages - 1);
-
+  const display = buildQueueDisplay(player.current, player.queue, page);
   await interaction.update({
-    embeds: [buildQueueEmbed(player.current, player.queue, safePage)],
-    components: [queueButtons(safePage, totalPages)],
+    embeds: [],
+    components: display.components,
+    flags: display.flags,
   });
 }
 
