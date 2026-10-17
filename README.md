@@ -83,10 +83,12 @@ Both cupboards keep what they already served in SQLite (`data/bot.db`, Prisma), 
 
 Turn on **Server Members Intent** in the Discord Developer Portal (Bot → Privileged Gateway Intents).
 
-| Event | Message                                                                                                                  |
-| ----- | ------------------------------------------------------------------------------------------------------------------------ |
-| Join  | `🍪 Hey @user! Welcome to the dark side, we have cookies. I’m Dzbanek — grab one, say hi, and don’t mind the crumbs. 😈` |
-| Leave | `👋 name just left the kitchen. Hasta la vista, baby! 🕶️🍪 We’ll keep a cookie warm in case they come back.`             |
+A join or a leave lands as a card. The server name and icon sit on the author line, their avatar is the thumbnail, and the kitchen copy stays.
+
+| Event | Card                                                                                                                                                                                                                    |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Join  | Amber embed titled **Welcome, name**. `🍪 Hey @user! Welcome to the dark side, we have cookies. I’m Dzbanek — grab one, say hi, and don’t mind the crumbs. 😈` Shows who’s in the kitchen and when they joined Discord. |
+| Leave | Dusk embed titled **name left the kitchen**. `👋 Hasta la vista, baby! 🕶️🍪 We’ll keep a cookie warm in case they come back.` Shows who’s still here, and when they sat down if Discord still knows.                    |
 
 ### 🏠 Many kitchens
 

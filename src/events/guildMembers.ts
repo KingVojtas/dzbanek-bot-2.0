@@ -1,6 +1,11 @@
 import { Events, type Client, type GuildMember, type PartialGuildMember } from 'discord.js';
 import type { Services } from '../core/types';
-import { goodbyeMessage, welcomeMessage } from '../greetings/messages';
+import {
+  buildGoodbyeEmbed,
+  buildWelcomeEmbed,
+  type GreetingPerson,
+  type GreetingPlace,
+} from '../greetings/messages';
 import { resolveGreetingChannel } from '../greetings/resolve-channel';
 
 export function registerGuildMemberEvents(client: Client, services: Services): void {
@@ -35,7 +40,9 @@ async function sendWelcome(member: GuildMember, services: Services): Promise<voi
     'welcome',
   );
   if (!channel) return;
-  await channel.send({ content: welcomeMessage(`<@${member.id}>`) });
+  await channel.send({
+    embeds: [buildWelcomeEmbed(welcomePerson(member), greetingPlace(member))],
+  });
 }
 
 async function sendGoodbye(
@@ -58,5 +65,35 @@ async function sendGoodbye(
     user?.globalName ||
     user?.username ||
     'Someone';
-  await channel.send({ content: goodbyeMessage(name) });
+  await channel.send({
+    embeds: [
+      buildGoodbyeEmbed(
+        {
+          name,
+          avatarUrl: user?.displayAvatarURL({ size: 256 }),
+          createdTimestamp: user?.createdTimestamp,
+          joinedTimestamp: member.joinedTimestamp,
+        },
+        greetingPlace(member),
+      ),
+    ],
+  });
+}
+
+function welcomePerson(member: GuildMember): GreetingPerson {
+  return {
+    name: member.displayName,
+    mention: `<@${member.id}>`,
+    avatarUrl: member.displayAvatarURL({ size: 256 }),
+    createdTimestamp: member.user.createdTimestamp,
+    joinedTimestamp: member.joinedTimestamp,
+  };
+}
+
+function greetingPlace(member: GuildMember | PartialGuildMember): GreetingPlace {
+  return {
+    name: member.guild.name,
+    iconUrl: member.guild.iconURL({ size: 128 }),
+    memberCount: member.guild.memberCount,
+  };
 }
