@@ -59,7 +59,7 @@ A restart puts that station back on if idle-radio is still on and people are sti
 
 `/setup kitchen` hangs one living card in a channel and keeps editing that same message: the stereo, who’s in voice, the top Steam deal (price, review, and when the sale ends), the Epic free game, how many people joined today, and Radio Night when it’s on the calendar.
 
-Discord presence is the well, one line an hour: Purifying the source, Analyzing bacteria levels, Pouring fresh drops. The hour follows Europe/Prague, then the list starts over.
+Discord presence is the well. Each hour in Europe/Prague the three lines play once, twenty minutes each, in a new order: Purifying the source, Analyzing bacteria levels, Pouring fresh drops.
 
 On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for the week 📬: the songs people caught, and Friday’s Radio Night tally when anyone voted. The living board stays the live stereo.
 
