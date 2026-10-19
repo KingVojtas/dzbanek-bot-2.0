@@ -92,6 +92,17 @@ A join or a leave lands as a card. The server name and icon sit on the author li
 | Join  | Amber embed titled **Welcome, name**. `🍪 Hey @user! Welcome to the dark side, we have cookies. I’m Dzbanek — grab one, say hi, and don’t mind the crumbs. 😈` Shows who’s in the kitchen and when they joined Discord. |
 | Leave | Dusk embed titled **name left the kitchen**. `👋 Hasta la vista, baby! 🕶️🍪 We’ll keep a cookie warm in case they come back.` Shows who’s still here, and when they sat down if Discord still knows.                    |
 
+### 🚪 Rooms
+
+Open a text or voice room in a category that already exists. Dzbanek reads the name and sets one emoji in front, in the sidebar style: `🍪 · the-kitchen`, `⛏️ · minecraft-vse`, `🎧 · room 1`.
+
+| Command                        | What it does                                                         |
+| ------------------------------ | -------------------------------------------------------------------- |
+| `/textroom <name> <category>`  | Text room. Spaces in the name become hyphens. Needs Manage Channels. |
+| `/voiceroom <name> <category>` | Voice room. Spaces stay spaces. Needs Manage Channels.               |
+
+A name that is already on that shelf is left alone. Dzbanek does not invent new categories.
+
 ### 🏠 Many kitchens
 
 Music and radio already keep a separate pot per server. Deals and greetings are arranged per server too:
@@ -130,6 +141,7 @@ Privileged intent: **Server Members Intent** (welcome / goodbye).
 | 🎵 Music / Radio   | Connect, Speak, View Channel                                             |
 | 💸 Steam / Epic    | View Channel, Send Messages, Embed Links, Manage Messages, Add Reactions |
 | 👋 Welcome / leave | View Channel, Send Messages                                              |
+| 🚪 Rooms           | Manage Channels                                                          |
 
 **Manage Messages** lets Dzbanek clear the previous Now Playing card and the previous digest.
 
@@ -233,8 +245,10 @@ src/
   core/                    Client, logger, types, embeds, Components v2 cards
   commands/
     admin/setup.ts         Per-server deal, greeting, and kitchen channels
+    rooms.ts               /textroom and /voiceroom
     music/                 /play, /queue, /stop, /remove
     radio.ts               /radio play, stop, night, night-off
+  rooms/                   Emoji prefixes for new channel names
   events/                  ready, interactions, member join/leave
   greetings/               Welcome / goodbye copy and channel resolve
   kitchen/                 Kitchen Board, Radio Night votes, catches, presence
