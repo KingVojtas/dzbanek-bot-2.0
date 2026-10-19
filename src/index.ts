@@ -19,7 +19,7 @@ import { registerEvents } from './events';
 import { KitchenBoard } from './kitchen/KitchenBoard';
 import { KITCHEN_CHART_CRON } from './kitchen/chart';
 import { RADIO_NIGHT_CRON } from './kitchen/display';
-import { StereoPresence } from './kitchen/presence';
+import { LorePresence } from './kitchen/presence';
 import { MusicManager } from './music/MusicManager';
 import { RadioManager } from './radio/RadioManager';
 import { getStation } from './radio/station';
@@ -43,15 +43,13 @@ async function main(): Promise<void> {
   const radio = new RadioManager(logger);
   music.setPreempt((guildId) => radio.stop(guildId));
   const kitchen = new KitchenBoard(client, music, radio, guildSettings, config, logger);
-  const presence = new StereoPresence(client, music, radio, kitchen, logger);
-  kitchen.setPresenceTick(() => presence.tick());
+  const presence = new LorePresence(client, logger, config.timezone);
   radio.setOnStation((guildId, station, channelId) => {
     void guildSettings
       .upsert(guildId, { lastRadioStation: station.id, lastRadioChannelId: channelId })
       .catch((error) => {
         logger.debug('Failed to remember last radio station:', error);
       });
-    presence.tick();
   });
   radio.setOnLeave((guildId) => {
     void guildSettings.upsert(guildId, { lastRadioChannelId: null }).catch((error) => {

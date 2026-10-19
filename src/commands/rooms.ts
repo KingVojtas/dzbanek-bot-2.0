@@ -4,10 +4,13 @@ import {
   PermissionFlagsBits,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
+  type OverwriteResolvable,
 } from 'discord.js';
 import { buildInfoEmbed } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { decorateChannelName, type RoomKind } from '../rooms/channel-name';
+
+type RoomAccess = 'public' | 'private';
 
 export const textRoom: Command = roomCommand('text');
 export const voiceRoom: Command = roomCommand('voice');
@@ -22,7 +25,7 @@ function roomCommand(kind: RoomKind): Command {
           ? 'Create a voice room in a category, with an emoji in the name.'
           : 'Create a text room in a category, with an emoji in the name.',
       )
-      .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .addStringOption((option) =>
         option
           .setName('name')
@@ -37,6 +40,13 @@ function roomCommand(kind: RoomKind): Command {
           .setDescription('Category section this room goes under.')
           .addChannelTypes(ChannelType.GuildCategory)
           .setRequired(true),
+      )
+      .addStringOption((option) =>
+        option
+          .setName('access')
+          .setDescription('Public follows the category. Private is hidden from non-administrators.')
+          .setRequired(true)
+          .addChoices({ name: 'Public', value: 'public' }, { name: 'Private', value: 'private' }),
       ),
 
     execute(interaction, services) {
@@ -53,6 +63,17 @@ async function createRoom(
   const guild = interaction.guild;
   if (!guild) {
     await reply(interaction, 'This command can only be used in a server.');
+    return;
+  }
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await reply(interaction, 'Only a server administrator can open a room.');
+    return;
+  }
+
+  const access = interaction.options.getString('access', true);
+  if (!isRoomAccess(access)) {
+    await reply(interaction, 'Pick Public or Private.');
     return;
   }
 
@@ -89,9 +110,16 @@ async function createRoom(
       name: decorated.name,
       type: kind === 'voice' ? ChannelType.GuildVoice : ChannelType.GuildText,
       parent: category.id,
-      reason: `/${kind === 'voice' ? 'voiceroom' : 'textroom'} by ${interaction.user.tag}`,
+      ...(access === 'private'
+        ? { permissionOverwrites: privateOverwrites(guild.id, interaction.user.id, me.id, kind) }
+        : {}),
+      reason: `/${kind === 'voice' ? 'voiceroom' : 'textroom'} (${access}) by ${interaction.user.tag}`,
     });
-    await reply(interaction, `Created ${created} in ${category}.`);
+    const visibility =
+      access === 'private'
+        ? 'It is private, so only administrators can see it.'
+        : 'It is public to anyone who can see that category.';
+    await reply(interaction, `Created ${created} in ${category}. ${visibility}`);
   } catch (error) {
     services.logger.error('Failed to create room:', error);
     const errMsg = error instanceof Error ? error.message : String(error || '');
@@ -104,4 +132,36 @@ function reply(interaction: ChatInputCommandInteraction, description: string): P
     embeds: [buildInfoEmbed(description)],
     flags: MessageFlags.Ephemeral,
   });
+}
+
+function isRoomAccess(value: string): value is RoomAccess {
+  return value === 'public' || value === 'private';
+}
+
+/** Hide the room from @everyone. Administrators still see it, and so does the bot. */
+function privateOverwrites(
+  everyoneId: string,
+  userId: string,
+  botId: string,
+  kind: RoomKind,
+): OverwriteResolvable[] {
+  const memberAllow =
+    kind === 'voice'
+      ? [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak]
+      : [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+        ];
+  const overwrites: OverwriteResolvable[] = [
+    { id: everyoneId, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: userId, allow: memberAllow },
+  ];
+  if (botId !== userId) {
+    overwrites.push({
+      id: botId,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ManageChannels],
+    });
+  }
+  return overwrites;
 }

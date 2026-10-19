@@ -63,7 +63,6 @@ export class KitchenBoard {
   private readonly votes = new RadioNightVoteStore();
   private readonly catches = new RadioCatchStore();
   private tickTimer: ReturnType<typeof setInterval> | null = null;
-  private presenceTick: (() => void) | null = null;
 
   constructor(
     private readonly client: Client,
@@ -73,20 +72,6 @@ export class KitchenBoard {
     private readonly config: Config,
     private readonly logger: Logger,
   ) {}
-
-  setPresenceTick(fn: () => void): void {
-    this.presenceTick = fn;
-  }
-
-  steamHeadline(): string | null {
-    for (const snap of this.steamByGuild.values()) {
-      const item = snap.items[0];
-      if (!item) continue;
-      const discount = item.discount?.replace(/[()]/g, '').trim();
-      return discount ? `${item.gameName} on sale ${discount}` : item.gameName;
-    }
-    return null;
-  }
 
   async castVote(
     guildId: string,
@@ -351,7 +336,6 @@ export class KitchenBoard {
         if (this.lastKey.get(guildId) === key) return;
         await existing.edit(payload);
         this.lastKey.set(guildId, key);
-        this.presenceTick?.();
         return;
       } catch {
         await this.guildSettings.upsert(guildId, { kitchenMessageId: null });
@@ -367,7 +351,6 @@ export class KitchenBoard {
       await recovered.edit(payload);
       await this.guildSettings.upsert(guildId, { kitchenMessageId: recovered.id });
       this.lastKey.set(guildId, key);
-      this.presenceTick?.();
       return;
     }
 
@@ -379,7 +362,6 @@ export class KitchenBoard {
     await this.guildSettings.upsert(guildId, { kitchenMessageId: sent.id });
     this.lastKey.set(guildId, key);
     this.logger.info(`Kitchen board posted in ${guild.name}.`);
-    this.presenceTick?.();
   }
 
   private async findExistingBoard(channel: SendableChannels): Promise<Message | null> {

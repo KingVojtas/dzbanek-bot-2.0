@@ -59,7 +59,7 @@ A restart puts that station back on if idle-radio is still on and people are sti
 
 `/setup kitchen` hangs one living card in a channel and keeps editing that same message: the stereo, who’s in voice, the top Steam deal (price, review, and when the sale ends), the Epic free game, how many people joined today, and Radio Night when it’s on the calendar.
 
-Discord presence follows the loudest server. Radio first 🎧, then music 🎵, then the top Steam headline 💸, and a quiet kitchen when the house is still.
+Discord presence is the well, one line an hour: Purifying the source, Analyzing bacteria levels, Pouring fresh drops. The hour follows Europe/Prague, then the list starts over.
 
 On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for the week 📬: the songs people caught, and Friday’s Radio Night tally when anyone voted. The living board stays the live stereo.
 
@@ -94,14 +94,14 @@ A join or a leave lands as a card. The server name and icon sit on the author li
 
 ### 🚪 Rooms
 
-Open a text or voice room in a category that already exists. Dzbanek reads the name and sets one emoji in front, in the sidebar style: `🍪 · the-kitchen`, `⛏️ · minecraft-vse`, `🎧 · room 1`.
+Open a text or voice room in a category that already exists. Only a server administrator can do this. Dzbanek reads the name and sets one emoji in front, in the sidebar style: `🍪 · the-kitchen`, `⛏️ · minecraft-vse`, `🎧 · room 1`.
 
-| Command                        | What it does                                                         |
-| ------------------------------ | -------------------------------------------------------------------- |
-| `/textroom <name> <category>`  | Text room. Spaces in the name become hyphens. Needs Manage Channels. |
-| `/voiceroom <name> <category>` | Voice room. Spaces stay spaces. Needs Manage Channels.               |
+| Command                                 | What it does                                                                 |
+| --------------------------------------- | ---------------------------------------------------------------------------- |
+| `/textroom <name> <category> <access>`  | Text room. Spaces in the name become hyphens. `access` is Public or Private. |
+| `/voiceroom <name> <category> <access>` | Voice room. Spaces stay spaces. `access` is Public or Private.               |
 
-A name that is already on that shelf is left alone. Dzbanek does not invent new categories.
+Public follows whoever can already see that category. Private hides the room from everyone except administrators. A name that is already on that shelf is left alone. Dzbanek does not invent new categories.
 
 ### 🏠 Many kitchens
 
