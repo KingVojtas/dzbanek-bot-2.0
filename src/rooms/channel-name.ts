@@ -6,8 +6,8 @@ export interface DecoratedChannelName {
   slug: string;
 }
 
-/** Sidebar style: one emoji, a middle dot, then the room name. */
-const SEPARATOR = ' \u00b7 ';
+/** Sidebar style: one emoji, a katakana middle dot, then the room name. */
+const SEPARATOR = '\u30fb';
 const CHANNEL_NAME_MAX = 100;
 
 interface EmojiRule {
@@ -53,7 +53,7 @@ const EMOJI_RULES: readonly EmojiRule[] = [
 ];
 
 /**
- * Turn a typed room name into the sidebar form (`🍪 · the-kitchen`).
+ * Turn a typed room name into the sidebar form (`🍪・the-kitchen`).
  * Returns null when nothing letter-or-number remains.
  */
 export function decorateChannelName(raw: string, kind: RoomKind): DecoratedChannelName | null {

@@ -94,7 +94,7 @@ A join or a leave lands as a card. The server name and icon sit on the author li
 
 ### 🚪 Rooms
 
-Open a text or voice room in a category that already exists. Only a server administrator can do this. Dzbanek reads the name and sets one emoji in front, in the sidebar style: `🍪 · the-kitchen`, `⛏️ · minecraft-vse`, `🎧 · room 1`.
+Open a text or voice room in a category that already exists. Only a server administrator can do this. Dzbanek reads the name and sets one emoji in front, in the sidebar style: `🍪・the-kitchen`, `⛏️・minecraft-vse`, `🎧・room 1`.
 
 | Command                                 | What it does                                                                 |
 | --------------------------------------- | ---------------------------------------------------------------------------- |
@@ -172,7 +172,7 @@ npm run dev       # development — auto-reloads on file changes
 npm start         # production
 ```
 
-`npm run deploy` registers **global** commands (they can take up to about an hour to appear in Discord) and clears any older command list stored on the two kitchen servers, so an old menu cannot hide the new one. Restart the Discord app if the picker still shows commands that moved onto buttons.
+`npm run deploy` registers the command list on the two kitchen servers immediately, and publishes the same list globally. Other servers can take up to about an hour. Restart the Discord app if the picker is stale.
 
 ### 🟢 Optional Spotify
 
@@ -283,13 +283,13 @@ data/bot.db                Runtime SQLite (git-ignored)
 
 ## 🔧 If something smells off
 
-| What happened                            | What to try                                                                                                                               |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Song won't play / "Could not load track" | Update yt-dlp: delete `node_modules/youtube-dl-exec` and reinstall. Set `YTDLP_COOKIES_BASE64` if YouTube asks you to prove you’re human. |
-| No audio                                 | Confirm `ffmpeg-static` came in with `npm install`, and that the bot has Connect + Speak.                                                 |
-| Slash commands missing                   | Run `npm run deploy`. Global commands can take about an hour. Restart Discord if the picker is stale.                                     |
-| `/radio` is missing the station option   | Deploy again after pulling. Type `/radio`, then pick **play** and a station.                                                              |
-| Radio Beat shows a show name             | During a program, Beat publishes the show. The card follows “Právě v éteru”. Catch waits for a real song.                                 |
-| Steam / Epic stayed quiet                | Check `/setup status` and the bot’s permissions. An unchanged lineup stays in the pot.                                                    |
-| Welcome / goodbye stayed quiet           | Enable **Server Members Intent**, then `/setup welcome` and `/setup goodbye`.                                                             |
-| An old card is stuck                     | Grant **Manage Messages** so Dzbanek can clear the previous one.                                                                          |
+| What happened                            | What to try                                                                                                                                     |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Song won't play / "Could not load track" | Update yt-dlp: delete `node_modules/youtube-dl-exec` and reinstall. Set `YTDLP_COOKIES_BASE64` if YouTube asks you to prove you’re human.       |
+| No audio                                 | Confirm `ffmpeg-static` came in with `npm install`, and that the bot has Connect + Speak.                                                       |
+| Slash commands missing                   | Run `npm run deploy`. The two kitchen servers update immediately. Other servers can take about an hour. Restart Discord if the picker is stale. |
+| `/radio` is missing the station option   | Deploy again after pulling. Type `/radio`, then pick **play** and a station.                                                                    |
+| Radio Beat shows a show name             | During a program, Beat publishes the show. The card follows “Právě v éteru”. Catch waits for a real song.                                       |
+| Steam / Epic stayed quiet                | Check `/setup status` and the bot’s permissions. An unchanged lineup stays in the pot.                                                          |
+| Welcome / goodbye stayed quiet           | Enable **Server Members Intent**, then `/setup welcome` and `/setup goodbye`.                                                                   |
+| An old card is stuck                     | Grant **Manage Messages** so Dzbanek can clear the previous one.                                                                                |
