@@ -12,7 +12,7 @@ import {
 import type { Config } from '../config';
 import type { Logger } from '../core/logger';
 import type { EpicFreeGame, SteamDealItem } from '../core/types';
-import { collectMessageTextContent, formatSaleEnd } from '../core/display';
+import { collectMessageTextContent } from '../core/display';
 import type { SeenStore } from '../deals/seen-store';
 import { resolveGuildSendableChannel } from '../deals/targets';
 import type { GuildSettingsStore } from '../deals/guild-settings';
@@ -429,6 +429,7 @@ export class KitchenBoard {
             title: caught.title,
             artist: caught.artist,
             by: catcher ? displayName(catcher) : 'Someone',
+            coverUrl: caught.coverUrl,
           }
         : undefined,
     };
@@ -440,15 +441,14 @@ export class KitchenBoard {
       const station = radioSession.station;
       const track = radioSession.nowPlaying;
       const title = track?.title?.trim() || 'Live stream';
-      const artist = track?.artist?.trim() || station.slogan;
+      const artist = track?.artist?.trim() || '';
       return {
         kind: 'radio',
         title,
         artist,
         sourceLabel: station.name,
         sourceUrl: station.websiteUrl,
-        detail: station.slogan,
-        heroUrl: track?.coverUrl || station.imageUrl,
+        heroUrl: track?.coverUrl,
         logoUrl: station.logoUrl,
         color: station.color,
         websiteUrl: station.websiteUrl,
@@ -466,7 +466,6 @@ export class KitchenBoard {
         artist: track.uploader ?? 'Unknown artist',
         sourceLabel,
         titleUrl: track.sourceUrl || track.url,
-        detail: player.paused ? '⏸️ Paused' : `Queue **${player.queue.length}**`,
         heroUrl: track.thumbnail,
         color: track.source === 'spotify' ? 0x1db954 : 0xff0000,
         paused: player.paused,
@@ -476,8 +475,8 @@ export class KitchenBoard {
 
     return {
       kind: 'quiet',
-      title: 'Oven’s off',
-      artist: 'Drop `/radio play` or `/play` and I’ll put the kettle on.',
+      title: 'The Kitchen',
+      artist: 'Nothing on.',
       sourceLabel: 'The Kitchen',
       color: KITCHEN_COLOR,
     };
@@ -509,17 +508,15 @@ function pickStationId(value: string | null | undefined): StationId | null {
 
 function steamTeaser(snap: SteamSnapshot | undefined): KitchenDealTeaser | undefined {
   const item = snap?.items[0];
-  if (!item) return undefined;
+  if (!snap || !item) return undefined;
   const discount = item.discount?.replace(/[()]/g, '').trim();
-  const price = snap?.prices.get(item.id);
-  const review = snap?.reviews.get(item.id);
-  const ends = formatSaleEnd(item.expires);
-  const extra = snap.items.length > 1 ? ` · ${snap.items.length} on sale` : '';
-  const bits = [price, review, ends].filter(Boolean);
+  const price = snap.prices.get(item.id) || item.salePrice?.trim() || '';
+  const more = snap.items.length > 1 ? `and ${snap.items.length - 1} more` : '';
+  const line = [discount, price, more].filter(Boolean).join(' · ') || 'On sale';
   return {
     title: item.gameName,
-    kicker: `${discount ? `STEAM · ${discount}` : 'STEAM'}${extra}`,
-    line: bits.join(' · ') || 'On sale on Steam',
+    kicker: 'Steam',
+    line,
     url: item.link,
     image: item.image,
   };
@@ -528,15 +525,10 @@ function steamTeaser(snap: SteamSnapshot | undefined): KitchenDealTeaser | undef
 function epicTeaser(games: EpicFreeGame[]): KitchenDealTeaser | undefined {
   const current = games.find((g) => !g.isUpcoming) ?? games[0];
   if (!current) return undefined;
-  const line = current.isUpcoming
-    ? 'Coming soon on the Epic Games Store'
-    : current.originalPrice
-      ? `~~${current.originalPrice}~~ → **FREE**`
-      : '**FREE** this week';
   return {
     title: current.title,
-    kicker: current.isUpcoming ? 'EPIC · Coming soon' : 'EPIC · Free now',
-    line,
+    kicker: current.isUpcoming ? 'Epic · Coming next' : 'Epic · Free now',
+    line: '',
     url: current.storeUrl,
     image: current.image ?? current.heroImage,
   };

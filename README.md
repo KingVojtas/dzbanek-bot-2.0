@@ -57,7 +57,7 @@ A restart puts that station back on if idle-radio is still on and people are sti
 
 ### 🍪 The Kitchen Board
 
-`/setup kitchen` hangs one living card in a channel and keeps editing that same message: the stereo, who’s in voice, the top Steam deal (price, review, and when the sale ends), the Epic free game, how many people joined today, and Radio Night when it’s on the calendar.
+`/setup kitchen` hangs one living message and keeps editing it. Three cards stack in that message. The top card is the stereo: the song, or **The Kitchen** when nothing is on, who’s in voice, and **Catch** / **Stop** while the radio plays. The middle card stays amber: the top Steam deal (discount, price, and how many more) and the Epic free game. The bottom card shows up for the latest catch and its **Play** button, today’s joins, and Radio Night. Friday from **12:00 to 20:00** the vote buttons sit on that bottom card.
 
 Discord presence is the well. Each hour in Europe/Prague the three lines play once, twenty minutes each, in a new order: Purifying the source, Analyzing bacteria levels, Pouring fresh drops.
 
