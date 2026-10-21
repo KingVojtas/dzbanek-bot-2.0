@@ -3,3 +3,4 @@ data
 dist
 package-lock.json
 .grok
+.claude

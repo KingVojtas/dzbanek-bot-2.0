@@ -9,7 +9,8 @@ data/*
 *.db
 *.db-journal
 
-# /update-dzbanek deploy skill - holds a secret deploy token, never commit
+# /update-dzbanek deploy skill (Grok and Claude copies) - holds a secret deploy token, never commit
 .grok/skills/update-dzbanek/
 /dzbanek-grok-skill.zip
 /update-dzbanek/
+.claude/skills/update-dzbanek/
