@@ -3,8 +3,10 @@ import type { Config } from '../../config';
 import {
   buildEpicFreeGamesDisplay,
   collectMessageTextContent,
-  extractHeadingTitles,
+  epicGameTitle,
+  extractEpicTitles,
   looksLikeEpicDigest,
+  selectEpicLineup,
 } from '../../core/display';
 import type { Logger } from '../../core/logger';
 import type { EpicFreeGame } from '../../core/types';
@@ -67,7 +69,7 @@ interface RawApiResponse {
 }
 
 /** Bump when the card layout changes so the current lineup is posted once. */
-const EPIC_LAYOUT = 'shelf';
+const EPIC_LAYOUT = 'site';
 
 function lineupFingerprint(games: EpicFreeGame[]): string {
   const body = games
@@ -173,11 +175,8 @@ export class EpicFreeGamesService {
     }
 
     try {
-      const display = buildEpicFreeGamesDisplay(games);
-      const sent = await target.channel.send({
-        components: display.components,
-        flags: display.flags,
-      });
+      const card = buildEpicFreeGamesDisplay(games);
+      const sent = await target.channel.send({ embeds: card.embeds, components: card.components });
       await this.store.add(scope, [fingerprint]);
       this.logger.info(`Epic: posted free games to ${target.guildName}.`);
       await reactQuietly(sent, ['🎁', '🆓', '⭐']);
@@ -239,13 +238,8 @@ export class EpicFreeGamesService {
   private titlesMatch(lastMessage: Message, games: EpicFreeGame[]): boolean {
     const blob = collectMessageTextContent(lastMessage);
     if (!/Yours to keep once claimed/i.test(blob)) return false;
-    let lastTitles = extractHeadingTitles(blob);
-    if (lastTitles.length === 0 && lastMessage.embeds[0]) {
-      lastTitles = lastMessage.embeds[0].fields
-        .map((f) => f.name.trim())
-        .filter((name) => name !== '\u200b');
-    }
-    const newTitles = games.map((g) => g.title);
+    const lastTitles = extractEpicTitles(blob);
+    const newTitles = selectEpicLineup(games).map(epicGameTitle);
     return (
       lastTitles.length === newTitles.length &&
       lastTitles.every((title, i) => title === newTitles[i])

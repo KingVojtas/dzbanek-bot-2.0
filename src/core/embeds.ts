@@ -1,6 +1,77 @@
-import { EmbedBuilder } from 'discord.js';
+import {
+  EmbedBuilder,
+  type ActionRowBuilder,
+  type AttachmentBuilder,
+  type MessageActionRowComponentBuilder,
+} from 'discord.js';
 import { config } from '../config';
 import type { Track } from './types';
+
+/** The website's palette. The site's example cards are drawn in these colors. */
+export const SITE_CLAY = 0xe08a45;
+export const SITE_GLOW = 0xffc477;
+export const SITE_BEAT = 0xf5c400;
+export const SITE_STEAM = 0x66c0f4;
+export const SITE_EPIC = 0xe4d8c6;
+
+/** A classic embed card with its button rows, as the website draws them. */
+export interface EmbedCard {
+  embeds: EmbedBuilder[];
+  components: ActionRowBuilder<MessageActionRowComponentBuilder>[];
+  files?: AttachmentBuilder[];
+}
+
+/** `[name, value, wide]`. Fields sit side by side unless `wide`. */
+export type SiteField = [name: string, value: string, wide?: boolean];
+
+export interface SiteEmbedOptions {
+  color: number;
+  author?: string;
+  authorUrl?: string;
+  title?: string;
+  url?: string;
+  description?: string;
+  fields?: SiteField[];
+  footer?: string;
+  thumbnail?: string;
+  image?: string;
+}
+
+function isLink(value: string | undefined): value is string {
+  return Boolean(value && /^(https?:\/\/|attachment:\/\/)/i.test(value));
+}
+
+/**
+ * The website's example card: author line, bold title, description, a fields
+ * grid, a footer, and a small thumbnail on the right.
+ */
+export function buildSiteEmbed(opts: SiteEmbedOptions): EmbedBuilder {
+  const embed = new EmbedBuilder().setColor(opts.color);
+  if (opts.author) {
+    embed.setAuthor(
+      isLink(opts.authorUrl)
+        ? { name: opts.author.slice(0, 256), url: opts.authorUrl }
+        : { name: opts.author.slice(0, 256) },
+    );
+  }
+  if (opts.title) embed.setTitle(opts.title.slice(0, 256));
+  if (opts.title && isLink(opts.url)) embed.setURL(opts.url);
+  if (opts.description) embed.setDescription(opts.description.slice(0, 4096));
+  const fields = (opts.fields ?? []).filter(([name, value]) => name.trim() && value.trim());
+  if (fields.length > 0) {
+    embed.addFields(
+      fields.slice(0, 25).map(([name, value, wide]) => ({
+        name: name.slice(0, 256),
+        value: value.slice(0, 1024),
+        inline: !wide,
+      })),
+    );
+  }
+  if (opts.footer) embed.setFooter({ text: opts.footer.slice(0, 2048) });
+  if (isLink(opts.thumbnail)) embed.setThumbnail(opts.thumbnail);
+  if (isLink(opts.image)) embed.setImage(opts.image);
+  return embed;
+}
 
 export type ReplyTone = 'success' | 'info' | 'warn' | 'error';
 

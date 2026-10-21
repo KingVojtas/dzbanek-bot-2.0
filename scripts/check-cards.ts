@@ -1,23 +1,35 @@
 /**
- * Serializes the Kitchen Board, the queue card, and a 10-game Steam digest.
- * A section without a thumbnail or button throws. Discord also rejects a
- * message whose nested components exceed 40.
+ * Serializes every card the bot posts. The website's cards are classic embeds:
+ * Discord rejects an embed past its text limits and a row with more than five
+ * buttons. /help stays Components V2: a section without a thumbnail or button
+ * throws, and a message may nest at most 40 components.
  */
 import { commandList } from '../src/commands';
 import { buildHelpDisplay } from '../src/commands/help';
 import {
-  formatSaleEnd,
+  buildEpicFreeGamesDisplay,
   buildNowPlayingDisplay,
   buildQueueDisplay,
   buildSteamDealsDisplay,
+  collectMessageTextContent,
+  epicGameTitle,
+  extractEpicTitles,
+  extractSteamDigestTitles,
+  looksLikeEpicDigest,
+  looksLikeSteamDigest,
+  selectEpicLineup,
+  steamDealTitle,
 } from '../src/core/display';
-import type { SteamDealItem, Track } from '../src/core/types';
+import { buildSiteEmbed, type EmbedCard } from '../src/core/embeds';
+import type { EpicFreeGame, SteamDealItem, Track } from '../src/core/types';
+import type { SteamReviewInfo } from '../src/deals/steam/SteamReviewApi';
 import {
   buildKitchenBoardDisplay,
   kitchenViewKey,
   looksLikeKitchenBoard,
   type KitchenBoardView,
 } from '../src/kitchen/display';
+import { buildRadioPlayingDisplay } from '../src/radio/embed';
 import { STATIONS } from '../src/radio/station';
 
 const V2_COMPONENT_MAX = 40;
@@ -55,6 +67,7 @@ function collect(node: unknown, out: JsonNode[]): void {
   }
 }
 
+/** Components V2 card (/help). */
 function checkCard(name: string, build: () => { components: { toJSON: () => unknown }[] }): void {
   let json: unknown;
   try {
@@ -82,12 +95,67 @@ function checkCard(name: string, build: () => { components: { toJSON: () => unkn
   ok(name, `${components.length} components`);
 }
 
-function cardJson(display: { components: { toJSON: () => unknown }[] }): string {
-  return JSON.stringify(display.components.map((component) => component.toJSON()));
+interface EmbedJson {
+  author?: { name?: string };
+  title?: string;
+  description?: string;
+  fields?: { name: string; value: string; inline?: boolean }[];
+  footer?: { text?: string };
 }
 
-function countOf(json: string, needle: string): number {
-  return json.split(needle).length - 1;
+function embedLength(embed: EmbedJson): number {
+  return (
+    (embed.author?.name?.length ?? 0) +
+    (embed.title?.length ?? 0) +
+    (embed.description?.length ?? 0) +
+    (embed.footer?.text?.length ?? 0) +
+    (embed.fields ?? []).reduce((sum, f) => sum + f.name.length + f.value.length, 0)
+  );
+}
+
+/** Website card: classic embeds plus button rows. Returns the text for further checks. */
+function checkEmbedCard(name: string, build: () => EmbedCard, wants: string[] = []): string {
+  let card: EmbedCard;
+  try {
+    card = build();
+  } catch (error) {
+    fail(name, error instanceof Error ? error.message : String(error));
+    return '';
+  }
+  const embeds = card.embeds.map((embed) => embed.toJSON() as EmbedJson);
+  const rows = card.components.map((row) => row.toJSON() as { components: unknown[] });
+  const total = embeds.reduce((sum, embed) => sum + embedLength(embed), 0);
+  const problems: string[] = [];
+  if (embeds.length === 0 || embeds.length > 10) problems.push(`${embeds.length} embeds`);
+  if (total > 6000) problems.push(`${total} characters (max 6000)`);
+  for (const embed of embeds) {
+    if ((embed.description?.length ?? 0) > 4096) problems.push('description over 4096');
+    if ((embed.fields?.length ?? 0) > 25) problems.push('more than 25 fields');
+    if ((embed.fields ?? []).some((f) => !f.name.trim() || !f.value.trim())) {
+      problems.push('an empty field');
+    }
+  }
+  if (rows.length > 5) problems.push(`${rows.length} button rows (max 5)`);
+  if (rows.some((row) => row.components.length === 0 || row.components.length > 5)) {
+    problems.push('a button row with 0 or more than 5 buttons');
+  }
+  const text = JSON.stringify({ embeds, rows });
+  const missing = wants.filter((want) => !text.includes(want));
+  if (missing.length > 0) problems.push(`missing ${missing.join(' | ')}`);
+  if (problems.length > 0) {
+    fail(name, problems.join('; '));
+    return text;
+  }
+  ok(name, `${embeds.length} embed(s), ${total} characters, ${rows.length} row(s)`);
+  return text;
+}
+
+/** The text a duplicate check would see on the posted message. */
+function messageText(card: EmbedCard): string {
+  return collectMessageTextContent({
+    embeds: card.embeds.map((embed) => embed.toJSON()),
+    components: card.components,
+  });
 }
 
 function quietView(): KitchenBoardView {
@@ -100,7 +168,6 @@ function quietView(): KitchenBoardView {
       color: 0xc4783a,
     },
     listeners: [],
-    steamCount: 0,
     joinsToday: 0,
   };
 }
@@ -113,15 +180,11 @@ function rockView(): KitchenBoardView {
       title: 'Hard & Heavy',
       artist: 'Rock Radio',
       sourceLabel: rock.name,
-      sourceUrl: rock.websiteUrl,
-      heroUrl: rock.imageUrl,
-      logoUrl: rock.logoUrl,
       color: rock.color,
       websiteUrl: rock.websiteUrl,
     },
     listeners: [{ id: '1', name: 'Vojta' }],
     voiceChannelName: 'kitchen',
-    steamCount: 0,
     joinsToday: 1,
   };
 }
@@ -133,6 +196,7 @@ function track(title: string, thumbnail?: string): Track {
     durationSec: 200,
     thumbnail,
     requestedBy: 'Vojta',
+    requestedById: '42',
     uploader: 'Artist',
     source: 'youtube',
   };
@@ -142,253 +206,288 @@ function steamItem(n: number): SteamDealItem {
   return {
     id: String(1000 + n),
     title: `Game ${n}`,
-    gameName: `Game ${n}`,
-    link: `https://store.steampowered.com/app/${1000 + n}`,
-    discount: '50',
-    salePrice: '€9.99',
-    originalPrice: '€19.99',
-    expires: '2026-10-19',
-    released: '5 Dec, 2019',
-    tags: 'Action, Adventure',
-    image: `https://cdn.example.com/capsule/${n}.jpg`,
+    gameName:
+      n === 3 ? `Game [${n}] with a very long name that keeps going and going on` : `Game ${n}`,
+    link: `https://store.steampowered.com/app/${1000 + n}/Game_${n}/`,
+    discount: '-90%',
+    salePrice: '5,99€',
+    originalPrice: '59,99€',
   };
 }
 
-const saleEnd = formatSaleEnd('2026-10-19');
-if (saleEnd !== 'Ends 19 Oct') fail('sale-end', `got ${JSON.stringify(saleEnd)}`);
-else ok('sale-end', saleEnd);
+function review(scoreDesc: string, score: number): SteamReviewInfo {
+  return { score, scoreDesc, totalReviews: 50_000, positivePct: score >= 8 ? 92 : 55 };
+}
 
-checkCard('kitchen-quiet', () => {
-  const display = buildKitchenBoardDisplay(quietView());
-  const json = cardJson(display);
-  if (display.components.length !== 2)
-    throw new Error(`expected 2 cards, got ${display.components.length}`);
-  if ((display.files?.length ?? 0) < 2) throw new Error('quiet kitchen art missing');
-  if (!json.includes('Nothing on.')) throw new Error('quiet copy missing');
-  if (!json.includes('Steam') || !json.includes('Epic')) throw new Error('counter missing');
-  if (json.includes('radio:catch') || json.includes('kitchen:catch-play')) {
-    throw new Error('quiet board grew radio buttons');
-  }
-  if (!looksLikeKitchenBoard(json)) throw new Error('quiet board would not be recovered');
-  return display;
-});
-checkCard('kitchen-rock', () => {
-  const display = buildKitchenBoardDisplay(rockView());
-  const json = cardJson(display);
-  if (countOf(json, STATIONS.rock.logoUrl) !== 1) {
-    throw new Error('Rock logo should be the thumbnail once');
-  }
-  if (json.includes(STATIONS.rock.slogan)) throw new Error('station slogan repeated on the board');
-  if (!json.includes('radio:catch') || !json.includes('radio:stop')) {
-    throw new Error('radio buttons missing from the stereo card');
-  }
-  if (json.includes('kitchen:catch-play'))
-    throw new Error('Play does not belong on a board with no catch');
-  if (!json.includes('cookie out of the jar'))
-    throw new Error('join line missing from the room card');
-  if (display.components.length !== 3)
-    throw new Error(`expected 3 cards, got ${display.components.length}`);
-  return display;
-});
-checkCard('kitchen-song-cover', () => {
+/* ---------- Kitchen Board ---------- */
+
+{
+  const quiet = checkEmbedCard('kitchen-quiet', () => buildKitchenBoardDisplay(quietView()), [
+    'The Kitchen',
+    'Nothing on',
+    'In voice',
+    'Joined today',
+    'The shelf is clear',
+    'Nothing free this week',
+    'attachment://kitchen-thumb.jpg',
+  ]);
+  if (quiet.includes('radio:catch') || quiet.includes('kitchen:catch-play')) {
+    fail('kitchen-quiet-buttons', 'quiet board grew radio buttons');
+  } else ok('kitchen-quiet-buttons', 'a quiet board has no buttons');
+  const recovered = buildKitchenBoardDisplay(quietView());
+  if ((recovered.files?.length ?? 0) !== 1) fail('kitchen-thumb', 'kitchen photo not attached');
+  else ok('kitchen-thumb', 'kitchen photo attached once');
+  if (!looksLikeKitchenBoard(messageText(recovered))) {
+    fail('kitchen-recover', 'the posted board would not be found again');
+  } else ok('kitchen-recover', 'the posted board is found again');
+}
+
+{
+  const json = checkEmbedCard('kitchen-rock', () => buildKitchenBoardDisplay(rockView()), [
+    '● Live · Rock Radio',
+    'Rock Radio — Hard & Heavy',
+    'radio:stop',
+    'radio:catch',
+    'Website',
+  ]);
+  if (json.includes('kitchen:catch-play')) {
+    fail('kitchen-rock-play', 'Play does not belong on a board with no catch');
+  } else ok('kitchen-rock-play', 'no Play without a catch');
+  const order = ['radio:stop', 'Website', 'radio:catch'].map((needle) => json.indexOf(needle));
+  if (order.some((at, i) => i > 0 && at < order[i - 1]!)) {
+    fail('kitchen-rock-order', 'radio buttons are not Stop, Website, Catch');
+  } else ok('kitchen-rock-order', 'Stop, Website, Catch as on the website');
+}
+
+checkEmbedCard(
+  'kitchen-music',
+  () =>
+    buildKitchenBoardDisplay({
+      ...quietView(),
+      voiceChannelName: 'kitchen',
+      listeners: [{ id: '1', name: 'Vojta' }],
+      stereo: {
+        kind: 'music',
+        title: 'Song',
+        artist: 'Artist',
+        sourceLabel: 'YouTube',
+        titleUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        color: 0xff0000,
+        paused: true,
+      },
+    }),
+  ['⏸️ Paused · YouTube', '"title":"Song"'],
+);
+
+{
   const rock = STATIONS.rock;
-  const cover = 'https://cdn.example.com/cover.jpg';
-  const display = buildKitchenBoardDisplay({
-    ...rockView(),
-    joinsToday: 0,
-    stereo: {
-      kind: 'radio',
-      title: 'Song',
-      artist: 'Artist',
-      sourceLabel: rock.name,
-      sourceUrl: rock.websiteUrl,
-      heroUrl: cover,
-      logoUrl: rock.logoUrl,
-      color: rock.color,
-      websiteUrl: rock.websiteUrl,
-    },
-  });
-  const json = cardJson(display);
-  if (!json.includes(cover) || !json.includes(rock.logoUrl)) {
-    throw new Error('song cover and station mark should both show');
-  }
-  if (display.components.length !== 2) throw new Error('no room card when the room is quiet');
-  return display;
-});
-checkCard('kitchen-music', () => {
-  const display = buildKitchenBoardDisplay({
-    ...quietView(),
-    voiceChannelName: 'kitchen',
-    listeners: [{ id: '1', name: 'Vojta' }],
-    stereo: {
-      kind: 'music',
-      title: 'Song',
-      artist: 'Artist',
-      sourceLabel: 'YouTube',
-      titleUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-      heroUrl: 'https://cdn.example.com/thumb.jpg',
-      color: 0xff0000,
-      paused: true,
-      queueLength: 2,
-    },
-  });
-  const json = cardJson(display);
-  if (!json.includes('Open') || !json.includes('Paused') || !json.includes('Queue')) {
-    throw new Error('music card missing Open, Paused, or Queue');
-  }
-  if (json.includes('radio:catch')) throw new Error('Catch does not belong on a music card');
-  return display;
-});
-checkCard('kitchen-room', () => {
-  const display = buildKitchenBoardDisplay({
-    ...quietView(),
-    joinsToday: 2,
-    radioNight: { stationName: 'Kiss Radio' },
-    radioVote: { counts: { kiss: 1, rock: 4, beat: 0 }, total: 5 },
-    latestCatch: {
-      userId: '9',
-      title: 'Caught Song',
-      artist: 'Caught Artist',
-      by: 'Vojta',
-      coverUrl: 'https://cdn.example.com/catch.jpg',
-    },
-  });
-  const json = cardJson(display);
-  if (display.components.length !== 3) throw new Error('room card missing');
-  if (!json.includes('kitchen:catch-play')) throw new Error('Play missing from the catch');
-  if (!json.includes('kitchen:vote:rock')) throw new Error('vote buttons missing');
-  if (!json.includes('Vojta') || !json.includes('Caught Song'))
-    throw new Error('catch row missing');
-  if (json.includes('radio:stop')) throw new Error('Stop does not belong on a quiet board');
-  return display;
-});
-checkCard('kitchen-full', () => {
-  const rock = STATIONS.rock;
-  const display = buildKitchenBoardDisplay({
-    ...rockView(),
-    joinsToday: 3,
-    listeners: Array.from({ length: 9 }, (_, i) => ({ id: String(i), name: `Person ${i}` })),
-    steamCount: 10,
-    steam: {
-      title: 'Hades',
-      kicker: 'Steam',
-      line: '-50% · €9.99 · and 9 more',
-      url: 'https://store.steampowered.com/app/1145360',
-      image: 'https://cdn.example.com/hades.jpg',
-    },
-    epic: {
-      title: 'Cocoon',
-      kicker: 'Epic · Free now',
-      line: '',
-      url: 'https://store.epicgames.com/en-US/p/cocoon',
-      image: 'https://cdn.example.com/cocoon.jpg',
-    },
-    radioVote: { counts: { kiss: 2, rock: 5, beat: 1 }, total: 8 },
-    latestCatch: {
-      userId: '9',
-      title: 'Caught Song',
-      artist: 'Caught Artist',
-      by: 'Vojta',
-      coverUrl: 'https://cdn.example.com/catch.jpg',
-    },
-    stereo: {
-      kind: 'radio',
-      title: 'Song',
-      artist: 'Artist',
-      sourceLabel: rock.name,
-      sourceUrl: rock.websiteUrl,
-      heroUrl: 'https://cdn.example.com/cover.jpg',
-      logoUrl: rock.logoUrl,
-      color: rock.color,
-      websiteUrl: rock.websiteUrl,
-    },
-  });
-  const json = cardJson(display);
-  if (display.components.length !== 3) throw new Error('full board should be three cards');
-  if (!json.includes('radio:catch') || !json.includes('kitchen:catch-play')) {
-    throw new Error('Catch and Play split across cards');
-  }
-  if (!json.includes('+1')) throw new Error('ninth listener was not rolled into +1');
-  return display;
-});
+  const json = checkEmbedCard(
+    'kitchen-full',
+    () =>
+      buildKitchenBoardDisplay({
+        ...rockView(),
+        joinsToday: 3,
+        listeners: Array.from({ length: 9 }, (_, i) => ({ id: String(i), name: `Person ${i}` })),
+        steam: {
+          title: 'Hades',
+          line: '−50% · 9,99€',
+          url: 'https://store.steampowered.com/app/1145360',
+        },
+        epic: {
+          title: 'Cocoon',
+          line: 'Free this week',
+          url: 'https://store.epicgames.com/en-US/p/cocoon',
+        },
+        radioNight: { stationName: 'Kiss Radio' },
+        radioVote: { counts: { kiss: 2, rock: 5, beat: 1 }, total: 8 },
+        latestCatch: { userId: '9', title: 'Caught Song', artist: 'Caught Artist', by: 'Vojta' },
+        stereo: {
+          kind: 'radio',
+          title: 'Song',
+          artist: 'Artist',
+          sourceLabel: rock.name,
+          color: rock.color,
+          websiteUrl: rock.websiteUrl,
+        },
+      }),
+    [
+      '"value":"9"',
+      '[Hades](https://store.steampowered.com/app/1145360) · −50% · 9,99€',
+      'Cocoon',
+      'Free this week',
+      'Radio Night',
+      'Latest catch',
+      '🌙 Kitchen Board · Radio Night',
+      'Tonight at 20:00. Pick the station.',
+      'One vote each. You can change it.',
+      'kitchen:vote:rock',
+      'kitchen:catch-play',
+      'radio:catch',
+    ],
+  );
+  if (!json.includes('▰')) fail('kitchen-tally', 'the vote card has no tally bars');
+  else ok('kitchen-tally', 'the vote card draws a tally');
+}
+
 if (!looksLikeKitchenBoard('**Quiet** · The Kitchen\n### Oven’s off\n-# Jar’s full')) {
-  fail('kitchen-legacy', 'old board text would be abandoned');
-} else ok('kitchen-legacy', 'old copy still matches');
+  fail('kitchen-legacy', 'an old board would not be found and replaced');
+} else ok('kitchen-legacy', 'an old board is still found, so it gets replaced');
 if (
   looksLikeKitchenBoard('### This week\n**Caught**\n**Song** — Artist\n-# The Kitchen · this week')
 ) {
   fail('kitchen-chart', 'Sunday chart matched the living board');
 } else ok('kitchen-chart', 'Sunday chart stays separate');
-checkCard('kitchen-empty-cupboard', () =>
-  buildKitchenBoardDisplay({
-    ...quietView(),
-    steam: undefined,
-    epic: undefined,
-  }),
-);
-checkCard('kitchen-steam-line', () => {
-  const display = buildKitchenBoardDisplay({
-    ...quietView(),
-    steamCount: 2,
-    steam: {
-      title: 'Hades',
-      kicker: 'STEAM · 50%',
-      line: `€9.99 · Very Positive · ${saleEnd}`,
-      url: 'https://store.steampowered.com/app/1145360',
-      image: 'https://cdn.example.com/hades.jpg',
-    },
+
+{
+  const rock = rockView();
+  const kiss = STATIONS.kiss;
+  const switched: KitchenBoardView = {
+    ...rock,
+    stereo: { ...rock.stereo, sourceLabel: kiss.name, color: kiss.color },
+  };
+  if (kitchenViewKey(rock) === kitchenViewKey(switched)) {
+    fail('kitchen-key-station', 'a station switch with the same title would not redraw');
+  } else ok('kitchen-key-station', 'a station switch redraws the board');
+
+  const epic = { title: 'Game', line: 'Coming next' };
+  const before = kitchenViewKey({ ...quietView(), epic });
+  const after = kitchenViewKey({ ...quietView(), epic: { ...epic, line: 'Free this week' } });
+  if (before === after) fail('kitchen-key-epic', 'Epic going free would not redraw');
+  else ok('kitchen-key-epic', 'Epic going free redraws the board');
+
+  if (kitchenViewKey(rockView()) !== kitchenViewKey(rockView())) {
+    fail('kitchen-key-stable', 'the same view produced two keys');
+  } else ok('kitchen-key-stable', 'the same view keeps one key');
+}
+
+/* ---------- Steam ---------- */
+
+{
+  const items = Array.from({ length: 10 }, (_, i) => steamItem(i + 1));
+  const prices = new Map(items.map((item) => [item.id, '~~59,99€~~ → **5,99€** (-90%)']));
+  const reviews = new Map<string, SteamReviewInfo | null>(
+    items.map((item, i) => [
+      item.id,
+      i < 6 ? review('Very Positive', 8) : i < 8 ? review('Mixed', 5) : null,
+    ]),
+  );
+  const build = () => buildSteamDealsDisplay(items, prices, reviews);
+  const json = checkEmbedCard('steam-digest-10', build, [
+    'Steam · ',
+    'Steam Daily Deals',
+    '10 games · prices in €',
+    '1. [Game 1](https://store.steampowered.com/app/1001/Game_1/) · Very Positive · `−90%` ~~59,99€~~ **5,99€**',
+    '· Special ·',
+    'Browse specials',
+  ]);
+  if (json.includes('Mixed')) fail('steam-chip', 'a Mixed game was labelled Mixed, not Special');
+  else ok('steam-chip', 'well-reviewed games show their label, the rest show Special');
+
+  const text = messageText(build());
+  const titles = extractSteamDigestTitles(text);
+  const expected = items.map(steamDealTitle);
+  if (!looksLikeSteamDigest(text) || titles.join('|') !== expected.join('|')) {
+    fail('steam-duplicate', `read back ${titles.length} titles: ${titles.join(' | ')}`);
+  } else ok('steam-duplicate', 'a reposted digest reads back the same 10 titles');
+}
+
+checkEmbedCard('steam-empty', () => buildSteamDealsDisplay([], new Map()), [
+  'The shelf is empty right now.',
+]);
+
+/* ---------- Epic ---------- */
+
+{
+  const soon = Date.now() + 3 * 86_400_000;
+  const game = (title: string, isUpcoming: boolean): EpicFreeGame => ({
+    title,
+    description: 'A <b>cozy</b> puzzle game about [worlds] inside worlds.',
+    originalPrice: '€19.99',
+    storeUrl: `https://store.epicgames.com/en-US/p/${title.toLowerCase()}`,
+    image: `https://cdn.example.com/${title}.jpg`,
+    heroImage: `https://cdn.example.com/${title}-wide.jpg`,
+    endDate: new Date(soon).toISOString(),
+    isUpcoming,
+    upcomingStartDate: isUpcoming ? new Date(soon).toISOString() : undefined,
   });
-  const json = JSON.stringify(display.components.map((component) => component.toJSON()));
-  if (!json.includes(saleEnd)) throw new Error('sale end missing from the board');
-  return display;
-});
+  const games = [game('Cocoon', false), game('Tunic', false), game('Hades', true)];
+  const build = () => buildEpicFreeGamesDisplay(games);
+  checkEmbedCard('epic-free-and-soon', build, [
+    'Epic Games Store',
+    '"title":"Free now"',
+    '**[Cocoon](https://store.epicgames.com/en-US/p/cocoon)** · ~~€19.99~~ **Free** · ends <t:',
+    'Coming next',
+    'Yours to keep once claimed',
+    'Cocoon-wide.jpg',
+    'Claim Cocoon',
+    'Browse free games',
+  ]);
+  const text = messageText(build());
+  const titles = extractEpicTitles(text);
+  const expected = selectEpicLineup(games).map(epicGameTitle);
+  if (!looksLikeEpicDigest(text) || titles.join('|') !== expected.join('|')) {
+    fail('epic-duplicate', `read back ${titles.join(' | ')}`);
+  } else ok('epic-duplicate', 'a reposted lineup reads back the same titles');
 
-checkCard('steam-digest-10', () =>
-  buildSteamDealsDisplay(
-    Array.from({ length: 10 }, (_, i) => steamItem(i + 1)),
-    new Map(),
-  ),
-);
+  checkEmbedCard('epic-soon-only', () => buildEpicFreeGamesDisplay([game('Hades', true)]), [
+    '"title":"Coming soon"',
+    'Nothing free right now.',
+  ]);
+  checkEmbedCard('epic-empty', () => buildEpicFreeGamesDisplay([]), [
+    'No free games listed right now.',
+  ]);
+}
 
-checkCard('queue-card', () =>
-  buildQueueDisplay(track('Now', 'https://cdn.example.com/now.jpg'), [
-    track('Now', 'https://cdn.example.com/now.jpg'),
-    track('Next'),
-    track('Later'),
-  ]),
-);
-checkCard('queue-no-art', () => buildQueueDisplay(track('Now'), [track('Now'), track('Next')]));
+/* ---------- Music ---------- */
 
 {
   const nowArt = track('Now', 'https://cdn.example.com/now.jpg');
-  const full = () =>
-    buildNowPlayingDisplay({
-      track: nowArt,
-      queueLength: 3,
-      paused: false,
-      loopMode: 'queue',
-      positionSec: 42,
-      upNextTitle: 'Next',
-      volume: 1.25,
-      hasHistory: true,
-    });
-  checkCard('now-playing-full', full);
-  checkCard('now-playing-no-art', () =>
-    buildNowPlayingDisplay({ track: track('Now'), queueLength: 0, paused: true, loopMode: 'off' }),
+  const json = checkEmbedCard(
+    'now-playing-full',
+    () =>
+      buildNowPlayingDisplay({
+        track: nowArt,
+        queueLength: 3,
+        paused: false,
+        loopMode: 'queue',
+        positionSec: 42,
+        volume: 1.25,
+        hasHistory: true,
+      }),
+    [
+      '🔊 Now Playing',
+      'Requested by <@42> · YouTube',
+      '`0:42`',
+      '`3:20`',
+      '3 up next · Volume 125%',
+      'https://cdn.example.com/now.jpg',
+    ],
+  );
+  const ids = ['music:pause', 'music:skip', 'music:stop', 'music:loop', 'music:shuffle'];
+  const ids2 = ['music:prev', 'music:voldown', 'music:volup', 'music:queue'];
+  const missing = [...ids, ...ids2].filter((id) => !json.includes(`"${id}"`));
+  if (missing.length > 0) fail('now-playing-buttons', `missing ${missing.join(', ')}`);
+  else ok('now-playing-buttons', 'transport row, then previous, volume, and queue');
+
+  checkEmbedCard(
+    'now-playing-paused',
+    () =>
+      buildNowPlayingDisplay({
+        track: track('Now'),
+        queueLength: 0,
+        paused: true,
+        loopMode: 'off',
+      }),
+    ['⏸️ Paused', 'Nothing up next', 'music:resume'],
   );
 
-  const json = cardJson(full());
-  const art = countOf(json, 'https://cdn.example.com/now.jpg');
-  if (art !== 1) fail('now-playing-art-once', `album art appears ${art} times`);
-  else ok('now-playing-art-once', 'album art shows once, as the hero');
-  const ids = ['music:prev', 'music:voldown', 'music:volup', 'music:queue', 'music:skip'];
-  const missing = ids.filter((id) => !json.includes(`"${id}"`));
-  if (missing.length > 0) fail('now-playing-buttons', `missing ${missing.join(', ')}`);
-  else if (!json.includes('125%')) fail('now-playing-buttons', 'volume is not on the card');
-  else ok('now-playing-buttons', 'previous, volume, and queue sit under the transport');
-
-  const fresh = cardJson(
-    buildNowPlayingDisplay({ track: nowArt, queueLength: 0, paused: false, loopMode: 'off' }),
+  const fresh = JSON.stringify(
+    buildNowPlayingDisplay({
+      track: nowArt,
+      queueLength: 0,
+      paused: false,
+      loopMode: 'off',
+    }).components.map((row) => row.toJSON()),
   );
   if (
     !/"custom_id":"music:prev"[^}]*"disabled":true|"disabled":true[^}]*"custom_id":"music:prev"/.test(
@@ -400,13 +499,70 @@ checkCard('queue-no-art', () => buildQueueDisplay(track('Now'), [track('Now'), t
 }
 
 {
+  // The player keeps the current track in its queue; the card leaves that one out.
+  const now = track('Now');
+  checkEmbedCard(
+    'queue-card',
+    () =>
+      buildQueueDisplay(now, [now, ...Array.from({ length: 12 }, (_, i) => track(`T${i + 1}`))]),
+    ['📜 Queue', 'Now: **[Now]', '1. [T1]', 'Page 1 of 2 · 12 up next', '◀ Prev', 'Next ▶'],
+  );
+  checkEmbedCard('queue-empty-after', () => buildQueueDisplay(now, [now]), ['– Nothing up next']);
+}
+
+/* ---------- Radio ---------- */
+
+checkEmbedCard(
+  'radio-live',
+  () =>
+    buildRadioPlayingDisplay(STATIONS.beat, {
+      track: { artist: 'Example Artist', title: 'Example Song' },
+    }),
+  [
+    '● Live · Radio Beat',
+    'Example Artist — Example Song',
+    'První bigbít u nás',
+    'Edits itself when the song on air changes',
+    'radio:stop',
+    'radio:catch',
+  ],
+);
+checkEmbedCard('radio-no-song', () => buildRadioPlayingDisplay(STATIONS.kiss), [
+  '"title":"Live stream"',
+]);
+
+checkEmbedCard(
+  'site-embed-fields',
+  () => ({
+    embeds: [
+      buildSiteEmbed({
+        color: 0xf5c400,
+        author: '🌙 Radio Night',
+        title: 'On the calendar',
+        fields: [
+          ['When', 'Friday 20:00 (Prague)'],
+          ['Empty', '  '],
+          ['Vote', 'Opens Friday 12:00 on the Kitchen Board', true],
+        ],
+      }),
+    ],
+    components: [],
+  }),
+  ['"inline":true', '"inline":false'],
+);
+
+/* ---------- /help (Components V2) ---------- */
+
+{
   const commandsJson = commandList.map((command) => command.data.toJSON());
   const avatarUrl = 'https://cdn.example.com/avatar.png';
   checkCard('help-all', () => buildHelpDisplay(commandsJson, { avatarUrl }));
   checkCard('help-setup', () => buildHelpDisplay(commandsJson, { avatarUrl, focus: 'setup' }));
   checkCard('help-play', () => buildHelpDisplay(commandsJson, { focus: 'play' }));
 
-  const all = cardJson(buildHelpDisplay(commandsJson, { avatarUrl }));
+  const helpJson = (display: { components: { toJSON: () => unknown }[] }): string =>
+    JSON.stringify(display.components.map((component) => component.toJSON()));
+  const all = helpJson(buildHelpDisplay(commandsJson, { avatarUrl }));
   const unlisted = commandsJson.filter((command) => !all.includes(`/${command.name}`));
   if (unlisted.length > 0) {
     fail('help-lists-all', `missing ${unlisted.map((command) => command.name).join(', ')}`);
@@ -414,39 +570,10 @@ checkCard('queue-no-art', () => buildQueueDisplay(track('Now'), [track('Now'), t
   if (all.includes('🧩 Other')) fail('help-shelves', 'a command has no shelf in /help');
   else ok('help-shelves', 'every command sits on a named shelf');
 
-  const play = cardJson(buildHelpDisplay(commandsJson, { focus: 'play' }));
+  const play = helpJson(buildHelpDisplay(commandsJson, { focus: 'play' }));
   if (!play.includes('`query`') || !play.includes('`play_next`')) {
     fail('help-play-options', '/help command:play does not list its options');
   } else ok('help-play-options', '/help command:play lists query and play_next');
-}
-
-{
-  const rock = rockView();
-  const kiss = STATIONS.kiss;
-  const switched: KitchenBoardView = {
-    ...rock,
-    stereo: {
-      ...rock.stereo,
-      sourceLabel: kiss.name,
-      sourceUrl: kiss.websiteUrl,
-      logoUrl: kiss.logoUrl,
-      color: kiss.color,
-      websiteUrl: kiss.websiteUrl,
-    },
-  };
-  if (kitchenViewKey(rock) === kitchenViewKey(switched)) {
-    fail('kitchen-key-station', 'a station switch with the same title would not redraw');
-  } else ok('kitchen-key-station', 'a station switch redraws the board');
-
-  const epic = { title: 'Game', kicker: 'Epic · Coming next', line: '' };
-  const before = kitchenViewKey({ ...quietView(), epic });
-  const after = kitchenViewKey({ ...quietView(), epic: { ...epic, kicker: 'Epic · Free now' } });
-  if (before === after) fail('kitchen-key-epic', 'Epic going free would not redraw');
-  else ok('kitchen-key-epic', 'Epic going free redraws the board');
-
-  if (kitchenViewKey(rockView()) !== kitchenViewKey(rockView())) {
-    fail('kitchen-key-stable', 'the same view produced two keys');
-  } else ok('kitchen-key-stable', 'the same view keeps one key');
 }
 
 if (failed > 0) {

@@ -1,6 +1,8 @@
 import { ChannelType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
-import { buildReplyEmbed } from '../../core/embeds';
+import { SITE_CLAY, buildReplyEmbed, buildSiteEmbed } from '../../core/embeds';
 import type { Command } from '../../core/types';
+import { RADIO_NIGHT_LABEL } from '../../kitchen/display';
+import { getStation } from '../../radio/station';
 
 export const setup: Command = {
   data: new SlashCommandBuilder()
@@ -120,43 +122,59 @@ export const setup: Command = {
       const steam = settings.steamEnabled
         ? settings.steamChannelId
           ? `<#${settings.steamChannelId}>`
-          : 'on · no channel yet (will auto-detect a #steam / #deals channel)'
-        : 'disabled';
+          : 'On · auto-detects #steam or #deals'
+        : 'Off';
       const epic = settings.epicEnabled
         ? settings.epicChannelId
           ? `<#${settings.epicChannelId}>`
-          : 'on · no channel yet (will auto-detect a #epic / #free-games channel)'
-        : 'disabled';
+          : 'On · auto-detects #epic or #free-games'
+        : 'Off';
       const welcome = settings.welcomeEnabled
         ? settings.welcomeChannelId
           ? `<#${settings.welcomeChannelId}>`
-          : 'on · no channel yet (will auto-detect #welcome)'
-        : 'disabled';
+          : 'On · auto-detects #welcome'
+        : 'Off';
       const goodbye = settings.goodbyeEnabled
         ? settings.goodbyeChannelId
           ? `<#${settings.goodbyeChannelId}>`
-          : 'on · no channel yet (will auto-detect #goodbye)'
-        : 'disabled';
+          : 'On · auto-detects #goodbye'
+        : 'Off';
       const kitchen = settings.kitchenEnabled
         ? settings.kitchenChannelId
           ? `<#${settings.kitchenChannelId}>`
-          : 'on · no channel yet (use /setup kitchen)'
-        : 'disabled';
+          : 'On · no channel yet'
+        : 'Off';
+      const nightStation = getStation(settings.radioNightStation ?? '');
       const radioNight = settings.radioNightEnabled
-        ? `${settings.radioNightStation ?? 'station?'} · ${
-            settings.radioNightChannelId ? `<#${settings.radioNightChannelId}>` : 'no voice channel'
-          } · Friday 20:00`
-        : 'off';
+        ? [
+            RADIO_NIGHT_LABEL,
+            nightStation?.name ?? 'no station',
+            settings.radioNightChannelId
+              ? `<#${settings.radioNightChannelId}>`
+              : 'no voice channel',
+          ].join(' · ')
+        : 'Off';
+      const lastStation = getStation(settings.lastRadioStation ?? '');
       const idleRadio = settings.idleRadioEnabled
-        ? `on · ${settings.lastRadioStation ?? 'Beat (default)'}`
-        : 'off · leave after the music idle timeout';
+        ? `On · ${lastStation?.name ?? 'Radio Beat'}`
+        : 'Off';
       await interaction.reply({
         embeds: [
-          buildReplyEmbed(
-            'info',
-            `**Steam deals:** ${steam}\n**Epic free games:** ${epic}\n**Welcome:** ${welcome}\n**Goodbye:** ${goodbye}\n**Kitchen Board:** ${kitchen}\n**Radio Night:** ${radioNight}\n**Idle → radio:** ${idleRadio}\n\nUse \`/setup steam\`, \`/setup epic\`, \`/setup welcome\`, \`/setup goodbye\`, or \`/setup kitchen\` to pick a channel. Schedule Radio Night with \`/radio night\`. Toggle idle radio with \`/setup idle-radio\`.`,
-            'Server channels',
-          ),
+          buildSiteEmbed({
+            color: SITE_CLAY,
+            author: '⚙️ Setup',
+            title: interaction.guild?.name ?? 'This server',
+            fields: [
+              ['Steam', steam],
+              ['Epic', epic],
+              ['Welcome', welcome],
+              ['Goodbye', goodbye],
+              ['Kitchen Board', kitchen],
+              ['Idle radio', idleRadio],
+              ['Radio Night', radioNight, true],
+            ],
+            footer: '/setup <feature> to change a channel · /radio night to schedule',
+          }),
         ],
         flags: MessageFlags.Ephemeral,
       });

@@ -156,10 +156,7 @@ export const play: Command = {
 
       if (player.current) {
         const display = player.buildNowPlayingPanel();
-        await interaction.editReply({
-          components: display.components,
-          flags: display.flags,
-        });
+        await interaction.editReply({ embeds: display.embeds, components: display.components });
         return;
       }
     }

@@ -11,7 +11,8 @@ import type { Readable } from 'node:stream';
 import type { Message, SendableChannels } from 'discord.js';
 import { bufferStream } from './buffer-stream';
 import { isUnknownMessage } from '../core/discord-errors';
-import { buildNowPlayingDisplay, type V2Display } from '../core/display';
+import { buildNowPlayingDisplay } from '../core/display';
+import { upcomingQueue, type EmbedCard } from '../core/embeds';
 import type { Logger } from '../core/logger';
 import type { LoopMode, Track, TrackSource } from '../core/types';
 
@@ -109,17 +110,15 @@ export class GuildPlayer {
     return ms / 1000;
   }
 
-  buildNowPlayingPanel(track: Track = this.current!): V2Display {
+  buildNowPlayingPanel(track: Track = this.current!): EmbedCard {
     const raw = this.getPlaybackPositionSec();
     const positionSec = track.durationSec > 0 ? Math.min(raw, track.durationSec) : raw;
     return buildNowPlayingDisplay({
       track,
-      queueLength: this.queue.length,
+      queueLength: upcomingQueue(this.current, this.queue).length,
       paused: this.paused,
       loopMode: this.loopMode,
       positionSec,
-      upNextTitle: this.queue.find((track) => track !== this.current)?.title ?? null,
-      label: this.paused ? 'Paused' : 'Now Playing',
       volume: this.volume,
       hasHistory: this.history.length > 0,
     });
@@ -175,10 +174,7 @@ export class GuildPlayer {
     if (!msg || !track || this.destroyed) return;
     const display = this.buildNowPlayingPanel(track);
     try {
-      await msg.edit({
-        components: display.components,
-        flags: display.flags,
-      });
+      await msg.edit({ embeds: display.embeds, components: display.components });
     } catch (error) {
       if (isUnknownMessage(error)) {
         this.nowPlayingMessage = null;
@@ -226,10 +222,7 @@ export class GuildPlayer {
 
     try {
       const display = this.buildNowPlayingPanel(track);
-      const msg = await channel.send({
-        components: display.components,
-        flags: display.flags,
-      });
+      const msg = await channel.send({ embeds: display.embeds, components: display.components });
       if (this.destroyed || serial !== this.announceSerial) {
         try {
           await msg.delete();

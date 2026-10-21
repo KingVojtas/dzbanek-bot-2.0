@@ -44,17 +44,14 @@ export class RadioSession {
   private metadataTimer: ReturnType<typeof setInterval> | null = null;
   private lastTrackKey = '';
   private currentTrack: NowPlayingTrack | null = null;
-  private channelName: string;
 
   constructor(
     readonly connection: VoiceConnection,
     station: RadioStation,
-    channelName: string,
     private readonly logger: Logger,
     private readonly onDestroy: () => void,
   ) {
     this.currentStation = station;
-    this.channelName = channelName;
     this.player = createAudioPlayer();
     this.connection.subscribe(this.player);
     this.attachListeners();
@@ -246,13 +243,12 @@ export class RadioSession {
     const message = this.nowPlayingMessage;
     if (!message || this.destroyed) return;
     try {
-      const display = buildRadioPlayingDisplay(this.currentStation, this.channelName, {
+      const display = buildRadioPlayingDisplay(this.currentStation, {
         track: this.currentTrack,
       });
       await message.edit({
-        embeds: [],
+        embeds: display.embeds,
         components: display.components,
-        flags: display.flags,
       });
     } catch (error) {
       this.logger.debug(`${this.currentStation.name} now-playing embed update failed:`, error);

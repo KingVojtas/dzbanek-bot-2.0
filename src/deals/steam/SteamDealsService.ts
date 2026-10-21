@@ -5,8 +5,9 @@ import {
   STEAM_SHELF_MARKER,
   buildSteamDealsDisplay,
   collectMessageTextContent,
-  extractHeadingTitles,
+  extractSteamDigestTitles,
   looksLikeSteamDigest,
+  steamDealTitle,
 } from '../../core/display';
 import type { Logger } from '../../core/logger';
 import type { SteamDealItem } from '../../core/types';
@@ -14,14 +15,9 @@ import type { KitchenBoard } from '../../kitchen/KitchenBoard';
 import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
 import { resolveDealTargets, type DealTarget } from '../targets';
-import { attachSteamArtwork } from './SteamArtwork';
-import {
-  attachSteamShelfMeta,
-  attachStoreProfiles,
-  type SteamStoreProfile,
-} from './SteamBlockbuster';
+import { attachStoreProfiles, type SteamStoreProfile } from './SteamBlockbuster';
 import { SteamFeedReader } from './SteamFeedReader';
-import { SteamSpecialsReader, attachSteamSaleEnds } from './SteamSpecialsReader';
+import { SteamSpecialsReader } from './SteamSpecialsReader';
 import { extractAppId, fetchSteamPrice, formatSteamPrice } from './SteamPriceApi';
 import { fetchSteamReview, formatReview, type SteamReviewInfo } from './SteamReviewApi';
 import {
@@ -154,16 +150,7 @@ export class SteamDealsService {
     const fingerprint = steamDigestFingerprint(top);
     const blockbusters = top.filter((item) => item.blockbuster).length;
     this.logger.info(`Steam: ${blockbusters} blockbuster(s) in this ${top.length}-game digest.`);
-    const [prices] = await Promise.all([
-      this.fetchPrices(top),
-      attachSteamArtwork(top),
-      attachSteamShelfMeta(top, profiles),
-      attachSteamSaleEnds(top),
-    ]);
-    const missingArt = top.filter((item) => !item.image).length;
-    if (missingArt > 0) {
-      this.logger.warn(`Steam: no artwork for ${missingArt} of ${top.length} games.`);
-    }
+    const prices = await this.fetchPrices(top);
     const reviews = new Map<string, string>();
     for (const item of top) {
       const review = reviewMap.get(item.id);
@@ -173,7 +160,7 @@ export class SteamDealsService {
     let posted = 0;
     for (const target of targets) {
       this.kitchen?.recordSteam(target.guildId, top, prices, reviews);
-      const sent = await this.postToGuild(target, top, fingerprint, prices);
+      const sent = await this.postToGuild(target, top, fingerprint, prices, reviewMap);
       if (sent) posted += 1;
       this.kitchen?.refresh(target.guildId);
     }
@@ -186,6 +173,7 @@ export class SteamDealsService {
     top: SteamDealItem[],
     fingerprint: string,
     prices: Map<string, string | null>,
+    reviewMap: Map<string, SteamReviewInfo | null>,
   ): Promise<boolean> {
     const scope = steamDigestScope(target.guildId);
 
@@ -210,11 +198,8 @@ export class SteamDealsService {
     }
 
     try {
-      const display = buildSteamDealsDisplay(top, prices);
-      const sent = await target.channel.send({
-        components: display.components,
-        flags: display.flags,
-      });
+      const card = buildSteamDealsDisplay(top, prices, reviewMap);
+      const sent = await target.channel.send({ embeds: card.embeds, components: card.components });
       if (lastDigest) {
         try {
           await lastDigest.delete();
@@ -281,11 +266,8 @@ export class SteamDealsService {
     if (top.length === 0) return false;
     const blob = collectMessageTextContent(lastMessage);
     if (!blob.includes(STEAM_SHELF_MARKER)) return false;
-    let lastTitles = extractHeadingTitles(blob);
-    if (lastTitles.length === 0 && lastMessage.embeds[0]) {
-      lastTitles = lastMessage.embeds[0].fields.map((f) => f.name.replace(/^\d+\.\s*/, '').trim());
-    }
-    const newTitles = top.map((item) => item.gameName);
+    const lastTitles = extractSteamDigestTitles(blob);
+    const newTitles = top.map(steamDealTitle);
     return (
       lastTitles.length === newTitles.length &&
       lastTitles.every((title, i) => title === newTitles[i])

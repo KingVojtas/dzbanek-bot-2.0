@@ -31,9 +31,6 @@ export const queue: Command = {
     const requested = (interaction.options.getInteger('page') ?? 1) - 1;
     const display = buildQueueDisplay(player.current, player.queue, requested);
 
-    await interaction.reply({
-      components: display.components,
-      flags: display.flags,
-    });
+    await interaction.reply({ embeds: display.embeds, components: display.components });
   },
 };

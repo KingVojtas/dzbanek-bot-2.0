@@ -41,7 +41,7 @@ function extractGameName(title: string): string {
 function extractAppImage(link: string): string | undefined {
   const match = link.match(/store\.steampowered\.com\/app\/(\d+)\//);
   if (!match) return undefined;
-  // Hint only. attachSteamArtwork drops this when the file 404s.
+  // Hint only. The digest itself shows no art.
   return `https://cdn.akamai.steamstatic.com/steam/apps/${match[1]}/library_600x900.jpg`;
 }
 

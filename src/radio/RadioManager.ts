@@ -162,7 +162,7 @@ export class RadioManager {
       );
     }
 
-    const session = new RadioSession(connection, station, channel.name, this.logger, () => {
+    const session = new RadioSession(connection, station, this.logger, () => {
       this.sessions.delete(guildId);
     });
     this.sessions.set(guildId, session);

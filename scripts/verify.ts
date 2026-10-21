@@ -259,12 +259,7 @@ function checkSteamRows(): void {
     return;
   }
 
-  const priced: SteamDealItem = {
-    ...kept,
-    tags: 'Open World · Western · Story Rich · Action',
-    image: 'https://cdn.akamai.steamstatic.com/steam/apps/1174180/library_600x900.jpg',
-    expires: '2026-10-19',
-  };
+  const priced: SteamDealItem = { ...kept, discount: '-75%' };
   const quiet: SteamDealItem = {
     id: 'steam_1',
     title: 'Plain Game',
@@ -278,34 +273,21 @@ function checkSteamRows(): void {
       [priced.id, '~~59,99€~~ → **14,99€** (-75%)'],
       [quiet.id, '**9,99€**'],
     ]),
+    new Map([
+      [priced.id, { score: 9, scoreDesc: 'Very Positive', totalReviews: 600_000, positivePct: 91 }],
+      [quiet.id, null],
+    ]),
   );
-  const blob = JSON.stringify(display.components.map((component) => component.toJSON()));
+  const blob = JSON.stringify(display.embeds.map((embed) => embed.toJSON()));
   const wants = [
     'Steam Daily Deals',
     STEAM_SHELF_MARKER,
-    '### [Red Dead Redemption 2](https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/)',
-    '-# Open World · Western · Story Rich · Action',
-    '-# Released 5 Dec 2019  ·  Ends 19 Oct',
-    '`-75%`  ~~59,99€~~  **14,99€**',
-    '### [Plain Game](https://store.steampowered.com/app/1/Plain/)',
-    '**9,99€**',
+    '1. [Red Dead Redemption 2](https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/) · Very Positive · `−75%` ~~59,99€~~ **14,99€**',
+    '2. [Plain Game](https://store.steampowered.com/app/1/Plain/) · Special · **9,99€**',
   ];
   const missing = wants.filter((part) => !blob.includes(part));
-  if (missing.length > 0 || blob.includes('92;42') || blob.includes('"type":12')) {
-    fail(
-      'steam-row-card',
-      missing.length > 0
-        ? `missing ${missing.join(' | ')}`
-        : 'hero gallery or green chip still present',
-    );
-    return;
-  }
-  if (
-    blob.includes('Released') &&
-    blob.includes('Plain Game') &&
-    /Plain Game[\s\S]{0,200}Released/.test(blob)
-  ) {
-    fail('steam-row-card', 'plain game picked up a release line');
+  if (missing.length > 0) {
+    fail('steam-row-card', `missing ${missing.join(' | ')}`);
     return;
   }
 
@@ -315,31 +297,18 @@ function checkSteamRows(): void {
     gameName: `Game ${index}`,
     link: `https://store.steampowered.com/app/${index}/`,
     discount: '-50%',
-    tags: 'Action · Adventure',
-    released: '1 Jan, 2020',
-    image: `https://cdn.akamai.steamstatic.com/steam/apps/${index}/library_600x900.jpg`,
   }));
   const fullDisplay = buildSteamDealsDisplay(
     full,
     new Map(full.map((item) => [item.id, '~~39,99€~~ → **19,99€** (-50%)'])),
   );
-  const fullCount = countComponents(fullDisplay.components.map((component) => component.toJSON()));
-  if (fullCount > 40) {
-    fail('steam-row-card', `10-game card has ${fullCount} components, Discord allows 40`);
+  const description = fullDisplay.embeds[0]?.toJSON().description ?? '';
+  const lines = description.split('\n').length;
+  if (lines !== STEAM_DIGEST_SIZE || description.length > 4096) {
+    fail('steam-row-card', `10-game card has ${lines} lines and ${description.length} characters`);
     return;
   }
-  ok('steam-row-card', `store row, prices, and ${fullCount} components`);
-}
-
-function countComponents(node: unknown): number {
-  if (!node || typeof node !== 'object') return 0;
-  if (Array.isArray(node)) return node.reduce((sum, child) => sum + countComponents(child), 0);
-  const obj = node as Record<string, unknown>;
-  let count = typeof obj.type === 'number' ? 1 : 0;
-  if (Array.isArray(obj.components)) count += countComponents(obj.components);
-  if (obj.accessory) count += countComponents(obj.accessory);
-  if (Array.isArray(obj.items)) count += countComponents(obj.items);
-  return count;
+  ok('steam-row-card', `numbered rows, review chips, prices, ${description.length} characters`);
 }
 
 async function checkSteam(): Promise<void> {

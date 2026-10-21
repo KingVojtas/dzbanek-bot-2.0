@@ -1,6 +1,7 @@
 import {
   ChannelType,
   Events,
+  MessageFlags,
   PermissionFlagsBits,
   type Client,
   type Guild,
@@ -348,20 +349,24 @@ export class KitchenBoard {
     const key = kitchenViewKey(view);
     const display = buildKitchenBoardDisplay(view);
     const payload = {
-      embeds: [] as [],
+      embeds: display.embeds,
       components: display.components,
-      flags: display.flags,
       files: display.files ?? [],
     };
 
+    let stale: Message | null = null;
     if (settings.kitchenMessageId) {
       try {
         // Usually a cache hit. A deleted board fails here or on edit and is re-posted below.
         const existing = await channel.messages.fetch(settings.kitchenMessageId);
-        if (this.lastKey.get(guildId) === key) return;
-        await existing.edit(payload);
-        this.lastKey.set(guildId, key);
-        return;
+        if (isComponentsV2(existing)) {
+          stale = existing;
+        } else {
+          if (this.lastKey.get(guildId) === key) return;
+          await existing.edit(payload);
+          this.lastKey.set(guildId, key);
+          return;
+        }
       } catch (error) {
         // Only a deleted board is replaced. A rate limit or outage must not post a second one.
         if (!isUnknownMessage(error)) throw error;
@@ -369,8 +374,8 @@ export class KitchenBoard {
       }
     }
 
-    const recovered = await this.findExistingBoard(channel);
-    if (recovered) {
+    const recovered = stale ?? (await this.findExistingBoard(channel));
+    if (recovered && !isComponentsV2(recovered)) {
       if (this.lastKey.get(guildId) === key) {
         await this.guildSettings.upsert(guildId, { kitchenMessageId: recovered.id });
         return;
@@ -381,13 +386,15 @@ export class KitchenBoard {
       return;
     }
 
-    const sent = await channel.send({
-      components: display.components,
-      flags: display.flags,
-      files: display.files ?? [],
-    });
+    const sent = await channel.send(payload);
     await this.guildSettings.upsert(guildId, { kitchenMessageId: sent.id });
     this.lastKey.set(guildId, key);
+    if (recovered) {
+      // A board from before the website layout. Discord will not edit it into an embed.
+      await recovered.delete().catch(() => {});
+      this.logger.info(`Kitchen board replaced with the website layout in ${guild.name}.`);
+      return;
+    }
     this.logger.info(`Kitchen board posted in ${guild.name}.`);
   }
 
@@ -445,7 +452,6 @@ export class KitchenBoard {
       listeners: voice.listeners,
       voiceChannelName: voice.name,
       steam: steamTeaser(steamSnap),
-      steamCount: steamSnap?.items.length ?? 0,
       epic: epicTeaser(epicGames),
       joinsToday,
       radioNight: nightStation ? { stationName: nightStation.name } : undefined,
@@ -456,7 +462,6 @@ export class KitchenBoard {
             title: caught.title,
             artist: caught.artist,
             by: catcher ? displayName(catcher) : 'Someone',
-            coverUrl: caught.coverUrl,
           }
         : undefined,
     };
@@ -474,9 +479,6 @@ export class KitchenBoard {
         title,
         artist,
         sourceLabel: station.name,
-        sourceUrl: station.websiteUrl,
-        heroUrl: track?.coverUrl,
-        logoUrl: station.logoUrl,
         color: station.color,
         websiteUrl: station.websiteUrl,
       };
@@ -493,10 +495,8 @@ export class KitchenBoard {
         artist: track.uploader ?? 'Unknown artist',
         sourceLabel,
         titleUrl: track.sourceUrl || track.url,
-        heroUrl: track.thumbnail,
         color: track.source === 'spotify' ? 0x1db954 : 0xff0000,
         paused: player.paused,
-        queueLength: player.queue.length,
       };
     }
 
@@ -533,19 +533,21 @@ function pickStationId(value: string | null | undefined): StationId | null {
   return null;
 }
 
+/** Top deal, as the board's Steam field: the game, its discount, and what it costs now. */
 function steamTeaser(snap: SteamSnapshot | undefined): KitchenDealTeaser | undefined {
   const item = snap?.items[0];
   if (!snap || !item) return undefined;
-  const discount = item.discount?.replace(/[()]/g, '').trim();
-  const price = snap.prices.get(item.id) || item.salePrice?.trim() || '';
-  const more = snap.items.length > 1 ? `and ${snap.items.length - 1} more` : '';
-  const line = [discount, price, more].filter(Boolean).join(' · ') || 'On sale';
+  const price = snap.prices.get(item.id) ?? '';
+  const pay = price.match(/\*\*([^*]+)\*\*/)?.[1]?.trim() || item.salePrice?.trim() || '';
+  const percent = parseInt(
+    (item.discount ?? price.match(/\((-?\d+)%\)/)?.[1] ?? '').replace(/\D/g, ''),
+    10,
+  );
+  const discount = percent > 0 ? `−${percent}%` : '';
   return {
     title: item.gameName,
-    kicker: 'Steam',
-    line,
+    line: [discount, pay].filter(Boolean).join(' · ') || 'On sale',
     url: item.link,
-    image: item.image,
   };
 }
 
@@ -554,11 +556,13 @@ function epicTeaser(games: EpicFreeGame[]): KitchenDealTeaser | undefined {
   if (!current) return undefined;
   return {
     title: current.title,
-    kicker: current.isUpcoming ? 'Epic · Coming next' : 'Epic · Free now',
-    line: '',
+    line: current.isUpcoming ? 'Coming next' : 'Free this week',
     url: current.storeUrl,
-    image: current.image ?? current.heroImage,
   };
+}
+
+function isComponentsV2(message: Message): boolean {
+  return message.flags.has(MessageFlags.IsComponentsV2);
 }
 
 function missingVoicePermissions(channel: VoiceBasedChannel): string | null {

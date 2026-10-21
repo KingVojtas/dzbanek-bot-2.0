@@ -104,9 +104,6 @@ interface RawApp {
   };
 }
 
-const STEAM_TAG_URL = 'https://store.steampowered.com/tagdata/populartags/english';
-const SHELF_TAG_LIMIT = 4;
-
 /** Store blurb, one sentence, safe to drop into a Discord text row. */
 export function cleanSteamBlurb(value: string | undefined, max = 150): string {
   if (!value) return '';
@@ -192,76 +189,6 @@ export async function attachStoreProfiles(
     if (!profile) return;
     applyProfile(item, profile);
   });
-}
-
-/**
- * Tag line and release date for the digest rows. Search tags win. Genres from
- * the store profile fill a row whose tag ids did not resolve.
- */
-export async function attachSteamShelfMeta(
-  items: SteamDealItem[],
-  cache = new Map<string, SteamStoreProfile | null>(),
-): Promise<void> {
-  const names = await fetchSteamTagNames();
-  await mapPool(items, 4, async (item) => {
-    const fromTags = tagLine(item.tagIds, names);
-    if (fromTags) item.tags = fromTags;
-    if (item.released && item.tags) return;
-    const appId = extractAppId(item.link);
-    if (appId) {
-      const profile = await loadProfile(appId, cache);
-      if (profile) {
-        if (!item.released && profile.releaseDate) item.released = profile.releaseDate;
-        if (!item.tags && profile.genres.length > 0) {
-          item.tags = profile.genres.slice(0, SHELF_TAG_LIMIT).join(' · ');
-        }
-      }
-    }
-    if (!item.tags && item.genres) {
-      const genres = item.genres
-        .split(/[,·]/)
-        .map((part) => part.trim())
-        .filter((part) => part.length > 0)
-        .slice(0, SHELF_TAG_LIMIT);
-      if (genres.length > 0) item.tags = genres.join(' · ');
-    }
-  });
-}
-
-async function fetchSteamTagNames(): Promise<Map<number, string>> {
-  const names = new Map<number, string>();
-  try {
-    const response = await fetch(STEAM_TAG_URL, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(12_000),
-    });
-    if (!response.ok) return names;
-    const json = (await response.json()) as Array<{ tagid?: number; name?: string }>;
-    if (!Array.isArray(json)) return names;
-    for (const row of json) {
-      const name = row.name?.replace(/\s+/g, ' ').trim();
-      if (typeof row.tagid === 'number' && name) names.set(row.tagid, name);
-    }
-  } catch {
-    return names;
-  }
-  return names;
-}
-
-function tagLine(ids: number[] | undefined, names: Map<number, string>): string {
-  if (!ids?.length || names.size === 0) return '';
-  const picked: string[] = [];
-  const seen = new Set<string>();
-  for (const id of ids) {
-    const name = names.get(id);
-    if (!name) continue;
-    const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    picked.push(name);
-    if (picked.length === SHELF_TAG_LIMIT) break;
-  }
-  return picked.join(' · ');
 }
 
 function applyProfile(item: SteamDealItem, profile: SteamStoreProfile): void {

@@ -6,7 +6,7 @@ import {
   type ChatInputCommandInteraction,
   type VoiceBasedChannel,
 } from 'discord.js';
-import { buildReplyEmbed } from '../core/embeds';
+import { SITE_BEAT, buildReplyEmbed, buildSiteEmbed } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { memberVoiceChannel, replyEphemeral } from './music/_util';
 import { buildRadioPlayingDisplay } from '../radio/embed';
@@ -122,13 +122,12 @@ async function playRadio(
     services.radio.station(guildId)?.id === station.id;
 
   if (alreadyThisStation) {
-    const display = buildRadioPlayingDisplay(station, voiceChannel.name, {
-      alreadyPlaying: true,
+    const display = buildRadioPlayingDisplay(station, {
       track: services.radio.get(guildId)?.nowPlaying,
     });
     await interaction.reply({
+      embeds: display.embeds,
       components: display.components,
-      flags: display.flags,
     });
     return;
   }
@@ -143,12 +142,12 @@ async function playRadio(
 
   try {
     const session = await services.radio.play(voiceChannel, station);
-    const display = buildRadioPlayingDisplay(station, voiceChannel.name, {
+    const display = buildRadioPlayingDisplay(station, {
       track: session.nowPlaying,
     });
     await interaction.editReply({
+      embeds: display.embeds,
       components: display.components,
-      flags: display.flags,
     });
     const reply = await interaction.fetchReply();
     session.setNowPlayingMessage(reply);
@@ -246,10 +245,17 @@ async function scheduleRadioNight(
 
   await interaction.reply({
     embeds: [
-      buildReplyEmbed(
-        'success',
-        `📻 Radio Night is on: **${station.name}** in **#${voiceChannel.name}** every ${RADIO_NIGHT_LABEL} (Europe/Prague).\nThe Kitchen Board will show the schedule.`,
-      ),
+      buildSiteEmbed({
+        color: SITE_BEAT,
+        author: '🌙 Radio Night',
+        title: 'On the calendar',
+        fields: [
+          ['When', `${RADIO_NIGHT_LABEL} (Prague)`],
+          ['Fallback', station.name],
+          ['Channel', `<#${voiceChannel.id}>`],
+          ['Vote', 'Opens Friday 12:00 on the Kitchen Board', true],
+        ],
+      }),
     ],
   });
 }

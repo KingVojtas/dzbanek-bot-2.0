@@ -2,18 +2,16 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ContainerBuilder,
   Events,
   GuildMember,
   MessageFlags,
-  TextDisplayBuilder,
   type ButtonInteraction,
   type Client,
   type Collection,
   type InteractionReplyOptions,
 } from 'discord.js';
 import { QUEUE_BUTTON_PREFIX, buildQueueDisplay } from '../core/display';
-import { buildReplyEmbed, type ReplyTone } from '../core/embeds';
+import { buildReplyEmbed, type EmbedCard, type ReplyTone } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { RadioCatchStore } from '../kitchen/catches';
 import { CATCH_PLAY_PREFIX, RADIO_VOTE_PREFIX } from '../kitchen/display';
@@ -103,24 +101,30 @@ async function handleButton(interaction: ButtonInteraction, services: Services):
 
   const player = services.music.get(interaction.guildId);
   if (!player) {
-    await interaction.update({
-      embeds: [],
-      components: [
-        new ContainerBuilder().addTextDisplayComponents(
-          new TextDisplayBuilder().setContent('The queue is no longer active.'),
-        ),
-      ],
-      flags: MessageFlags.IsComponentsV2,
+    await updateCard(interaction, {
+      embeds: [buildReplyEmbed('info', 'The queue is no longer active.')],
+      components: [],
     });
     return;
   }
 
-  const display = buildQueueDisplay(player.current, player.queue, page);
-  await interaction.update({
-    embeds: [],
-    components: display.components,
-    flags: display.flags,
-  });
+  await updateCard(interaction, buildQueueDisplay(player.current, player.queue, page));
+}
+
+/**
+ * Cards posted before the switch to embeds are Components V2 messages, and
+ * Discord will not edit one into an embed. Those get the fresh card privately.
+ */
+async function updateCard(interaction: ButtonInteraction, card: EmbedCard): Promise<void> {
+  if (interaction.message.flags.has(MessageFlags.IsComponentsV2)) {
+    await interaction.reply({
+      embeds: card.embeds,
+      components: card.components,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  await interaction.update({ embeds: card.embeds, components: card.components });
 }
 
 async function handleMusicButton(
@@ -149,8 +153,9 @@ async function handleMusicButton(
   if (interaction.customId === 'music:queue') {
     const display = buildQueueDisplay(player.current, player.queue, 0);
     await interaction.reply({
+      embeds: display.embeds,
       components: display.components,
-      flags: display.flags | MessageFlags.Ephemeral,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -214,11 +219,7 @@ async function handleMusicButton(
     return;
   }
 
-  const display = player.buildNowPlayingPanel();
-  await interaction.update({
-    components: display.components,
-    flags: display.flags,
-  });
+  await updateCard(interaction, player.buildNowPlayingPanel());
 }
 
 async function handleRadioButton(
