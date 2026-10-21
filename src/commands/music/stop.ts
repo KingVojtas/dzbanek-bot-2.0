@@ -1,5 +1,5 @@
 import { SlashCommandBuilder } from 'discord.js';
-import { buildInfoEmbed } from '../../core/embeds';
+import { buildReplyEmbed } from '../../core/embeds';
 import type { Command } from '../../core/types';
 import { requirePlayer } from './_util';
 
@@ -16,7 +16,10 @@ export const stop: Command = {
     if (interaction.guildId) services.kitchen.refresh(interaction.guildId);
     await interaction.reply({
       embeds: [
-        buildInfoEmbed('⏹️ Stopped playback, cleared the queue, and left the voice channel.'),
+        buildReplyEmbed(
+          'success',
+          '⏹️ Stopped playback, cleared the queue, and left the voice channel.',
+        ),
       ],
     });
   },

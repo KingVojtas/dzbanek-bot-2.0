@@ -18,10 +18,22 @@ Now Playing is a Components v2 card: album art, a progress bar, and transport bu
 | -------------------- | --------------------------------------------------------------------------------------- |
 | `/play <query>`      | Join your voice channel and play a track, or add it to the queue. Optional `play_next`. |
 | `/queue`             | Show the current track and the upcoming queue as a card, page by page.                  |
+| `/nowplaying`        | Bring the Now Playing card down to the bottom of the chat.                              |
+| `/skip`              | Skip to the next track.                                                                 |
+| `/pause`             | Pause, or resume when already paused.                                                   |
+| `/volume <percent>`  | Set the volume for everyone, 25–150 % (100 is normal).                                  |
 | `/stop`              | Stop playback, clear the queue, delete the Now Playing card, and leave.                 |
 | `/remove <position>` | Drop one upcoming track (1-based).                                                      |
 
-⏸️ Pause, ⏭️ skip, 🔀 shuffle, and 🔁 loop live on the Now Playing card. The Kitchen Board shows the same song.
+The Now Playing card carries two rows of buttons: ⏸️ pause, ⏭️ skip, ⏹️ stop, 🔁 loop and 🔀 shuffle, then ⏮️ previous, 🔉 / 🔊 volume (25 % steps) and 📜 queue. Previous plays the last finished track again, and the current one waits right behind it. The volume carries over to the next track. Anyone can open the queue; the other buttons want you in the bot’s voice channel. The Kitchen Board shows the same song.
+
+### ❓ Help
+
+`/help` shows every command, grouped by shelf, in a card only you can see. `/help command:<name>` spells out one command and its options. A new command lands in `/help` on its own.
+
+Replies wear a color for what happened: green when something worked, orange when the bot needs something from you (join voice, Manage Server), red when it failed.
+
+On startup, Dzbanek writes its profile’s About Me, so anyone clicking the bot sees what it does and that `/help` is there.
 
 When the queue goes quiet, Dzbanek waits **120 seconds** (configurable). If people are still in the channel, the last radio station fades in (Beat, if there isn’t one yet). `/setup idle-radio` turns that handoff off. `/stop` still leaves. The queue holds **100** tracks.
 
@@ -246,7 +258,8 @@ src/
   commands/
     admin/setup.ts         Per-server deal, greeting, and kitchen channels
     rooms.ts               /textroom and /voiceroom
-    music/                 /play, /queue, /stop, /remove
+    music/                 /play, /queue, /nowplaying, /skip, /pause, /volume, /stop, /remove
+    help.ts                /help, built from the command list
     radio.ts               /radio play, stop, night, night-off
   rooms/                   Emoji prefixes for new channel names
   events/                  ready, interactions, member join/leave
@@ -269,15 +282,17 @@ data/bot.db                Runtime SQLite (git-ignored)
 
 ## 📜 Scripts
 
-| Script              | What it does                                           |
-| ------------------- | ------------------------------------------------------ |
-| `npm run dev`       | Run with auto-reload (`tsx watch`). 👀                 |
-| `npm start`         | Run the bot. 🍪                                        |
-| `npm run deploy`    | Register slash commands with Discord.                  |
-| `npm run db:push`   | Create or update `data/bot.db` from the Prisma schema. |
-| `npm run typecheck` | Type-check with `tsc --noEmit`.                        |
-| `npm run lint`      | Lint with ESLint.                                      |
-| `npm run format`    | Format with Prettier.                                  |
+| Script              | What it does                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------ |
+| `npm run dev`       | Run with auto-reload (`tsx watch`). 👀                                               |
+| `npm start`         | Run the bot. 🍪                                                                      |
+| `npm run deploy`    | Register slash commands with Discord.                                                |
+| `npm run db:push`   | Create or update `data/bot.db` from the Prisma schema.                               |
+| `npm run typecheck` | Type-check with `tsc --noEmit`.                                                      |
+| `npm run lint`      | Lint with ESLint.                                                                    |
+| `npm run format`    | Format with Prettier.                                                                |
+| `npm run check`     | Typecheck, lint, Prettier, and the offline card checks in one go.                    |
+| `npm run verify`    | Live smoke test: ffmpeg, yt-dlp, Spotify, Steam, Epic, Discord login (needs `.env`). |
 
 ---
 

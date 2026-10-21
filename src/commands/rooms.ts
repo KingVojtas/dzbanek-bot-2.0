@@ -6,7 +6,7 @@ import {
   type ChatInputCommandInteraction,
   type OverwriteResolvable,
 } from 'discord.js';
-import { buildInfoEmbed } from '../core/embeds';
+import { buildReplyEmbed, type ReplyTone } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { decorateChannelName, type RoomKind } from '../rooms/channel-name';
 
@@ -121,16 +121,20 @@ async function createRoom(
       access === 'private'
         ? 'It is private, so only administrators can see it.'
         : 'It is public to anyone who can see that category.';
-    await reply(interaction, `Created ${created} in ${category}. ${visibility}`);
+    await reply(interaction, `Created ${created} in ${category}. ${visibility}`, 'success');
   } catch (error) {
     services.logger.error('Failed to create room:', error);
     const errMsg = error instanceof Error ? error.message : String(error || '');
-    await reply(interaction, `Could not create that room.\n${errMsg.slice(0, 400)}`);
+    await reply(interaction, `Could not create that room.\n${errMsg.slice(0, 400)}`, 'error');
   }
 }
 
-function reply(interaction: ChatInputCommandInteraction, description: string): Promise<unknown> {
-  const embeds = [buildInfoEmbed(description)];
+function reply(
+  interaction: ChatInputCommandInteraction,
+  description: string,
+  tone: ReplyTone = 'warn',
+): Promise<unknown> {
+  const embeds = [buildReplyEmbed(tone, description)];
   if (interaction.deferred || interaction.replied) return interaction.editReply({ embeds });
   return interaction.reply({ embeds, flags: MessageFlags.Ephemeral });
 }

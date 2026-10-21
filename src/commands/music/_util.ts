@@ -5,16 +5,17 @@ import {
   type InteractionReplyOptions,
   type VoiceBasedChannel,
 } from 'discord.js';
-import { buildInfoEmbed } from '../../core/embeds';
+import { buildReplyEmbed, type ReplyTone } from '../../core/embeds';
 import type { GuildPlayer } from '../../music/GuildPlayer';
 import type { Services } from '../../core/types';
 
 export async function replyEphemeral(
   interaction: ChatInputCommandInteraction,
   description: string,
+  tone: ReplyTone = 'warn',
 ): Promise<void> {
   const payload: InteractionReplyOptions = {
-    embeds: [buildInfoEmbed(description)],
+    embeds: [buildReplyEmbed(tone, description)],
     flags: MessageFlags.Ephemeral,
   };
   if (interaction.deferred || interaction.replied) {

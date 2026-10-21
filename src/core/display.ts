@@ -80,6 +80,10 @@ export interface NowPlayingDisplayOptions {
   upNextTitle?: string | null;
   label?: string;
   footer?: string;
+  /** 1 = 100 %. */
+  volume?: number;
+  /** Enables ⏮ Previous. */
+  hasHistory?: boolean;
 }
 
 /** Live Now Playing panel: album art, metadata, transport controls. */
@@ -96,10 +100,13 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): V2Displa
   const loopLabel =
     loopMode === 'track' ? '🔁 Track' : loopMode === 'queue' ? '🔁 Queue' : '🔁 Off';
 
+  const volume = opts.volume ?? 1;
+  const volumePct = Math.round(volume * 100);
   const meta: string[] = [`\`${formatDuration(track.durationSec)}\``];
   if (track.requestedBy) meta.push(track.requestedBy);
   const views = formatViews(track.views);
   if (views) meta.push(views);
+  meta.push(`${volumePct < 100 ? '🔉' : '🔊'} ${volumePct}%`);
 
   const body = [
     `**${label}** · ${musicSourceLabel(track.source)}`,
@@ -120,12 +127,6 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): V2Displa
   } else if (track.source === 'spotify') {
     body.push('-# Audio matched on YouTube · metadata from Spotify');
   }
-
-  const section = new SectionBuilder().addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(body.join('\n').slice(0, 4000)),
-  );
-  const thumb = thumbnailFor(track.thumbnail, track.title);
-  if (thumb) section.setThumbnailAccessory(thumb);
 
   const transport = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
     new ButtonBuilder()
@@ -155,22 +156,46 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): V2Displa
       .setStyle(ButtonStyle.Secondary),
   );
 
+  const extras = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId('music:prev')
+      .setLabel('Previous')
+      .setEmoji('⏮️')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!opts.hasHistory),
+    new ButtonBuilder()
+      .setCustomId('music:voldown')
+      .setEmoji('🔉')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(volume <= 0.25),
+    new ButtonBuilder()
+      .setCustomId('music:volup')
+      .setEmoji('🔊')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(volume >= 1.5),
+    new ButtonBuilder()
+      .setCustomId('music:queue')
+      .setLabel('Queue')
+      .setEmoji('📜')
+      .setStyle(ButtonStyle.Secondary),
+  );
+
   const container = new ContainerBuilder().setAccentColor(musicAccent(track.source));
 
-  if (track.thumbnail && /^https?:\/\//i.test(track.thumbnail)) {
+  // The art shows once, as the hero. The text below it needs no thumbnail.
+  const hero = httpImage(track.thumbnail);
+  if (hero) {
     container.addMediaGalleryComponents(
       new MediaGalleryBuilder().addItems(
-        new MediaGalleryItemBuilder()
-          .setURL(track.thumbnail)
-          .setDescription(track.title.slice(0, 100)),
+        new MediaGalleryItemBuilder().setURL(hero).setDescription(track.title.slice(0, 100)),
       ),
     );
   }
 
   container
-    .addSectionComponents(section)
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(body.join('\n').slice(0, 4000)))
     .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
-    .addActionRowComponents(transport);
+    .addActionRowComponents(transport, extras);
 
   return { components: [container], flags: MessageFlags.IsComponentsV2 };
 }

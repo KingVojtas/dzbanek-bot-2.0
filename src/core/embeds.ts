@@ -2,16 +2,35 @@ import { EmbedBuilder } from 'discord.js';
 import { config } from '../config';
 import type { Track } from './types';
 
+export type ReplyTone = 'success' | 'info' | 'warn' | 'error';
+
+/** Kitchen palette: a guard reads differently from a done deal. */
+const TONE_COLORS: Record<Exclude<ReplyTone, 'info'>, number> = {
+  success: 0x3ba55d,
+  warn: 0xe8a33d,
+  error: 0xd9534f,
+};
+
 /**
- * Generic short reply embed (errors, confirmations, status).
+ * Short reply embed. `success` confirms, `warn` explains why something was
+ * refused, `error` reports a failure, `info` (config.embedColor) is neutral.
  * Prefer domain-specific builders (track, queue, deals) when available.
  */
-export function buildInfoEmbed(description: string, title?: string): EmbedBuilder {
+export function buildReplyEmbed(
+  tone: ReplyTone,
+  description: string,
+  title?: string,
+): EmbedBuilder {
   const embed = new EmbedBuilder()
-    .setColor(config.embedColor)
+    .setColor(tone === 'info' ? config.embedColor : TONE_COLORS[tone])
     .setDescription(description.slice(0, 4096));
   if (title) embed.setTitle(title.slice(0, 256));
   return embed;
+}
+
+/** Neutral reply embed. */
+export function buildInfoEmbed(description: string, title?: string): EmbedBuilder {
+  return buildReplyEmbed('info', description, title);
 }
 
 /** Playback clock (`0:00`, `3:21`, `1:02:03`). Zero is a valid position. */

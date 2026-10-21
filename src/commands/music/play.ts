@@ -1,6 +1,6 @@
 import { GuildMember, MessageFlags, SlashCommandBuilder } from 'discord.js';
 import { buildQueuedTrackDisplay } from '../../core/display';
-import { buildInfoEmbed, formatDuration } from '../../core/embeds';
+import { buildReplyEmbed, formatDuration } from '../../core/embeds';
 import { isSpotifyAlbumUrl, isSpotifyPlaylistUrl } from '../../music/sources';
 import { youtubeBotCheckHint } from '../../music/ytdlp-cookies';
 import type { Command, Track } from '../../core/types';
@@ -27,7 +27,7 @@ export const play: Command = {
     const voiceChannel = member instanceof GuildMember ? member.voice.channel : null;
     if (!voiceChannel) {
       await interaction.reply({
-        embeds: [buildInfoEmbed('🔇 You need to be in a voice channel to play music.')],
+        embeds: [buildReplyEmbed('warn', '🔇 You need to be in a voice channel to play music.')],
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -40,7 +40,10 @@ export const play: Command = {
     if (isSpotifyCollection) {
       void interaction.editReply({
         embeds: [
-          buildInfoEmbed('🔍 Resolving Spotify album/playlist on YouTube… this can take a bit.'),
+          buildReplyEmbed(
+            'info',
+            '🔍 Resolving Spotify album/playlist on YouTube… this can take a bit.',
+          ),
         ],
       });
     }
@@ -71,7 +74,7 @@ export const play: Command = {
       } else if (!msg) {
         msg = `❌ Could not load that track or join voice.\n${errMsg.slice(0, 400)}`;
       }
-      await interaction.editReply({ embeds: [buildInfoEmbed(msg)] });
+      await interaction.editReply({ embeds: [buildReplyEmbed('error', msg)] });
       return;
     }
 
@@ -81,7 +84,8 @@ export const play: Command = {
       }
       await interaction.editReply({
         embeds: [
-          buildInfoEmbed(
+          buildReplyEmbed(
+            'warn',
             isSpotifyCollection
               ? '🔍 Spotify album/playlist loaded, but no playable YouTube matches were found.'
               : '🔍 No results found for your query.',
@@ -103,7 +107,9 @@ export const play: Command = {
     const accepted = tracks.slice(0, Math.max(0, room));
     if (accepted.length === 0) {
       await interaction.editReply({
-        embeds: [buildInfoEmbed('⚠️ The queue is full. Try again once some tracks have played.')],
+        embeds: [
+          buildReplyEmbed('warn', '⚠️ The queue is full. Try again once some tracks have played.'),
+        ],
       });
       return;
     }
@@ -124,7 +130,8 @@ export const play: Command = {
         const hint = attempt.error ? youtubeBotCheckHint(attempt.error) : null;
         await interaction.editReply({
           embeds: [
-            buildInfoEmbed(
+            buildReplyEmbed(
+              'error',
               hint ??
                 `❌ Could not play **${accepted[0].title}**.\n${attempt.error?.slice(0, 400) ?? 'Unknown stream error.'}`,
             ),
@@ -147,7 +154,8 @@ export const play: Command = {
           await interaction
             .followUp({
               embeds: [
-                buildInfoEmbed(
+                buildReplyEmbed(
+                  'success',
                   `🎶 Queued **${accepted.length}** tracks · now playing **${player.current?.title ?? accepted[0].title}**. Use \`/queue\` to browse.`,
                 ),
               ],
@@ -199,7 +207,8 @@ export const play: Command = {
     const firstPos = aheadForFirst + 1;
     await interaction.editReply({
       embeds: [
-        buildInfoEmbed(
+        buildReplyEmbed(
+          'success',
           `➕ Added **${accepted.length}** tracks to the queue. First one is at position **#${firstPos}**.`,
         ),
       ],

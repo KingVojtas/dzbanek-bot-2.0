@@ -1,5 +1,5 @@
 import { ChannelType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
-import { buildInfoEmbed } from '../../core/embeds';
+import { buildReplyEmbed } from '../../core/embeds';
 import type { Command } from '../../core/types';
 
 export const setup: Command = {
@@ -106,7 +106,7 @@ export const setup: Command = {
     const guildId = interaction.guildId;
     if (!guildId) {
       await interaction.reply({
-        embeds: [buildInfoEmbed('This command can only be used in a server.')],
+        embeds: [buildReplyEmbed('warn', 'This command can only be used in a server.')],
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -152,7 +152,8 @@ export const setup: Command = {
         : 'off · leave after the music idle timeout';
       await interaction.reply({
         embeds: [
-          buildInfoEmbed(
+          buildReplyEmbed(
+            'info',
             `**Steam deals:** ${steam}\n**Epic free games:** ${epic}\n**Welcome:** ${welcome}\n**Goodbye:** ${goodbye}\n**Kitchen Board:** ${kitchen}\n**Radio Night:** ${radioNight}\n**Idle → radio:** ${idleRadio}\n\nUse \`/setup steam\`, \`/setup epic\`, \`/setup welcome\`, \`/setup goodbye\`, or \`/setup kitchen\` to pick a channel. Schedule Radio Night with \`/radio night\`. Toggle idle radio with \`/setup idle-radio\`.`,
             'Server channels',
           ),
@@ -171,7 +172,9 @@ export const setup: Command = {
           kitchenMessageId: null,
         });
         await interaction.reply({
-          embeds: [buildInfoEmbed('The Kitchen Board will no longer update in this server.')],
+          embeds: [
+            buildReplyEmbed('success', 'The Kitchen Board will no longer update in this server.'),
+          ],
           flags: MessageFlags.Ephemeral,
         });
         if (current.kitchenChannelId && current.kitchenMessageId) {
@@ -189,7 +192,10 @@ export const setup: Command = {
         services.kitchen.refresh(guildId);
         await interaction.reply({
           embeds: [
-            buildInfoEmbed('Radio Night is off. The Kitchen Board will drop the schedule line.'),
+            buildReplyEmbed(
+              'success',
+              'Radio Night is off. The Kitchen Board will drop the schedule line.',
+            ),
           ],
           flags: MessageFlags.Ephemeral,
         });
@@ -199,7 +205,8 @@ export const setup: Command = {
         await store.upsert(guildId, { idleRadioEnabled: false });
         await interaction.reply({
           embeds: [
-            buildInfoEmbed(
+            buildReplyEmbed(
+              'success',
               'Idle → radio is off. After the music queue ends I’ll leave like before.',
             ),
           ],
@@ -221,7 +228,7 @@ export const setup: Command = {
         goodbye: 'Goodbye messages will no longer post in this server.',
       };
       await interaction.reply({
-        embeds: [buildInfoEmbed(labels[feature as keyof typeof labels])],
+        embeds: [buildReplyEmbed('success', labels[feature as keyof typeof labels])],
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -232,7 +239,8 @@ export const setup: Command = {
       await store.upsert(guildId, { idleRadioEnabled: enabled });
       await interaction.reply({
         embeds: [
-          buildInfoEmbed(
+          buildReplyEmbed(
+            'success',
             enabled
               ? 'After the music queue goes quiet I’ll start the last radio station (or Beat) instead of leaving.'
               : 'Idle → radio is off. After the music queue ends I’ll leave like before.',
@@ -272,7 +280,7 @@ export const setup: Command = {
     const chosen = replies[sub];
     if (!chosen) return;
     await store.upsert(guildId, chosen.patch);
-    await interaction.reply({ embeds: [buildInfoEmbed(chosen.text)] });
+    await interaction.reply({ embeds: [buildReplyEmbed('success', chosen.text)] });
     if (sub === 'kitchen') {
       await services.kitchen.ensurePosted(guildId).catch((error) => {
         services.logger.error('Failed to post Kitchen Board:', error);

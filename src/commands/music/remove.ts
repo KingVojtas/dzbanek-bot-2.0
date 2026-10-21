@@ -1,5 +1,5 @@
 import { SlashCommandBuilder } from 'discord.js';
-import { buildInfoEmbed } from '../../core/embeds';
+import { buildReplyEmbed } from '../../core/embeds';
 import type { Command } from '../../core/types';
 import { requirePlayer } from './_util';
 
@@ -23,13 +23,13 @@ export const remove: Command = {
     const removed = player.remove(position - 1);
     if (!removed) {
       await interaction.reply({
-        embeds: [buildInfoEmbed(`❌ No track at position **${position}**.`)],
+        embeds: [buildReplyEmbed('warn', `❌ No track at position **${position}**.`)],
       });
       return;
     }
 
     await interaction.reply({
-      embeds: [buildInfoEmbed(`🗑️ Removed **${removed.title}** from the queue.`)],
+      embeds: [buildReplyEmbed('success', `🗑️ Removed **${removed.title}** from the queue.`)],
     });
   },
 };

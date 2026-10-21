@@ -6,7 +6,7 @@ import {
   type ChatInputCommandInteraction,
   type VoiceBasedChannel,
 } from 'discord.js';
-import { buildInfoEmbed } from '../core/embeds';
+import { buildReplyEmbed } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { memberVoiceChannel, replyEphemeral } from './music/_util';
 import { buildRadioPlayingDisplay } from '../radio/embed';
@@ -104,7 +104,7 @@ async function playRadio(
   const voiceChannel = memberVoiceChannel(interaction);
   if (!voiceChannel) {
     await interaction.reply({
-      embeds: [buildInfoEmbed('🔇 You need to be in a voice channel to play the radio.')],
+      embeds: [buildReplyEmbed('warn', '🔇 You need to be in a voice channel to play the radio.')],
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -162,7 +162,9 @@ async function playRadio(
     services.logger.error(`Failed to start ${station.name}:`, error);
     const errMsg = error instanceof Error ? error.message : String(error || '');
     await interaction.editReply({
-      embeds: [buildInfoEmbed(`❌ Could not start ${station.name}.\n${errMsg.slice(0, 400)}`)],
+      embeds: [
+        buildReplyEmbed('error', `❌ Could not start ${station.name}.\n${errMsg.slice(0, 400)}`),
+      ],
     });
   }
 }
@@ -196,7 +198,7 @@ async function stopRadio(
   services.radio.stop(guildId);
   services.kitchen.refresh(guildId);
   await interaction.reply({
-    embeds: [buildInfoEmbed(`⏹️ Stopped ${name} and left the voice channel.`)],
+    embeds: [buildReplyEmbed('success', `⏹️ Stopped ${name} and left the voice channel.`)],
   });
 }
 
@@ -244,7 +246,8 @@ async function scheduleRadioNight(
 
   await interaction.reply({
     embeds: [
-      buildInfoEmbed(
+      buildReplyEmbed(
+        'success',
         `📻 Radio Night is on: **${station.name}** in **#${voiceChannel.name}** every ${RADIO_NIGHT_LABEL} (Europe/Prague).\nThe Kitchen Board will show the schedule.`,
       ),
     ],
@@ -269,7 +272,7 @@ async function cancelRadioNight(
   await services.guildSettings.upsert(guildId, { radioNightEnabled: false });
   services.kitchen.refresh(guildId);
   await interaction.reply({
-    embeds: [buildInfoEmbed('📻 Radio Night is off. I will not auto-join on Friday.')],
+    embeds: [buildReplyEmbed('success', '📻 Radio Night is off. I will not auto-join on Friday.')],
   });
 }
 

@@ -13,7 +13,7 @@ import {
   type InteractionReplyOptions,
 } from 'discord.js';
 import { QUEUE_BUTTON_PREFIX, buildQueueDisplay } from '../core/display';
-import { buildInfoEmbed } from '../core/embeds';
+import { buildReplyEmbed, type ReplyTone } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { RadioCatchStore } from '../kitchen/catches';
 import { CATCH_PLAY_PREFIX, RADIO_VOTE_PREFIX } from '../kitchen/display';
@@ -30,6 +30,14 @@ export function registerInteractionCreate(
   services: Services,
 ): void {
   client.on(Events.InteractionCreate, async (interaction) => {
+    if (interaction.isAutocomplete()) {
+      const command = commands.get(interaction.commandName);
+      await command?.autocomplete?.(interaction, services).catch((error) => {
+        services.logger.debug(`Autocomplete failed for /${interaction.commandName}:`, error);
+      });
+      return;
+    }
+
     try {
       if (interaction.isChatInputCommand()) {
         const command = commands.get(interaction.commandName);
@@ -47,7 +55,7 @@ export function registerInteractionCreate(
     } catch (error) {
       services.logger.error('Interaction handler failed:', error);
       const payload: InteractionReplyOptions = {
-        content: 'Something went wrong while running that command.',
+        embeds: [buildReplyEmbed('error', '❌ Something went wrong while running that command.')],
         flags: MessageFlags.Ephemeral,
       };
       if (interaction.isRepliable()) {
@@ -122,7 +130,7 @@ async function handleMusicButton(
   const guildId = interaction.guildId;
   if (!guildId) {
     await interaction.reply({
-      embeds: [buildInfoEmbed('This can only be used in a server.')],
+      embeds: [buildReplyEmbed('warn', 'This can only be used in a server.')],
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -131,15 +139,27 @@ async function handleMusicButton(
   const player = services.music.get(guildId);
   if (!player || !player.current) {
     await interaction.reply({
-      embeds: [buildInfoEmbed('🔇 Nothing is playing right now.')],
+      embeds: [buildReplyEmbed('warn', '🔇 Nothing is playing right now.')],
       flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  // Looking at the queue changes nothing, so anyone may open it.
+  if (interaction.customId === 'music:queue') {
+    const display = buildQueueDisplay(player.current, player.queue, 0);
+    await interaction.reply({
+      components: display.components,
+      flags: display.flags | MessageFlags.Ephemeral,
     });
     return;
   }
 
   if (!inSameVoice(interaction, player)) {
     await interaction.reply({
-      embeds: [buildInfoEmbed('🔇 Join the voice channel the bot is in to use these controls.')],
+      embeds: [
+        buildReplyEmbed('warn', '🔇 Join the voice channel the bot is in to use these controls.'),
+      ],
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -160,8 +180,22 @@ async function handleMusicButton(
     return;
   }
 
+  if (id === 'music:prev') {
+    if (!player.previous()) {
+      await interaction.reply({
+        embeds: [buildReplyEmbed('warn', '⏮️ Nothing to go back to yet.')],
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    await interaction.deferUpdate();
+    return;
+  }
+
   if (id === 'music:pause') {
     player.pause();
+  } else if (id === 'music:voldown' || id === 'music:volup') {
+    player.stepVolume(id === 'music:volup' ? 1 : -1);
   } else if (id === 'music:resume') {
     player.resume();
   } else if (id === 'music:loop') {
@@ -170,7 +204,7 @@ async function handleMusicButton(
     const n = player.shuffle();
     if (n === 0) {
       await interaction.reply({
-        embeds: [buildInfoEmbed('⚠️ Need at least 2 queued tracks to shuffle.')],
+        embeds: [buildReplyEmbed('warn', '⚠️ Need at least 2 queued tracks to shuffle.')],
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -194,7 +228,7 @@ async function handleRadioButton(
   const guildId = interaction.guildId;
   if (!guildId) {
     await interaction.reply({
-      embeds: [buildInfoEmbed('This can only be used in a server.')],
+      embeds: [buildReplyEmbed('warn', 'This can only be used in a server.')],
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -212,7 +246,7 @@ async function handleRadioButton(
 
   if (!services.radio.isPlaying(guildId)) {
     await interaction.reply({
-      embeds: [buildInfoEmbed('🔇 Radio is not playing right now.')],
+      embeds: [buildReplyEmbed('warn', '🔇 Radio is not playing right now.')],
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -226,7 +260,9 @@ async function handleRadioButton(
     member.voice.channelId !== botChannelId
   ) {
     await interaction.reply({
-      embeds: [buildInfoEmbed('🔇 Join the voice channel the bot is in to use this control.')],
+      embeds: [
+        buildReplyEmbed('warn', '🔇 Join the voice channel the bot is in to use this control.'),
+      ],
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -244,7 +280,7 @@ async function handleRadioVoteButton(
   const guildId = interaction.guildId;
   if (!guildId) {
     await interaction.reply({
-      embeds: [buildInfoEmbed('This can only be used in a server.')],
+      embeds: [buildReplyEmbed('warn', 'This can only be used in a server.')],
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -356,7 +392,7 @@ async function handleCatchPlay(interaction: ButtonInteraction, services: Service
     announceChannel: channel,
   });
   if (!result.ok) {
-    await interaction.editReply({ embeds: [buildInfoEmbed(result.message)] });
+    await interaction.editReply({ embeds: [buildReplyEmbed('error', result.message)] });
     return;
   }
 
@@ -367,9 +403,13 @@ async function handleCatchPlay(interaction: ButtonInteraction, services: Service
   await interaction.editReply({ content: line });
 }
 
-async function replyButton(interaction: ButtonInteraction, description: string): Promise<void> {
+async function replyButton(
+  interaction: ButtonInteraction,
+  description: string,
+  tone: ReplyTone = 'warn',
+): Promise<void> {
   const payload: InteractionReplyOptions = {
-    embeds: [buildInfoEmbed(description)],
+    embeds: [buildReplyEmbed(tone, description)],
     flags: MessageFlags.Ephemeral,
   };
   if (interaction.deferred || interaction.replied) {

@@ -3,7 +3,14 @@
  * A section without a thumbnail or button throws. Discord also rejects a
  * message whose nested components exceed 40.
  */
-import { formatSaleEnd, buildQueueDisplay, buildSteamDealsDisplay } from '../src/core/display';
+import { commandList } from '../src/commands';
+import { buildHelpDisplay } from '../src/commands/help';
+import {
+  formatSaleEnd,
+  buildNowPlayingDisplay,
+  buildQueueDisplay,
+  buildSteamDealsDisplay,
+} from '../src/core/display';
 import type { SteamDealItem, Track } from '../src/core/types';
 import {
   buildKitchenBoardDisplay,
@@ -351,6 +358,67 @@ checkCard('queue-card', () =>
   ]),
 );
 checkCard('queue-no-art', () => buildQueueDisplay(track('Now'), [track('Now'), track('Next')]));
+
+{
+  const nowArt = track('Now', 'https://cdn.example.com/now.jpg');
+  const full = () =>
+    buildNowPlayingDisplay({
+      track: nowArt,
+      queueLength: 3,
+      paused: false,
+      loopMode: 'queue',
+      positionSec: 42,
+      upNextTitle: 'Next',
+      volume: 1.25,
+      hasHistory: true,
+    });
+  checkCard('now-playing-full', full);
+  checkCard('now-playing-no-art', () =>
+    buildNowPlayingDisplay({ track: track('Now'), queueLength: 0, paused: true, loopMode: 'off' }),
+  );
+
+  const json = cardJson(full());
+  const art = countOf(json, 'https://cdn.example.com/now.jpg');
+  if (art !== 1) fail('now-playing-art-once', `album art appears ${art} times`);
+  else ok('now-playing-art-once', 'album art shows once, as the hero');
+  const ids = ['music:prev', 'music:voldown', 'music:volup', 'music:queue', 'music:skip'];
+  const missing = ids.filter((id) => !json.includes(`"${id}"`));
+  if (missing.length > 0) fail('now-playing-buttons', `missing ${missing.join(', ')}`);
+  else if (!json.includes('125%')) fail('now-playing-buttons', 'volume is not on the card');
+  else ok('now-playing-buttons', 'previous, volume, and queue sit under the transport');
+
+  const fresh = cardJson(
+    buildNowPlayingDisplay({ track: nowArt, queueLength: 0, paused: false, loopMode: 'off' }),
+  );
+  if (
+    !/"custom_id":"music:prev"[^}]*"disabled":true|"disabled":true[^}]*"custom_id":"music:prev"/.test(
+      fresh,
+    )
+  ) {
+    fail('now-playing-prev-disabled', 'Previous is clickable with no history');
+  } else ok('now-playing-prev-disabled', 'Previous waits for a finished track');
+}
+
+{
+  const commandsJson = commandList.map((command) => command.data.toJSON());
+  const avatarUrl = 'https://cdn.example.com/avatar.png';
+  checkCard('help-all', () => buildHelpDisplay(commandsJson, { avatarUrl }));
+  checkCard('help-setup', () => buildHelpDisplay(commandsJson, { avatarUrl, focus: 'setup' }));
+  checkCard('help-play', () => buildHelpDisplay(commandsJson, { focus: 'play' }));
+
+  const all = cardJson(buildHelpDisplay(commandsJson, { avatarUrl }));
+  const unlisted = commandsJson.filter((command) => !all.includes(`/${command.name}`));
+  if (unlisted.length > 0) {
+    fail('help-lists-all', `missing ${unlisted.map((command) => command.name).join(', ')}`);
+  } else ok('help-lists-all', `all ${commandsJson.length} commands listed`);
+  if (all.includes('🧩 Other')) fail('help-shelves', 'a command has no shelf in /help');
+  else ok('help-shelves', 'every command sits on a named shelf');
+
+  const play = cardJson(buildHelpDisplay(commandsJson, { focus: 'play' }));
+  if (!play.includes('`query`') || !play.includes('`play_next`')) {
+    fail('help-play-options', '/help command:play does not list its options');
+  } else ok('help-play-options', '/help command:play lists query and play_next');
+}
 
 {
   const rock = rockView();

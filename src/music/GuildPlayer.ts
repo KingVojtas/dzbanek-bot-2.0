@@ -15,6 +15,9 @@ import type { Logger } from '../core/logger';
 import type { LoopMode, Track, TrackSource } from '../core/types';
 
 const HISTORY_MAX = 25;
+const VOLUME_MIN = 0.25;
+const VOLUME_MAX = 1.5;
+const VOLUME_STEP = 0.25;
 /** Discord allows about 5 edits per 5 s per channel; leave room for buttons and the board. */
 const PROGRESS_TICK_MS = 5_000;
 
@@ -54,6 +57,9 @@ export class GuildPlayer {
   private idleAdvanceScheduled = false;
   /** URL already retried once after ending instantly. */
   private retriedUrl: string | null = null;
+  /** Set by previous(): the finished track is already back in the queue. */
+  private goingBack = false;
+  private volume = 1;
 
   constructor(
     readonly connection: VoiceConnection,
@@ -113,7 +119,52 @@ export class GuildPlayer {
       positionSec,
       upNextTitle: this.queue.find((track) => track !== this.current)?.title ?? null,
       label: this.paused ? 'Paused' : 'Now Playing',
+      volume: this.volume,
+      hasHistory: this.history.length > 0,
     });
+  }
+
+  /** Move the Now Playing card to the bottom of `channel` (deletes the old one). */
+  async repostNowPlaying(channel: SendableChannels): Promise<boolean> {
+    const track = this.current;
+    if (!track || this.destroyed) return false;
+    this.announceChannel = channel;
+    await this.publishFreshNowPlaying(track);
+    return this.nowPlayingMessage !== null;
+  }
+
+  get hasHistory(): boolean {
+    return this.history.length > 0;
+  }
+
+  /** Clamp to 25–150 % and apply to the playing track; later tracks inherit it. */
+  setVolume(value: number): number {
+    const clamped = Math.min(VOLUME_MAX, Math.max(VOLUME_MIN, Math.round(value * 100) / 100));
+    this.volume = clamped;
+    this.currentResource?.volume?.setVolume(clamped);
+    return clamped;
+  }
+
+  /** Step the volume up (+1) or down (-1) by 25 %. */
+  stepVolume(direction: 1 | -1): number {
+    return this.setVolume(this.volume + direction * VOLUME_STEP);
+  }
+
+  /**
+   * Go back one track: the last finished track plays again, and the current one
+   * waits right behind it. False when there is no history or a track is loading.
+   */
+  previous(): boolean {
+    if (this.queuePumpRunning) return false;
+    const prev = this.history.pop();
+    if (!prev) return false;
+    if (this.current) this.queue.unshift(this.current);
+    this.queue.unshift(prev);
+    this.goingBack = true;
+    this.skipRequested = true;
+    this.invalidatePrefetch();
+    this.player.stop(true);
+    return true;
   }
 
   /** `rethrow` lets the progress ticker see rate limits and back off. */
@@ -357,7 +408,7 @@ export class GuildPlayer {
     this.current = null;
     this.currentResource = null;
 
-    if (finished) {
+    if (finished && !this.goingBack) {
       if (this.loopMode === 'track' && !this.skipRequested) {
         this.queue.unshift(finished);
       } else {
@@ -365,6 +416,7 @@ export class GuildPlayer {
       }
     }
     this.skipRequested = false;
+    this.goingBack = false;
 
     void this.processQueue();
   }
@@ -414,6 +466,7 @@ export class GuildPlayer {
         inputType: probed.type,
         inlineVolume: true,
       });
+      resource.volume?.setVolume(this.volume);
       this.current = track;
       this.currentResource = resource;
       this.player.play(resource);

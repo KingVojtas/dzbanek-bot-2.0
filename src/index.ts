@@ -102,6 +102,7 @@ async function main(): Promise<void> {
 
     kitchen.attach();
     presence.attach();
+    void syncAboutMe(client, logger);
     void resumeRadios(client, radio, kitchen, guildSettings, logger).catch((error) => {
       logger.error('Radio resume failed:', error);
     });
@@ -150,6 +151,24 @@ async function main(): Promise<void> {
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled promise rejection:', reason);
 });
+
+/** The bot profile's About Me. Discord caps it at 400 characters. */
+const ABOUT_ME =
+  '🍪 Dzbanek — the kitchen’s stereo. Plays YouTube & Spotify, streams Kiss, Rock Radio & Beat live, ' +
+  'posts Steam deals every morning and Epic freebies when they drop, and keeps a cookie warm for ' +
+  'whoever walks in.\n\nType /help to see what’s cooking.';
+
+/** Write the About Me only when it differs, so a restart does not spam the API. */
+async function syncAboutMe(client: Client, logger: Logger): Promise<void> {
+  try {
+    const application = await client.application?.fetch();
+    if (!application || application.description === ABOUT_ME) return;
+    await application.edit({ description: ABOUT_ME });
+    logger.info('About Me updated.');
+  } catch (error) {
+    logger.warn('Could not update About Me:', error);
+  }
+}
 
 async function resumeRadios(
   client: Client,
