@@ -12,7 +12,12 @@ export function isStationId(value: string): value is StationId {
 }
 
 export class RadioNightVoteStore {
-  async cast(guildId: string, weekKey: string, userId: string, stationId: StationId): Promise<void> {
+  async cast(
+    guildId: string,
+    weekKey: string,
+    userId: string,
+    stationId: StationId,
+  ): Promise<void> {
     await prisma.radioNightVote.upsert({
       where: { guildId_weekKey_userId: { guildId, weekKey, userId } },
       create: { guildId, weekKey, userId, stationId },

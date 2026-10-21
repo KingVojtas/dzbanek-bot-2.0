@@ -63,7 +63,9 @@ async function oembedTitle(spotifyUrl: string): Promise<string | null> {
   }
 }
 
-function parseSpotifyRef(input: string): { kind: 'track' | 'album' | 'playlist'; id: string } | null {
+function parseSpotifyRef(
+  input: string,
+): { kind: 'track' | 'album' | 'playlist'; id: string } | null {
   const web = input.match(SPOTIFY_WEB);
   if (web?.[1] && web[2]) {
     return { kind: web[1].toLowerCase() as 'track' | 'album' | 'playlist', id: web[2] };
@@ -105,7 +107,9 @@ async function getToken(): Promise<string> {
   });
 
   if (!response.ok) {
-    throw new Error(`Spotify auth failed (HTTP ${response.status}). Check SPOTIFY_CLIENT_ID / SECRET.`);
+    throw new Error(
+      `Spotify auth failed (HTTP ${response.status}). Check SPOTIFY_CLIENT_ID / SECRET.`,
+    );
   }
 
   const json = (await response.json()) as { access_token: string; expires_in: number };
@@ -123,13 +127,18 @@ async function spotifyGet<T>(path: string): Promise<T> {
   });
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new Error(`Spotify API HTTP ${response.status}: ${body.slice(0, 200) || response.statusText}`);
+    throw new Error(
+      `Spotify API HTTP ${response.status}: ${body.slice(0, 200) || response.statusText}`,
+    );
   }
   return (await response.json()) as T;
 }
 
 function artistNames(track: SpotifyTrackPayload): string {
-  return (track.artists ?? []).map((a) => a.name).filter(Boolean).join(', ');
+  return (track.artists ?? [])
+    .map((a) => a.name)
+    .filter(Boolean)
+    .join(', ');
 }
 
 function spotifyPageUrl(track: SpotifyTrackPayload): string {
@@ -165,7 +174,9 @@ export class SpotifySource {
     }
 
     const payloads =
-      ref.kind === 'album' ? await this.fetchAlbumTracks(ref.id) : await this.fetchPlaylistTracks(ref.id);
+      ref.kind === 'album'
+        ? await this.fetchAlbumTracks(ref.id)
+        : await this.fetchPlaylistTracks(ref.id);
 
     const slice = payloads.slice(0, PLAYLIST_CAP);
     const matched = new Array<Track | null>(slice.length).fill(null);
@@ -197,9 +208,7 @@ export class SpotifySource {
     const items: SpotifyTrackPayload[] = [...(album.tracks.items ?? [])];
     let next = album.tracks.next;
     while (next && items.length < PLAYLIST_CAP) {
-      const page = await spotifyGet<SpotifyPaging<SpotifyTrackPayload>>(
-        next.replace(API_BASE, ''),
-      );
+      const page = await spotifyGet<SpotifyPaging<SpotifyTrackPayload>>(next.replace(API_BASE, ''));
       items.push(...page.items);
       next = page.next;
     }
@@ -225,7 +234,10 @@ export class SpotifySource {
     return items;
   }
 
-  private async matchTrack(payload: SpotifyTrackPayload, requestedBy: string): Promise<Track | null> {
+  private async matchTrack(
+    payload: SpotifyTrackPayload,
+    requestedBy: string,
+  ): Promise<Track | null> {
     const artists = artistNames(payload);
     const query = artists ? `${artists} - ${payload.name}` : payload.name;
     const thumbnail = payload.album?.images?.[0]?.url;

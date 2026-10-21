@@ -82,7 +82,10 @@ function formatUploadDate(raw?: string): string | undefined {
 }
 
 function toTrack(info: YtDlpJson, requestedBy: string, extras?: Partial<Track>): Track | null {
-  const url = info.webpage_url || info.original_url || (info.id ? `https://www.youtube.com/watch?v=${info.id}` : '');
+  const url =
+    info.webpage_url ||
+    info.original_url ||
+    (info.id ? `https://www.youtube.com/watch?v=${info.id}` : '');
   const title = info.title?.trim();
   if (!url || !title) return null;
 
@@ -155,7 +158,11 @@ export class YouTubeSource implements TrackSource {
    * Search YouTube for a single best match. Used by the Spotify resolver
    * (`"Artist - Title"` queries) without treating the query as a URL.
    */
-  async searchOne(query: string, requestedBy: string, extras?: Partial<Track>): Promise<Track | null> {
+  async searchOne(
+    query: string,
+    requestedBy: string,
+    extras?: Partial<Track>,
+  ): Promise<Track | null> {
     const info = await dumpJson(`ytsearch1:${query}`, { noPlaylist: true });
     const video = info._type === 'playlist' ? (info.entries?.[0] ?? null) : info;
     if (!video) return null;

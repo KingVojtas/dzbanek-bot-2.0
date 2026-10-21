@@ -67,11 +67,7 @@ export class GuildPlayer {
       if (oldState.status === AudioPlayerStatus.Idle) return;
 
       const finishedResource = 'resource' in oldState ? oldState.resource : undefined;
-      if (
-        finishedResource &&
-        this.currentResource &&
-        finishedResource !== this.currentResource
-      ) {
+      if (finishedResource && this.currentResource && finishedResource !== this.currentResource) {
         return;
       }
 
@@ -104,8 +100,7 @@ export class GuildPlayer {
 
   buildNowPlayingPanel(track: Track = this.current!): V2Display {
     const raw = this.getPlaybackPositionSec();
-    const positionSec =
-      track.durationSec > 0 ? Math.min(raw, track.durationSec) : raw;
+    const positionSec = track.durationSec > 0 ? Math.min(raw, track.durationSec) : raw;
     return buildNowPlayingDisplay({
       track,
       queueLength: this.queue.length,
@@ -331,7 +326,9 @@ export class GuildPlayer {
       this.currentResource = null;
       this.queue.unshift(finished);
       this.current = null;
-      this.logger.warn(`Track "${finished.title}" ended immediately — retrying with a fresh stream.`);
+      this.logger.warn(
+        `Track "${finished.title}" ended immediately — retrying with a fresh stream.`,
+      );
       void this.processQueue();
       return;
     }

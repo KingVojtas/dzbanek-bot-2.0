@@ -41,7 +41,9 @@ export function ytDlpCookieFlags(): Record<string, string> {
 
 /** Hint shown to the user when yt-dlp reports a bot/age-gate block. */
 export function youtubeBotCheckHint(errMsg: string): string | null {
-  if (/sign in to confirm|bot|cookies|age-restrict|confirm you’re not a bot|not a bot/i.test(errMsg)) {
+  if (
+    /sign in to confirm|bot|cookies|age-restrict|confirm you’re not a bot|not a bot/i.test(errMsg)
+  ) {
     return (
       '❌ YouTube blocked this request (bot check / age gate).\n' +
       'On a home PC this usually works. If it keeps failing, export Netscape cookies ' +

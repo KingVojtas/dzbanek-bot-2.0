@@ -71,6 +71,9 @@ async function createRoom(
     return;
   }
 
+  // Creating a channel can wait on a rate limit longer than Discord's 3 seconds.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
   const access = interaction.options.getString('access', true);
   if (!isRoomAccess(access)) {
     await reply(interaction, 'Pick Public or Private.');
@@ -96,7 +99,6 @@ async function createRoom(
     return;
   }
 
-  await guild.channels.fetch().catch(() => null);
   const duplicate = guild.channels.cache.find(
     (channel) => channel.parentId === category.id && channel.name === decorated.name,
   );
@@ -128,10 +130,9 @@ async function createRoom(
 }
 
 function reply(interaction: ChatInputCommandInteraction, description: string): Promise<unknown> {
-  return interaction.reply({
-    embeds: [buildInfoEmbed(description)],
-    flags: MessageFlags.Ephemeral,
-  });
+  const embeds = [buildInfoEmbed(description)];
+  if (interaction.deferred || interaction.replied) return interaction.editReply({ embeds });
+  return interaction.reply({ embeds, flags: MessageFlags.Ephemeral });
 }
 
 function isRoomAccess(value: string): value is RoomAccess {

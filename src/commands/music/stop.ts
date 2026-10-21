@@ -15,7 +15,9 @@ export const stop: Command = {
     player.stop();
     if (interaction.guildId) services.kitchen.refresh(interaction.guildId);
     await interaction.reply({
-      embeds: [buildInfoEmbed('⏹️ Stopped playback, cleared the queue, and left the voice channel.')],
+      embeds: [
+        buildInfoEmbed('⏹️ Stopped playback, cleared the queue, and left the voice channel.'),
+      ],
     });
   },
 };

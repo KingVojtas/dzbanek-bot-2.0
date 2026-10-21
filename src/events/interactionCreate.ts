@@ -256,16 +256,10 @@ async function handleRadioVoteButton(
     return;
   }
 
-  const result = await services.kitchen.castVote(guildId, interaction.user.id, stationId);
-  if (!result.ok) {
-    await interaction.reply({
-      embeds: [buildInfoEmbed(result.reason)],
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
+  // Acknowledge before the database work so a slow write cannot expire the click.
   await interaction.deferUpdate();
+  const result = await services.kitchen.castVote(guildId, interaction.user.id, stationId);
+  if (!result.ok) await replyButton(interaction, result.reason);
 }
 
 async function handleRadioCatch(interaction: ButtonInteraction, services: Services): Promise<void> {

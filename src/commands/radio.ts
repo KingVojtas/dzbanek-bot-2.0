@@ -226,9 +226,7 @@ async function scheduleRadioNight(
     ? (interaction.guild?.channels.cache.get(pickedId) ??
       (await interaction.guild?.channels.fetch(pickedId).catch(() => null)))
     : null;
-  const voiceChannel = fromOption?.isVoiceBased()
-    ? fromOption
-    : memberVoiceChannel(interaction);
+  const voiceChannel = fromOption?.isVoiceBased() ? fromOption : memberVoiceChannel(interaction);
   if (!voiceChannel) {
     await replyEphemeral(
       interaction,

@@ -7,6 +7,7 @@ import { formatSaleEnd, buildQueueDisplay, buildSteamDealsDisplay } from '../src
 import type { SteamDealItem, Track } from '../src/core/types';
 import {
   buildKitchenBoardDisplay,
+  kitchenViewKey,
   looksLikeKitchenBoard,
   type KitchenBoardView,
 } from '../src/kitchen/display';
@@ -350,6 +351,35 @@ checkCard('queue-card', () =>
   ]),
 );
 checkCard('queue-no-art', () => buildQueueDisplay(track('Now'), [track('Now'), track('Next')]));
+
+{
+  const rock = rockView();
+  const kiss = STATIONS.kiss;
+  const switched: KitchenBoardView = {
+    ...rock,
+    stereo: {
+      ...rock.stereo,
+      sourceLabel: kiss.name,
+      sourceUrl: kiss.websiteUrl,
+      logoUrl: kiss.logoUrl,
+      color: kiss.color,
+      websiteUrl: kiss.websiteUrl,
+    },
+  };
+  if (kitchenViewKey(rock) === kitchenViewKey(switched)) {
+    fail('kitchen-key-station', 'a station switch with the same title would not redraw');
+  } else ok('kitchen-key-station', 'a station switch redraws the board');
+
+  const epic = { title: 'Game', kicker: 'Epic · Coming next', line: '' };
+  const before = kitchenViewKey({ ...quietView(), epic });
+  const after = kitchenViewKey({ ...quietView(), epic: { ...epic, kicker: 'Epic · Free now' } });
+  if (before === after) fail('kitchen-key-epic', 'Epic going free would not redraw');
+  else ok('kitchen-key-epic', 'Epic going free redraws the board');
+
+  if (kitchenViewKey(rockView()) !== kitchenViewKey(rockView())) {
+    fail('kitchen-key-stable', 'the same view produced two keys');
+  } else ok('kitchen-key-stable', 'the same view keeps one key');
+}
 
 if (failed > 0) {
   console.error(`${failed} card check(s) failed`);

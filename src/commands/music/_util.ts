@@ -24,7 +24,9 @@ export async function replyEphemeral(
   }
 }
 
-export function memberVoiceChannel(interaction: ChatInputCommandInteraction): VoiceBasedChannel | null {
+export function memberVoiceChannel(
+  interaction: ChatInputCommandInteraction,
+): VoiceBasedChannel | null {
   const member = interaction.member;
   if (!(member instanceof GuildMember)) return null;
   return member.voice.channel;
@@ -55,7 +57,10 @@ export async function requirePlayer(
     const channel = memberVoiceChannel(interaction);
     const botChannelId = player.connection.joinConfig.channelId;
     if (!channel || channel.id !== botChannelId) {
-      await replyEphemeral(interaction, '🔇 Join the voice channel the bot is in to use this command.');
+      await replyEphemeral(
+        interaction,
+        '🔇 Join the voice channel the bot is in to use this command.',
+      );
       return null;
     }
   }

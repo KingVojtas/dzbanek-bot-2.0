@@ -1,4 +1,4 @@
-import { ActivityType, type Client } from 'discord.js';
+import { ActivityType, Events, type Client } from 'discord.js';
 import type { Logger } from '../core/logger';
 import { zonedParts } from './time';
 
@@ -59,6 +59,14 @@ export class LorePresence {
     if (this.timer) return;
     this.timer = setInterval(() => this.tick(), TICK_MS);
     this.timer.unref?.();
+    // A fresh identify sends the login-time presence, not the last setPresence.
+    this.client.on(Events.ShardReady, () => this.resend());
+    this.client.on(Events.ShardResume, () => this.resend());
+  }
+
+  private resend(): void {
+    this.lastLine = '';
+    this.tick();
   }
 
   tick(date = new Date()): void {

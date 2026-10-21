@@ -409,17 +409,24 @@ export function kitchenViewKey(view: KitchenBoardView): string {
     String(view.stereo.queueLength ?? ''),
     view.stereo.title,
     view.stereo.artist,
+    view.stereo.sourceLabel,
+    view.stereo.titleUrl ?? '',
     view.stereo.heroUrl ?? '',
+    view.stereo.logoUrl ?? '',
     view.voiceChannelName ?? '',
-    view.listeners.map((m) => m.id).join(','),
-    view.steam?.title ?? '',
-    view.steam?.line ?? '',
-    view.epic?.title ?? '',
-    view.epic?.line ?? '',
+    view.listeners.map((m) => `${m.id}:${m.name}`).join(','),
+    teaserKey(view.steam),
+    teaserKey(view.epic),
     String(view.joinsToday),
     view.radioNight?.stationName ?? '',
     view.latestCatch
-      ? `${view.latestCatch.userId}:${view.latestCatch.title}:${view.latestCatch.artist}`
+      ? [
+          view.latestCatch.userId,
+          view.latestCatch.by,
+          view.latestCatch.title,
+          view.latestCatch.artist,
+          view.latestCatch.coverUrl ?? '',
+        ].join(':')
       : '',
     view.radioVote
       ? STATION_LIST.map((station) => `${station.id}:${view.radioVote!.counts[station.id]}`).join(
@@ -427,6 +434,11 @@ export function kitchenViewKey(view: KitchenBoardView): string {
         )
       : '',
   ].join('|');
+}
+
+function teaserKey(teaser: KitchenDealTeaser | undefined): string {
+  if (!teaser) return '';
+  return [teaser.kicker, teaser.title, teaser.line, teaser.url ?? '', teaser.image ?? ''].join(':');
 }
 
 function voteButtons(counts: VoteCounts): ActionRowBuilder<MessageActionRowComponentBuilder> {

@@ -1,9 +1,4 @@
-import {
-  ChannelType,
-  MessageFlags,
-  PermissionFlagsBits,
-  SlashCommandBuilder,
-} from 'discord.js';
+import { ChannelType, MessageFlags, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
 import { buildInfoEmbed } from '../../core/embeds';
 import type { Command } from '../../core/types';
 
@@ -171,12 +166,6 @@ export const setup: Command = {
       const feature = interaction.options.getString('feature', true);
       if (feature === 'kitchen') {
         const current = await store.get(guildId);
-        if (current.kitchenChannelId && current.kitchenMessageId) {
-          const channel = await interaction.client.channels.fetch(current.kitchenChannelId).catch(() => null);
-          if (channel?.isTextBased()) {
-            await channel.messages.delete(current.kitchenMessageId).catch(() => {});
-          }
-        }
         await store.upsert(guildId, {
           kitchenEnabled: false,
           kitchenMessageId: null,
@@ -185,13 +174,23 @@ export const setup: Command = {
           embeds: [buildInfoEmbed('The Kitchen Board will no longer update in this server.')],
           flags: MessageFlags.Ephemeral,
         });
+        if (current.kitchenChannelId && current.kitchenMessageId) {
+          const channel = await interaction.client.channels
+            .fetch(current.kitchenChannelId)
+            .catch(() => null);
+          if (channel?.isTextBased()) {
+            await channel.messages.delete(current.kitchenMessageId).catch(() => {});
+          }
+        }
         return;
       }
       if (feature === 'radio-night') {
         await store.upsert(guildId, { radioNightEnabled: false });
         services.kitchen.refresh(guildId);
         await interaction.reply({
-          embeds: [buildInfoEmbed('Radio Night is off. The Kitchen Board will drop the schedule line.')],
+          embeds: [
+            buildInfoEmbed('Radio Night is off. The Kitchen Board will drop the schedule line.'),
+          ],
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -200,7 +199,9 @@ export const setup: Command = {
         await store.upsert(guildId, { idleRadioEnabled: false });
         await interaction.reply({
           embeds: [
-            buildInfoEmbed('Idle → radio is off. After the music queue ends I’ll leave like before.'),
+            buildInfoEmbed(
+              'Idle → radio is off. After the music queue ends I’ll leave like before.',
+            ),
           ],
           flags: MessageFlags.Ephemeral,
         });

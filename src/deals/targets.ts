@@ -70,10 +70,7 @@ export async function findChannelByNameHints(
   const me = guild.members.me;
 
   for (const channel of guild.channels.cache.values()) {
-    if (
-      channel.type !== ChannelType.GuildText &&
-      channel.type !== ChannelType.GuildAnnouncement
-    ) {
+    if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement) {
       continue;
     }
     if (!channel.isSendable()) continue;
@@ -81,7 +78,10 @@ export async function findChannelByNameHints(
     if (!hints.some((hint) => name === hint || name.includes(hint))) continue;
     if (me) {
       const perms = channel.permissionsFor(me);
-      if (!perms?.has(PermissionFlagsBits.ViewChannel) || !perms.has(PermissionFlagsBits.SendMessages)) {
+      if (
+        !perms?.has(PermissionFlagsBits.ViewChannel) ||
+        !perms.has(PermissionFlagsBits.SendMessages)
+      ) {
         continue;
       }
     }
