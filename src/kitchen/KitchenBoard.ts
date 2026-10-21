@@ -96,10 +96,17 @@ export class KitchenBoard {
   attach(): void {
     this.client.on(Events.VoiceStateUpdate, (oldState, newState) => {
       const guildId = newState.guild.id;
-      const channelIds = new Set(
-        [oldState.channelId, newState.channelId, this.radio.channelId(guildId)].filter(Boolean),
-      );
-      if (channelIds.size === 0) return;
+      // The board lists who is in the bot's channel. A mute or a move anywhere
+      // else changes nothing on it.
+      const botChannelId =
+        this.radio.channelId(guildId) ??
+        this.music.get(guildId)?.connection.joinConfig.channelId ??
+        null;
+      const isBot = newState.id === this.client.user?.id;
+      const touchesBot =
+        botChannelId !== null &&
+        (oldState.channelId === botChannelId || newState.channelId === botChannelId);
+      if (!isBot && !touchesBot) return;
       this.refresh(guildId);
     });
 

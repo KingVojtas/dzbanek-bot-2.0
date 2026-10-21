@@ -111,8 +111,8 @@ export class RadioManager {
         );
         existing.switchStation(station);
         try {
-          await existing.waitForStart();
-          await existing.refreshNowPlaying();
+          // The song lookup does not need audio, so it runs while the stream starts.
+          await Promise.all([existing.waitForStart(), existing.refreshNowPlaying()]);
         } catch (err) {
           this.logger.error(`${station.name} failed to start in guild ${guildId}:`, err);
           throw err;
@@ -168,8 +168,7 @@ export class RadioManager {
     this.sessions.set(guildId, session);
     session.start();
     try {
-      await session.waitForStart();
-      await session.refreshNowPlaying();
+      await Promise.all([session.waitForStart(), session.refreshNowPlaying()]);
     } catch (err) {
       this.logger.error(`${station.name} failed to start in guild ${guildId}:`, err);
       throw err;

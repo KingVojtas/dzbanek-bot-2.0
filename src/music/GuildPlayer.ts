@@ -7,8 +7,9 @@ import {
   entersState,
 } from '@discordjs/voice';
 import type { AudioPlayer, AudioResource, VoiceConnection } from '@discordjs/voice';
-import { PassThrough, type Readable } from 'node:stream';
+import type { Readable } from 'node:stream';
 import type { Message, SendableChannels } from 'discord.js';
+import { bufferStream } from './buffer-stream';
 import { isUnknownMessage } from '../core/discord-errors';
 import { buildNowPlayingDisplay, type V2Display } from '../core/display';
 import type { Logger } from '../core/logger';
@@ -262,6 +263,18 @@ export class GuildPlayer {
       this.invalidatePrefetch();
       this.prefetchNext();
     }
+  }
+
+  /**
+   * Insert right after `anchor`, or at the front once it has played. Keeps a
+   * play-next playlist in order while it arrives in batches.
+   */
+  enqueueAfter(anchor: Track, tracks: Track[]): void {
+    this.lastError = null;
+    this.queue.splice(this.queue.indexOf(anchor) + 1, 0, ...tracks);
+    this.clearIdleTimer();
+    if (!this.current) void this.processQueue();
+    else this.prefetchNext();
   }
 
   skip(): Track | null {
@@ -552,9 +565,8 @@ export class GuildPlayer {
           raw.destroy();
           return;
         }
-        const buffered = new PassThrough({ highWaterMark: 2 * 1024 * 1024 });
-        raw.pipe(buffered);
-        this.prefetched = { url, stream: buffered };
+        // Destroying the buffer (skip, shuffle) also ends yt-dlp.
+        this.prefetched = { url, stream: bufferStream(raw) };
       })
       .catch(() => {
         /* miss is fine — playTrack will stream on demand */

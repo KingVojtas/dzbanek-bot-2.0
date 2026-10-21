@@ -12,6 +12,8 @@ Music and radio share one voice slot per server. Starting one takes the speaker 
 
 Play from YouTube (a link or a search) and from Spotify (track, album, or playlist). Spotify is the recipe card. The audio comes from YouTube via yt-dlp.
 
+It is quick about it. A search reads only YouTube’s result list, about 2 s instead of 6. A YouTube link starts downloading while its title is still being read. A Spotify album or playlist starts its first song as soon as that one is found, and the rest join the queue in order while you listen. Anything played in the last 6 hours resolves instantly.
+
 Now Playing is a Components v2 card: album art, a progress bar, and transport buttons. When the next track starts, the previous card is cleared so the chat stays tidy.
 
 | Command              | What it does                                                                            |

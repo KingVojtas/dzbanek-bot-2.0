@@ -73,16 +73,34 @@ function fromRow(row: GuildSettings): GuildSettings {
   };
 }
 
-/** Per-guild channel config, stored in SQLite via Prisma. */
+/**
+ * Per-guild channel config, stored in SQLite via Prisma. The bot is the only
+ * writer, so reads come from a write-through cache: every voice change, board
+ * tick, and vote used to be a database read.
+ */
 export class GuildSettingsStore {
+  private readonly cache = new Map<string, GuildSettings>();
+  /** True once every row is in the cache, so all() can skip the database. */
+  private loadedAll = false;
+
   async get(guildId: string): Promise<GuildSettings> {
+    const hit = this.cache.get(guildId);
+    if (hit) return { ...hit };
+    if (this.loadedAll) return defaults(guildId);
     const row = await prisma.guildSettings.findUnique({ where: { guildId } });
-    return row ? fromRow(row) : defaults(guildId);
+    if (!row) return defaults(guildId);
+    const settings = fromRow(row);
+    this.cache.set(guildId, settings);
+    return { ...settings };
   }
 
   async all(): Promise<GuildSettings[]> {
-    const rows = await prisma.guildSettings.findMany();
-    return rows.map(fromRow);
+    if (!this.loadedAll) {
+      const rows = await prisma.guildSettings.findMany();
+      for (const row of rows) this.cache.set(row.guildId, fromRow(row));
+      this.loadedAll = true;
+    }
+    return [...this.cache.values()].map((settings) => ({ ...settings }));
   }
 
   async upsert(
@@ -116,6 +134,8 @@ export class GuildSettingsStore {
         idleRadioEnabled: next.idleRadioEnabled,
       },
     });
-    return fromRow(row);
+    const saved = fromRow(row);
+    this.cache.set(guildId, saved);
+    return { ...saved };
   }
 }

@@ -1,13 +1,33 @@
 import { join } from 'node:path';
-import { type Readable } from 'node:stream';
+import type { PassThrough, Readable } from 'node:stream';
 import youtubeDl from 'youtube-dl-exec';
 import type { Track, TrackSource } from '../../core/types';
+import { bufferStream } from '../buffer-stream';
 import { ytDlpCookieFlags } from '../ytdlp-cookies';
 
 const YTDLP_CACHE = join(process.cwd(), 'data', 'yt-dlp-cache');
 
 const PLAYLIST_CAP = 50;
 const YOUTUBE_HOST = /(?:youtube\.com|youtu\.be|music\.youtube\.com)/i;
+/** Resolved metadata stays useful for hours; stream URLs are fetched fresh anyway. */
+const RESOLVE_CACHE_MAX = 200;
+const RESOLVE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+/** A warm stream nobody claims is killed after this. */
+const WARM_TTL_MS = 30_000;
+
+/** `watch?v=`, `youtu.be/`, `/shorts/`, `/live/`, `/embed/` → the 11-char id. */
+export function youTubeVideoId(input: string): string | null {
+  try {
+    const url = new URL(/^[a-z]+:\/\//i.test(input) ? input : `https://${input}`);
+    if (!YOUTUBE_HOST.test(url.hostname)) return null;
+    if (/(^|\.)youtu\.be$/i.test(url.hostname)) return url.pathname.split('/')[1] || null;
+    const v = url.searchParams.get('v');
+    if (v) return v;
+    return url.pathname.match(/\/(?:shorts|live|embed)\/([\w-]{6,})/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
 
 interface YtDlpJson {
   id?: string;
@@ -124,34 +144,79 @@ async function dumpJson(target: string, extra: Record<string, unknown> = {}): Pr
   }
 }
 
+/**
+ * A search hit without extracting the video: 2 s instead of 6 s, and the
+ * entry still carries title, id, duration, channel, views, and thumbnails.
+ * Falls back to a full extraction when the flat list has nothing usable.
+ */
+async function searchFirst(query: string): Promise<YtDlpJson | null> {
+  try {
+    const raw = await youtubeDl(`ytsearch1:${query}`, {
+      dumpSingleJson: true,
+      flatPlaylist: true,
+      ...baseFlags(),
+    } as Parameters<typeof youtubeDl>[1]);
+    const info = typeof raw === 'string' ? (JSON.parse(raw) as YtDlpJson) : (raw as YtDlpJson);
+    const hit = info.entries?.find((entry) => entry?.title && entry.id);
+    if (hit) return hit;
+  } catch {
+    /* fall through to the full search */
+  }
+  const info = await dumpJson(`ytsearch1:${query}`, { noPlaylist: true });
+  return info._type === 'playlist' ? (info.entries?.[0] ?? null) : info;
+}
+
+/** Only what toTrack reads, so the cache does not hold format lists. */
+function slim(info: YtDlpJson): YtDlpJson {
+  return {
+    id: info.id,
+    title: info.title,
+    webpage_url: info.webpage_url,
+    original_url: info.original_url,
+    duration: info.duration,
+    thumbnail: pickThumbnail(info),
+    channel: info.channel,
+    uploader: info.uploader,
+    artist: info.artist,
+    view_count: info.view_count,
+    upload_date: info.upload_date,
+  };
+}
+
 export class YouTubeSource implements TrackSource {
+  /** Query or URL → slim metadata, oldest first (Map keeps insertion order). */
+  private readonly resolved = new Map<string, { at: number; entries: YtDlpJson[] }>();
+  private readonly warmed = new Map<
+    string,
+    { stream: PassThrough; timer: ReturnType<typeof setTimeout> }
+  >();
+
   async resolve(input: string, requestedBy: string): Promise<Track[]> {
     const trimmed = input.trim();
     if (!trimmed) return [];
 
-    const target = isYouTubeUrl(trimmed) ? trimmed : `ytsearch1:${trimmed}`;
-    const isPlaylistUrl =
-      isYouTubeUrl(trimmed) && /[?&]list=|\/playlist\?/i.test(trimmed) && !/[?&]v=/i.test(trimmed);
-
-    const extra: Record<string, unknown> = { noPlaylist: !isPlaylistUrl };
-    if (isPlaylistUrl) {
-      extra.flatPlaylist = true;
-      extra.playlistEnd = PLAYLIST_CAP;
-    }
-    const info = await dumpJson(target, extra);
-
-    if (info._type === 'playlist' && Array.isArray(info.entries)) {
-      const tracks: Track[] = [];
-      for (const entry of info.entries.slice(0, PLAYLIST_CAP)) {
-        if (!entry) continue;
-        const track = toTrack(entry, requestedBy);
-        if (track) tracks.push(track);
+    const entries = await this.cached(`resolve:${trimmed}`, async () => {
+      if (!isYouTubeUrl(trimmed)) {
+        const hit = await searchFirst(trimmed);
+        return hit ? [hit] : [];
       }
-      return tracks;
-    }
 
-    const track = toTrack(info, requestedBy);
-    return track ? [track] : [];
+      const isPlaylistUrl = /[?&]list=|\/playlist\?/i.test(trimmed) && !/[?&]v=/i.test(trimmed);
+      const extra: Record<string, unknown> = { noPlaylist: !isPlaylistUrl };
+      if (isPlaylistUrl) {
+        extra.flatPlaylist = true;
+        extra.playlistEnd = PLAYLIST_CAP;
+      }
+      const info = await dumpJson(trimmed, extra);
+      if (info._type === 'playlist' && Array.isArray(info.entries)) {
+        return info.entries
+          .slice(0, PLAYLIST_CAP)
+          .filter((entry): entry is YtDlpJson => entry != null);
+      }
+      return [info];
+    });
+
+    return entries.flatMap((entry) => toTrack(entry, requestedBy) ?? []);
   }
 
   /**
@@ -163,15 +228,69 @@ export class YouTubeSource implements TrackSource {
     requestedBy: string,
     extras?: Partial<Track>,
   ): Promise<Track | null> {
-    const info = await dumpJson(`ytsearch1:${query}`, { noPlaylist: true });
-    const video = info._type === 'playlist' ? (info.entries?.[0] ?? null) : info;
-    if (!video) return null;
-    return toTrack(video, requestedBy, extras);
+    const [hit] = await this.cached(`search:${query}`, async () => {
+      const found = await searchFirst(query);
+      return found ? [found] : [];
+    });
+    return hit ? toTrack(hit, requestedBy, extras) : null;
+  }
+
+  /**
+   * Start streaming `url` before its metadata is back, so /play pays for the
+   * slower of the two instead of both. Unclaimed streams die after 30 s.
+   */
+  warm(url: string): void {
+    const id = youTubeVideoId(url);
+    if (!id || this.warmed.has(id)) return;
+    let stream: PassThrough;
+    try {
+      stream = bufferStream(this.spawnStream(url));
+    } catch {
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (this.warmed.get(id)?.stream !== stream) return;
+      this.warmed.delete(id);
+      stream.destroy();
+    }, WARM_TTL_MS);
+    timer.unref?.();
+    stream.once('close', () => {
+      if (this.warmed.get(id)?.stream === stream) this.warmed.delete(id);
+    });
+    this.warmed.set(id, { stream, timer });
   }
 
   async stream(track: Track): Promise<Readable> {
+    const id = youTubeVideoId(track.url);
+    const warm = id ? this.warmed.get(id) : undefined;
+    if (id && warm) {
+      this.warmed.delete(id);
+      clearTimeout(warm.timer);
+      if (!warm.stream.destroyed) return warm.stream;
+    }
+    return this.spawnStream(track.url);
+  }
+
+  private async cached(key: string, load: () => Promise<YtDlpJson[]>): Promise<YtDlpJson[]> {
+    const hit = this.resolved.get(key);
+    if (hit && Date.now() - hit.at < RESOLVE_CACHE_TTL_MS) return hit.entries;
+    const entries = (await load()).map(slim);
+    // Only a real answer is remembered; an empty search may work next time.
+    if (entries.length > 0) {
+      this.resolved.delete(key);
+      this.resolved.set(key, { at: Date.now(), entries });
+      while (this.resolved.size > RESOLVE_CACHE_MAX) {
+        const oldest = this.resolved.keys().next().value;
+        if (oldest === undefined) break;
+        this.resolved.delete(oldest);
+      }
+    }
+    return entries;
+  }
+
+  private spawnStream(url: string): Readable {
     const subprocess = youtubeDl.exec(
-      track.url,
+      url,
       {
         output: '-',
         format: 'bestaudio/best',

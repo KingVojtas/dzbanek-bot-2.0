@@ -1,9 +1,16 @@
-import { GuildMember, MessageFlags, SlashCommandBuilder } from 'discord.js';
+import {
+  GuildMember,
+  MessageFlags,
+  SlashCommandBuilder,
+  type ChatInputCommandInteraction,
+  type VoiceBasedChannel,
+} from 'discord.js';
 import { buildQueuedTrackDisplay } from '../../core/display';
 import { buildReplyEmbed, formatDuration } from '../../core/embeds';
+import type { GuildPlayer } from '../../music/GuildPlayer';
 import { isSpotifyAlbumUrl, isSpotifyPlaylistUrl } from '../../music/sources';
 import { youtubeBotCheckHint } from '../../music/ytdlp-cookies';
-import type { Command, Track } from '../../core/types';
+import type { Command, Services, Track } from '../../core/types';
 
 export const play: Command = {
   data: new SlashCommandBuilder()
@@ -37,19 +44,16 @@ export const play: Command = {
     await interaction.deferReply();
 
     const isSpotifyCollection = isSpotifyPlaylistUrl(query) || isSpotifyAlbumUrl(query);
-    if (isSpotifyCollection) {
-      void interaction.editReply({
-        embeds: [
-          buildReplyEmbed(
-            'info',
-            '🔍 Resolving Spotify album/playlist on YouTube… this can take a bit.',
-          ),
-        ],
-      });
-    }
-
     const guildId = interaction.guildId;
     if (guildId) services.radio.stop(guildId);
+
+    if (isSpotifyCollection) {
+      await playCollection(interaction, services, voiceChannel, query);
+      return;
+    }
+
+    // A YouTube link starts downloading while its title is still being read.
+    services.music.trackSource.warm(query);
     const alreadyPlaying = Boolean(guildId && services.music.get(guildId)?.current);
 
     let tracks: Track[];
@@ -65,16 +69,7 @@ export const play: Command = {
         const leftover = services.music.get(guildId);
         if (leftover && !leftover.current) leftover.stop();
       }
-      const errMsg = error instanceof Error ? error.message : String(error || '');
-      const hint = youtubeBotCheckHint(errMsg);
-      let msg = hint ?? null;
-      if (!msg && /SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET are required/i.test(errMsg)) {
-        msg =
-          '❌ Spotify playlists/albums need `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` in `.env`.';
-      } else if (!msg) {
-        msg = `❌ Could not load that track or join voice.\n${errMsg.slice(0, 400)}`;
-      }
-      await interaction.editReply({ embeds: [buildReplyEmbed('error', msg)] });
+      await interaction.editReply({ embeds: [buildReplyEmbed('error', loadErrorMessage(error))] });
       return;
     }
 
@@ -83,14 +78,7 @@ export const play: Command = {
         player.stop();
       }
       await interaction.editReply({
-        embeds: [
-          buildReplyEmbed(
-            'warn',
-            isSpotifyCollection
-              ? '🔍 Spotify album/playlist loaded, but no playable YouTube matches were found.'
-              : '🔍 No results found for your query.',
-          ),
-        ],
+        embeds: [buildReplyEmbed('warn', '🔍 No results found for your query.')],
       });
       return;
     }
@@ -215,3 +203,136 @@ export const play: Command = {
     });
   },
 };
+
+function loadErrorMessage(error: unknown): string {
+  const errMsg = error instanceof Error ? error.message : String(error || '');
+  const hint = youtubeBotCheckHint(errMsg);
+  if (hint) return hint;
+  if (/SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET are required/i.test(errMsg)) {
+    return '❌ Spotify playlists/albums need `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` in `.env`.';
+  }
+  return `❌ Could not load that track or join voice.\n${errMsg.slice(0, 400)}`;
+}
+
+/**
+ * Spotify album or playlist: the first match starts playing while the rest
+ * are still being found, and later matches join the queue in list order.
+ */
+async function playCollection(
+  interaction: ChatInputCommandInteraction,
+  services: Services,
+  voiceChannel: VoiceBasedChannel,
+  query: string,
+): Promise<void> {
+  const guildId = voiceChannel.guild.id;
+  const playNext = interaction.options.getBoolean('play_next') ?? false;
+  const alreadyPlaying = Boolean(services.music.get(guildId)?.current);
+
+  await interaction.editReply({
+    embeds: [
+      buildReplyEmbed(
+        'info',
+        '🔍 Finding the playlist on YouTube… the first song starts as soon as it’s found.',
+      ),
+    ],
+  });
+
+  let player: GuildPlayer | null = null;
+  let wasIdle = true;
+  let lastInserted: Track | null = null;
+  let queued = 0;
+  let firstTitle: string | null = null;
+  let gone = false;
+  const pending: Track[][] = [];
+
+  const add = (tracks: Track[]) => {
+    if (gone || !player) return;
+    // /stop, or another /play replaced the player: the rest of the list is not wanted.
+    if (services.music.get(guildId) !== player) {
+      gone = true;
+      return;
+    }
+    const room = services.config.music.maxQueueSize - player.queue.length;
+    const accepted = tracks.slice(0, Math.max(0, room));
+    if (accepted.length === 0) return;
+    for (const track of accepted) track.requestedById = interaction.user.id;
+
+    if (playNext && !wasIdle) {
+      if (lastInserted) player.enqueueAfter(lastInserted, accepted);
+      else player.enqueueNext(accepted);
+      lastInserted = accepted[accepted.length - 1] ?? lastInserted;
+    } else {
+      player.enqueue(accepted);
+    }
+    if (queued === 0) {
+      firstTitle = accepted[0]?.title ?? null;
+      void interaction
+        .editReply({
+          embeds: [
+            buildReplyEmbed(
+              'info',
+              `🎶 ${wasIdle ? 'Starting' : 'Queued'} **${firstTitle}** · finding the rest of the list…`,
+            ),
+          ],
+        })
+        .catch(() => {});
+      services.kitchen.refresh(guildId);
+    }
+    queued += accepted.length;
+  };
+
+  const onTracks = (tracks: Track[]) => {
+    if (player) add(tracks);
+    else pending.push(tracks);
+  };
+
+  let result: { total: number; matched: number };
+  try {
+    const joined = services.music.join(voiceChannel).then((joinedPlayer) => {
+      player = joinedPlayer;
+      wasIdle = !joinedPlayer.current && joinedPlayer.queue.length === 0;
+      if (interaction.channel?.isSendable()) joinedPlayer.setAnnounceChannel(interaction.channel);
+      for (const batch of pending.splice(0)) add(batch);
+    });
+    [result] = await Promise.all([
+      services.music.trackSource.resolveProgressive(query, interaction.user.displayName, onTracks),
+      joined,
+    ]);
+  } catch (error: unknown) {
+    services.logger.error('Failed to resolve/join for /play:', error);
+    const leftover = services.music.get(guildId);
+    if (!alreadyPlaying && leftover && !leftover.current && leftover.queue.length === 0) {
+      leftover.stop();
+    }
+    await interaction.editReply({ embeds: [buildReplyEmbed('error', loadErrorMessage(error))] });
+    return;
+  }
+
+  if (queued === 0) {
+    const idle = services.music.get(guildId);
+    if (!alreadyPlaying && idle && !idle.current && idle.queue.length === 0) idle.stop();
+    await interaction.editReply({
+      embeds: [
+        buildReplyEmbed(
+          'warn',
+          gone
+            ? '⏹️ Playback stopped before the playlist was found.'
+            : '🔍 Spotify album/playlist loaded, but no playable YouTube matches were found.',
+        ),
+      ],
+    });
+    return;
+  }
+
+  const missed = result.total - queued;
+  await interaction.editReply({
+    embeds: [
+      buildReplyEmbed(
+        'success',
+        `🎶 Queued **${queued}** of **${result.total}** tracks from the list, starting with **${firstTitle}**.` +
+          (missed > 0 ? `\n-# ${missed} had no YouTube match or did not fit in the queue.` : '') +
+          (gone ? '\n-# Playback stopped before the rest arrived.' : ''),
+      ),
+    ],
+  });
+}

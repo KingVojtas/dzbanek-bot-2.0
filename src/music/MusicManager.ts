@@ -9,7 +9,6 @@ import type { VoiceBasedChannel } from 'discord.js';
 import { update as updateYoutubeDl } from 'youtube-dl-exec';
 import type { Config } from '../config';
 import type { Logger } from '../core/logger';
-import type { TrackSource } from '../core/types';
 import { GuildPlayer } from './GuildPlayer';
 import { CompositeTrackSource } from './sources';
 import { ensureYtDlpCookies } from './ytdlp-cookies';
@@ -20,7 +19,7 @@ const JOIN_TIMEOUT_MS = 20_000;
 export class MusicManager {
   private readonly subscriptions = new Map<string, GuildPlayer>();
   private readonly pendingJoins = new Map<string, Promise<GuildPlayer>>();
-  private readonly source: TrackSource = new CompositeTrackSource();
+  private readonly source = new CompositeTrackSource();
   private preemptRadio: ((guildId: string) => void) | null = null;
   private onQueueIdle: ((guildId: string, channelId: string) => void) | null = null;
 
@@ -35,7 +34,7 @@ export class MusicManager {
       .catch((err: unknown) => this.logger.debug('yt-dlp update check (non-fatal):', err));
   }
 
-  get trackSource(): TrackSource {
+  get trackSource(): CompositeTrackSource {
     return this.source;
   }
 

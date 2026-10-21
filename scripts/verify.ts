@@ -3,6 +3,7 @@
  * Does not post to any Discord channel.
  */
 import { execFile } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { DISCORD_TOKEN, config } from '../src/config';
@@ -14,6 +15,7 @@ import { extractAppId, fetchSteamPrice } from '../src/deals/steam/SteamPriceApi'
 import { fetchSteamReview, isGoodReview } from '../src/deals/steam/SteamReviewApi';
 import { selectSteamDigest, uniqueSteamApps } from '../src/deals/steam/select-digest';
 import type { SteamReviewInfo } from '../src/deals/steam/SteamReviewApi';
+import { SpotifySource } from '../src/music/sources/spotify';
 import { YouTubeSource } from '../src/music/sources/youtube';
 
 const execFileAsync = promisify(execFile);
@@ -94,6 +96,95 @@ async function checkYoutube(): Promise<void> {
     ok('youtube-stream', first ? 'received audio bytes' : 'no data');
   } catch (error) {
     fail('youtube-stream', error instanceof Error ? error.message.slice(0, 400) : String(error));
+  }
+}
+
+function firstBytes(stream: Readable, timeoutMs = 25_000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`no bytes after ${timeoutMs}ms`)), timeoutMs);
+    stream.once('data', () => {
+      clearTimeout(timer);
+      stream.destroy();
+      resolve();
+    });
+    stream.once('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+
+/** Timings for the speed-ups: flat search, the resolve cache, and warm streams. */
+async function checkMusicSpeed(): Promise<void> {
+  const url = 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+  try {
+    const source = new YouTubeSource();
+    let t0 = Date.now();
+    const [hit] = await source.resolve('daft punk around the world', 'verify');
+    const searchMs = Date.now() - t0;
+    t0 = Date.now();
+    await source.resolve('daft punk around the world', 'verify');
+    const cachedMs = Date.now() - t0;
+    if (!hit?.title || !hit.durationSec || !hit.thumbnail) {
+      fail('youtube-flat-search', `incomplete track: ${JSON.stringify(hit)}`);
+    } else {
+      ok('youtube-flat-search', `${searchMs}ms, again ${cachedMs}ms — ${hit.title}`);
+    }
+  } catch (error) {
+    fail(
+      'youtube-flat-search',
+      error instanceof Error ? error.message.slice(0, 400) : String(error),
+    );
+  }
+
+  try {
+    // The old order: metadata first, then the stream.
+    const cold = new YouTubeSource();
+    let t0 = Date.now();
+    const [coldTrack] = await cold.resolve(url, 'verify');
+    await firstBytes(await cold.stream(coldTrack!));
+    const sequentialMs = Date.now() - t0;
+
+    // The new order: the stream starts while the metadata resolves.
+    const warm = new YouTubeSource();
+    t0 = Date.now();
+    warm.warm(url);
+    const [warmTrack] = await warm.resolve(url, 'verify');
+    await firstBytes(await warm.stream(warmTrack!));
+    const warmedMs = Date.now() - t0;
+    const line = `link to first audio: ${sequentialMs}ms before, ${warmedMs}ms warmed`;
+    if (warmedMs < sequentialMs) ok('youtube-warm', line);
+    else fail('youtube-warm', line);
+  } catch (error) {
+    fail('youtube-warm', error instanceof Error ? error.message.slice(0, 400) : String(error));
+  }
+
+  if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET) return;
+  try {
+    // Daft Punk — Discovery (14 tracks).
+    const spotify = new SpotifySource(new YouTubeSource());
+    const t0 = Date.now();
+    let firstMs = 0;
+    let batches = 0;
+    const titles: string[] = [];
+    const result = await spotify.resolveProgressive(
+      'https://open.spotify.com/album/2noRn2Aes5aoNVsU6iWThc',
+      'verify',
+      (tracks) => {
+        if (batches === 0) firstMs = Date.now() - t0;
+        batches += 1;
+        titles.push(...tracks.map((track) => track.title));
+      },
+    );
+    const totalMs = Date.now() - t0;
+    const line = `first song after ${firstMs}ms, all ${result.matched}/${result.total} after ${totalMs}ms in ${batches} batch(es), starts "${titles[0]}"`;
+    if (result.matched === 0 || firstMs >= totalMs) fail('spotify-progressive', line);
+    else ok('spotify-progressive', line);
+  } catch (error) {
+    fail(
+      'spotify-progressive',
+      error instanceof Error ? error.message.slice(0, 400) : String(error),
+    );
   }
 }
 
@@ -364,6 +455,7 @@ async function main(): Promise<void> {
   await checkSteam();
   await checkEpic();
   await checkYoutube();
+  await checkMusicSpeed();
   await checkDiscord();
   console.log(`\n${failed === 0 ? 'ALL CHECKS PASSED' : `${failed} CHECK(S) FAILED`}`);
   process.exit(failed === 0 ? 0 : 1);

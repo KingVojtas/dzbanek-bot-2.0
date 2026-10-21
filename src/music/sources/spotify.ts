@@ -177,6 +177,38 @@ export class SpotifySource {
       return track ? [track] : [];
     }
 
+    const found: Track[] = [];
+    await this.resolveCollection({ kind: ref.kind, id: ref.id }, requestedBy, (tracks) =>
+      found.push(...tracks),
+    );
+    return found;
+  }
+
+  /**
+   * Album or playlist, handed over as it matches: `onTracks` gets each run of
+   * tracks the moment every track before it is settled, so the first song can
+   * start while the rest are still being found, and the order stays the list's.
+   * Returns how many tracks the list had and how many matched.
+   */
+  async resolveProgressive(
+    input: string,
+    requestedBy: string,
+    onTracks: (tracks: Track[]) => void,
+  ): Promise<{ total: number; matched: number }> {
+    const ref = parseSpotifyRef(input.trim());
+    if (!ref || ref.kind === 'track' || !credentials()) {
+      const tracks = await this.resolve(input, requestedBy);
+      if (tracks.length > 0) onTracks(tracks);
+      return { total: tracks.length, matched: tracks.length };
+    }
+    return this.resolveCollection({ kind: ref.kind, id: ref.id }, requestedBy, onTracks);
+  }
+
+  private async resolveCollection(
+    ref: { kind: 'album' | 'playlist'; id: string },
+    requestedBy: string,
+    onTracks: (tracks: Track[]) => void,
+  ): Promise<{ total: number; matched: number }> {
     const payloads =
       ref.kind === 'album'
         ? await this.fetchAlbumTracks(ref.id)
@@ -184,22 +216,39 @@ export class SpotifySource {
 
     const slice = payloads.slice(0, PLAYLIST_CAP);
     const matched = new Array<Track | null>(slice.length).fill(null);
+    const settled = new Array<boolean>(slice.length).fill(false);
+    let emitted = 0;
+    let matchedCount = 0;
+    const flush = () => {
+      const run: Track[] = [];
+      while (emitted < slice.length && settled[emitted]) {
+        const track = matched[emitted];
+        if (track) run.push(track);
+        emitted += 1;
+      }
+      if (run.length > 0) {
+        matchedCount += run.length;
+        onTracks(run);
+      }
+    };
+
     let cursor = 0;
     const workers = Array.from({ length: Math.min(4, slice.length) }, async () => {
       while (cursor < slice.length) {
         const idx = cursor;
         cursor += 1;
         const payload = slice[idx];
-        if (!payload) continue;
         try {
-          matched[idx] = await this.matchTrack(payload, requestedBy);
+          matched[idx] = payload ? await this.matchTrack(payload, requestedBy) : null;
         } catch {
           matched[idx] = null;
         }
+        settled[idx] = true;
+        flush();
       }
     });
     await Promise.all(workers);
-    return matched.filter((track): track is Track => track != null);
+    return { total: slice.length, matched: matchedCount };
   }
 
   private async fetchAlbumTracks(id: string): Promise<SpotifyTrackPayload[]> {
