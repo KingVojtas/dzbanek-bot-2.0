@@ -8,13 +8,15 @@ import {
 } from '@discordjs/voice';
 import type { AudioPlayer, AudioResource, VoiceConnection } from '@discordjs/voice';
 import { PassThrough, type Readable } from 'node:stream';
-import { DiscordAPIError, type Message, type SendableChannels } from 'discord.js';
+import type { Message, SendableChannels } from 'discord.js';
+import { isUnknownMessage } from '../core/discord-errors';
 import { buildNowPlayingDisplay, type V2Display } from '../core/display';
 import type { Logger } from '../core/logger';
 import type { LoopMode, Track, TrackSource } from '../core/types';
 
 const HISTORY_MAX = 25;
-const PROGRESS_TICK_MS = 1000;
+/** Discord allows about 5 edits per 5 s per channel; leave room for buttons and the board. */
+const PROGRESS_TICK_MS = 5_000;
 
 /**
  * Owns the voice connection, audio player, and queue for a single guild.
@@ -50,6 +52,8 @@ export class GuildPlayer {
   private prefetched: { url: string; stream: Readable } | null = null;
   private lastSkipAt = 0;
   private idleAdvanceScheduled = false;
+  /** URL already retried once after ending instantly. */
+  private retriedUrl: string | null = null;
 
   constructor(
     readonly connection: VoiceConnection,
@@ -112,7 +116,8 @@ export class GuildPlayer {
     });
   }
 
-  async refreshNowPlaying(): Promise<void> {
+  /** `rethrow` lets the progress ticker see rate limits and back off. */
+  async refreshNowPlaying(rethrow = false): Promise<void> {
     const msg = this.nowPlayingMessage;
     const track = this.current;
     if (!msg || !track || this.destroyed) return;
@@ -126,6 +131,8 @@ export class GuildPlayer {
       if (isUnknownMessage(error)) {
         this.nowPlayingMessage = null;
         this.stopProgressTicker();
+      } else if (rethrow) {
+        throw error;
       }
     }
   }
@@ -321,7 +328,8 @@ export class GuildPlayer {
     const playedMs = this.currentResource?.playbackDuration ?? 0;
     const finished = this.current;
 
-    if (finished && playedMs < 800 && !this.skipRequested) {
+    if (finished && playedMs < 800 && !this.skipRequested && this.retriedUrl !== finished.url) {
+      this.retriedUrl = finished.url;
       this.invalidatePrefetch();
       this.currentResource = null;
       this.queue.unshift(finished);
@@ -332,6 +340,19 @@ export class GuildPlayer {
       void this.processQueue();
       return;
     }
+
+    if (finished && playedMs < 800 && !this.skipRequested) {
+      // Second instant end in a row: the stream is broken, so move on instead of looping.
+      this.lastError = `"${finished.title}" ended immediately twice.`;
+      this.logger.warn(`Track "${finished.title}" ended immediately again — skipping it.`);
+      this.retriedUrl = null;
+      this.current = null;
+      this.currentResource = null;
+      this.pushHistory(finished);
+      void this.processQueue();
+      return;
+    }
+    this.retriedUrl = null;
 
     this.current = null;
     this.currentResource = null;
@@ -516,7 +537,7 @@ export class GuildPlayer {
     this.progressEditInFlight = true;
 
     try {
-      await this.refreshNowPlaying();
+      await this.refreshNowPlaying(true);
     } catch (error) {
       const retry = retryAfterMs(error);
       if (retry != null) {
@@ -585,10 +606,6 @@ export class GuildPlayer {
     }
     this.onDestroy();
   }
-}
-
-function isUnknownMessage(error: unknown): boolean {
-  return error instanceof DiscordAPIError && Number(error.code) === 10008;
 }
 
 function retryAfterMs(error: unknown): number | null {

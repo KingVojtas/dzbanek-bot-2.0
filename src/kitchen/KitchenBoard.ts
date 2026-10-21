@@ -13,6 +13,7 @@ import type { Config } from '../config';
 import type { Logger } from '../core/logger';
 import type { EpicFreeGame, SteamDealItem } from '../core/types';
 import { collectMessageTextContent } from '../core/display';
+import { isUnknownMessage } from '../core/discord-errors';
 import type { SeenStore } from '../deals/seen-store';
 import { resolveGuildSendableChannel } from '../deals/targets';
 import type { GuildSettingsStore } from '../deals/guild-settings';
@@ -60,6 +61,7 @@ export class KitchenBoard {
   private readonly epicByGuild = new Map<string, EpicFreeGame[]>();
   private readonly lastKey = new Map<string, string>();
   private readonly debounce = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly inFlight = new Map<string, Promise<void>>();
   private readonly votes = new RadioNightVoteStore();
   private readonly catches = new RadioCatchStore();
   private tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -103,7 +105,9 @@ export class KitchenBoard {
 
     if (this.tickTimer) return;
     this.tickTimer = setInterval(() => {
-      void this.refreshAll();
+      void this.refreshAll().catch((error) =>
+        this.logger.debug('Kitchen board tick failed:', error),
+      );
     }, TICK_MS);
     this.tickTimer.unref?.();
   }
@@ -299,7 +303,20 @@ export class KitchenBoard {
     return true;
   }
 
-  private async push(guildId: string): Promise<void> {
+  /** One push per guild at a time, so a tick and a refresh cannot both post a board. */
+  private push(guildId: string): Promise<void> {
+    const previous = this.inFlight.get(guildId) ?? Promise.resolve();
+    const next = previous.catch(() => {}).then(() => this.pushNow(guildId));
+    this.inFlight.set(guildId, next);
+    void next
+      .catch(() => {})
+      .finally(() => {
+        if (this.inFlight.get(guildId) === next) this.inFlight.delete(guildId);
+      });
+    return next;
+  }
+
+  private async pushNow(guildId: string): Promise<void> {
     const settings = await this.guildSettings.get(guildId);
     if (!settings.kitchenEnabled || !settings.kitchenChannelId) return;
 
@@ -332,12 +349,15 @@ export class KitchenBoard {
 
     if (settings.kitchenMessageId) {
       try {
+        // Usually a cache hit. A deleted board fails here or on edit and is re-posted below.
         const existing = await channel.messages.fetch(settings.kitchenMessageId);
         if (this.lastKey.get(guildId) === key) return;
         await existing.edit(payload);
         this.lastKey.set(guildId, key);
         return;
-      } catch {
+      } catch (error) {
+        // Only a deleted board is replaced. A rate limit or outage must not post a second one.
+        if (!isUnknownMessage(error)) throw error;
         await this.guildSettings.upsert(guildId, { kitchenMessageId: null });
       }
     }

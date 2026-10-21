@@ -19,6 +19,7 @@ const JOIN_TIMEOUT_MS = 20_000;
 /** Tracks one music player per guild and creates voice connections on demand. */
 export class MusicManager {
   private readonly subscriptions = new Map<string, GuildPlayer>();
+  private readonly pendingJoins = new Map<string, Promise<GuildPlayer>>();
   private readonly source: TrackSource = new CompositeTrackSource();
   private preemptRadio: ((guildId: string) => void) | null = null;
   private onQueueIdle: ((guildId: string, channelId: string) => void) | null = null;
@@ -52,8 +53,37 @@ export class MusicManager {
     return this.subscriptions.get(guildId);
   }
 
-  /** Join `channel` (or return the existing healthy player for the guild). */
+  /** Stop every player and leave voice (shutdown). */
+  stopAll(): void {
+    for (const player of [...this.subscriptions.values()]) {
+      try {
+        player.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /**
+   * Join `channel` (or return the existing healthy player for the guild).
+   * Joins for one guild run one at a time, so a double-click cannot build two players.
+   */
   async join(channel: VoiceBasedChannel): Promise<GuildPlayer> {
+    const guildId = channel.guild.id;
+    const previous = this.pendingJoins.get(guildId);
+    const attempt = (async () => {
+      if (previous) await previous.catch(() => {});
+      return this.joinNow(channel);
+    })();
+    this.pendingJoins.set(guildId, attempt);
+    try {
+      return await attempt;
+    } finally {
+      if (this.pendingJoins.get(guildId) === attempt) this.pendingJoins.delete(guildId);
+    }
+  }
+
+  private async joinNow(channel: VoiceBasedChannel): Promise<GuildPlayer> {
     const guildId = channel.guild.id;
     this.preemptRadio?.(guildId);
 

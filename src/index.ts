@@ -57,7 +57,15 @@ async function main(): Promise<void> {
     });
   });
   music.setIdleHandoff((guildId, channelId) => {
-    void handOffIdleToRadio(client, radio, kitchen, guildSettings, logger, guildId, channelId);
+    void handOffIdleToRadio(
+      client,
+      radio,
+      kitchen,
+      guildSettings,
+      logger,
+      guildId,
+      channelId,
+    ).catch((error) => logger.error('Idle → radio failed:', error));
   });
   const services: Services = {
     config,
@@ -98,7 +106,7 @@ async function main(): Promise<void> {
       logger.error('Radio resume failed:', error);
     });
     void Promise.all([runSteam('Initial'), runEpic('Initial')]).finally(() => {
-      void kitchen.refreshAll();
+      void kitchen.refreshAll().catch((error) => logger.error('Kitchen refresh failed:', error));
     });
 
     const radioNightJob = new Cron(RADIO_NIGHT_CRON, cronOpts, () => {
@@ -119,8 +127,29 @@ async function main(): Promise<void> {
     logger.info(`Multi-server ready: in ${client.guilds.cache.size} guild(s).`);
   });
 
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`${signal} received — leaving voice and shutting down.`);
+    // Keep the saved radio channel so the next boot resumes the station.
+    radio.stopAll();
+    music.stopAll();
+    void client
+      .destroy()
+      .catch(() => {})
+      .finally(() => process.exit(0));
+  };
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+
   await client.login(DISCORD_TOKEN);
 }
+
+// One stray promise must not take music, radio, and deals down with it.
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection:', reason);
+});
 
 async function resumeRadios(
   client: Client,

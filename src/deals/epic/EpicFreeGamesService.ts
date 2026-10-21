@@ -189,7 +189,10 @@ export class EpicFreeGamesService {
   }
 
   private async fetchFreeGames(): Promise<EpicFreeGame[]> {
-    const response = await fetch(EPIC_API_URL, { headers: { Accept: 'application/json' } });
+    const response = await fetch(EPIC_API_URL, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(20_000),
+    });
     if (!response.ok) {
       throw new Error(`Epic API returned HTTP ${response.status}`);
     }

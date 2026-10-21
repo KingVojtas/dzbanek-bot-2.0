@@ -6,6 +6,7 @@ const SPOTIFY_URI = /spotify:(track|album|playlist):([A-Za-z0-9]+)/i;
 const PLAYLIST_CAP = 50;
 const TOKEN_URL = 'https://accounts.spotify.com/api/token';
 const API_BASE = 'https://api.spotify.com/v1';
+const FETCH_TIMEOUT_MS = 12_000;
 
 interface SpotifyToken {
   access_token: string;
@@ -54,6 +55,7 @@ async function oembedTitle(spotifyUrl: string): Promise<string | null> {
   try {
     const response = await fetch(
       `https://open.spotify.com/oembed?url=${encodeURIComponent(spotifyUrl)}`,
+      { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) },
     );
     if (!response.ok) return null;
     const json = (await response.json()) as { title?: string };
@@ -104,6 +106,7 @@ async function getToken(): Promise<string> {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: 'grant_type=client_credentials',
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -124,6 +127,7 @@ async function spotifyGet<T>(path: string): Promise<T> {
   const token = await getToken();
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   if (!response.ok) {
     const body = await response.text().catch(() => '');

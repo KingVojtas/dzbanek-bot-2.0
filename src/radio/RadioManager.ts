@@ -14,6 +14,7 @@ const JOIN_TIMEOUT_MS = 20_000;
 /** Tracks one live-radio session per guild. */
 export class RadioManager {
   private readonly sessions = new Map<string, RadioSession>();
+  private readonly pendingPlays = new Map<string, Promise<RadioSession>>();
   private onStation: ((guildId: string, station: RadioStation, channelId: string) => void) | null =
     null;
   private onLeave: ((guildId: string) => void) | null = null;
@@ -66,12 +67,34 @@ export class RadioManager {
     }
   }
 
+  /** Leave voice everywhere on shutdown, keeping the channel so a restart resumes. */
+  stopAll(): void {
+    for (const guildId of [...this.sessions.keys()]) {
+      this.stop(guildId, { forgetChannel: false });
+    }
+  }
+
   /**
    * Join `channel` and start `station`. Reuses a healthy same-channel session,
    * swapping the Icecast URL when the station changes. Replaces a dead session
-   * or one in a different channel.
+   * or one in a different channel. Calls for one guild run one at a time.
    */
   async play(channel: VoiceBasedChannel, station: RadioStation): Promise<RadioSession> {
+    const guildId = channel.guild.id;
+    const previous = this.pendingPlays.get(guildId);
+    const attempt = (async () => {
+      if (previous) await previous.catch(() => {});
+      return this.playNow(channel, station);
+    })();
+    this.pendingPlays.set(guildId, attempt);
+    try {
+      return await attempt;
+    } finally {
+      if (this.pendingPlays.get(guildId) === attempt) this.pendingPlays.delete(guildId);
+    }
+  }
+
+  private async playNow(channel: VoiceBasedChannel, station: RadioStation): Promise<RadioSession> {
     const guildId = channel.guild.id;
 
     const existing = this.sessions.get(guildId);

@@ -31,7 +31,10 @@ export async function fetchSteamPrice(appId: string): Promise<SteamPriceInfo | n
 
   let response: Response;
   try {
-    response = await fetch(url, { headers: { Accept: 'application/json' } });
+    response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(12_000),
+    });
   } catch {
     return null;
   }
