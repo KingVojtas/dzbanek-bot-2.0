@@ -25,6 +25,8 @@ export interface Config {
     cron: string;
     postOnFirstRun: boolean;
   };
+  /** Wishlist Radar channels, any server. Each server uses the one that belongs to it. */
+  wishlist: { channelIds: string[] };
   welcome: { channelId: string | null };
   goodbye: { channelId: string | null };
   embedColor: number;
@@ -73,6 +75,7 @@ function loadConfig(): Config {
   const music = (raw.music ?? {}) as Json;
   const steam = (raw.steam ?? {}) as Json;
   const epic = (raw.epic ?? {}) as Json;
+  const wishlist = (raw.wishlist ?? {}) as Json;
   const welcome = (raw.welcome ?? {}) as Json;
   const goodbye = (raw.goodbye ?? {}) as Json;
 
@@ -96,6 +99,11 @@ function loadConfig(): Config {
       channelId: optionalString(epic.channelId),
       cron: requireString(epic.cron, 'epic.cron'),
       postOnFirstRun: epic.postOnFirstRun !== false,
+    },
+    wishlist: {
+      channelIds: Array.isArray(wishlist.channelIds)
+        ? wishlist.channelIds.map(optionalString).filter((id): id is string => Boolean(id))
+        : [],
     },
     welcome: { channelId: optionalString(welcome.channelId) },
     goodbye: { channelId: optionalString(goodbye.channelId) },

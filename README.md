@@ -97,7 +97,7 @@ The same 10-game lineup is remembered per server. A repeat stays in the pot. An 
 
 ### 🎯 Wishlist Radar
 
-Link your Steam profile once, and Dzbanek watches your Steam wishlist. Each morning after the digest, the Steam channel gets a radar card if anything you wished for went on sale. It pings only the people with something new.
+Link your Steam profile once, and Dzbanek watches your Steam wishlist. Each morning after the digest, the wishlist channel gets a radar card if anything you wished for went on sale. It pings only the people with something new. The channel is set with `/setup wishlist`. Without that, it uses the server’s channel from `wishlist.channelIds` in `config.json`, then the Steam channel.
 
 - **🤝 Wanted together** lists games that two or more people in the server wishlisted, with their art, the price, and who wants them. Buy them together.
 - **🎯 For @you** lists your own hits, deepest discount first, with the price and when the sale ends.

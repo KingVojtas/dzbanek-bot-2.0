@@ -71,6 +71,18 @@ export const setup: Command = {
     )
     .addSubcommand((sub) =>
       sub
+        .setName('wishlist')
+        .setDescription('Set the channel where Wishlist Radar pings people about their sales.')
+        .addChannelOption((option) =>
+          option
+            .setName('channel')
+            .setDescription('Text channel for Wishlist Radar')
+            .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
         .setName('disable')
         .setDescription('Stop posting a feature in this server.')
         .addStringOption((option) =>
@@ -165,6 +177,12 @@ export const setup: Command = {
         ['🚪 Goodbye', goodbye],
         ['🍪 Kitchen Board', kitchen],
         ['📻 Idle radio', idleRadio],
+        [
+          '🎯 Wishlist Radar',
+          settings.wishlistChannelId
+            ? `<#${settings.wishlistChannelId}>`
+            : 'On · its config channel, or the Steam channel',
+        ],
         ['🌙 Radio Night', radioNight, true],
       ];
       const on = features.filter(([, value]) => value !== 'Off').length;
@@ -293,6 +311,10 @@ export const setup: Command = {
       goodbye: {
         patch: { goodbyeEnabled: true, goodbyeChannelId: channel.id },
         text: `Goodbye messages will post in <#${channel.id}>.`,
+      },
+      wishlist: {
+        patch: { wishlistChannelId: channel.id },
+        text: `Wishlist Radar will post in <#${channel.id}> and ping people there when their wishlist goes on sale.`,
       },
       kitchen: {
         patch: {

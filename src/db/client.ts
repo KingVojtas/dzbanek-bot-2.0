@@ -30,10 +30,10 @@ export async function ensureGuildSettingsColumns(): Promise<void> {
   const columns = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
     'PRAGMA table_info("GuildSettings")',
   );
-  if (columns.some((column) => column.name === 'lastRadioChannelId')) return;
-  await prisma.$executeRawUnsafe(
-    'ALTER TABLE "GuildSettings" ADD COLUMN "lastRadioChannelId" TEXT',
-  );
+  for (const name of ['lastRadioChannelId', 'wishlistChannelId']) {
+    if (columns.some((column) => column.name === name)) continue;
+    await prisma.$executeRawUnsafe(`ALTER TABLE "GuildSettings" ADD COLUMN "${name}" TEXT`);
+  }
 }
 
 /** Same reason: the Wishlist Radar table has to exist before the first `/steam link`. */

@@ -19,6 +19,9 @@
     "cron": "0 12,17 * * *",
     "postOnFirstRun": true
   },
+  "wishlist": {
+    "channelIds": ["1562910887881216091", "1562911330959360210"]
+  },
   "welcome": {
     "channelId": ""
   },

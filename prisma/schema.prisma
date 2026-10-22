@@ -41,6 +41,8 @@ model GuildSettings {
   /// Voice channel playing radio. Cleared on /radio stop. Used to rejoin after a restart.
   lastRadioChannelId   String?
   idleRadioEnabled     Boolean  @default(true)
+  /// Where Wishlist Radar posts. Null falls back to config, then the Steam channel.
+  wishlistChannelId    String?
   updatedAt            DateTime @updatedAt
 }
 

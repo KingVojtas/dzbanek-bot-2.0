@@ -21,6 +21,7 @@ export interface GuildSettings {
   lastRadioStation: string | null;
   lastRadioChannelId: string | null;
   idleRadioEnabled: boolean;
+  wishlistChannelId: string | null;
 }
 
 function defaults(guildId: string): GuildSettings {
@@ -45,6 +46,7 @@ function defaults(guildId: string): GuildSettings {
     lastRadioStation: null,
     lastRadioChannelId: null,
     idleRadioEnabled: true,
+    wishlistChannelId: null,
   };
 }
 
@@ -70,6 +72,7 @@ function fromRow(row: GuildSettings): GuildSettings {
     lastRadioStation: row.lastRadioStation,
     lastRadioChannelId: row.lastRadioChannelId,
     idleRadioEnabled: row.idleRadioEnabled,
+    wishlistChannelId: row.wishlistChannelId,
   };
 }
 
@@ -132,6 +135,7 @@ export class GuildSettingsStore {
         lastRadioStation: next.lastRadioStation,
         lastRadioChannelId: next.lastRadioChannelId,
         idleRadioEnabled: next.idleRadioEnabled,
+        wishlistChannelId: next.wishlistChannelId,
       },
     });
     const saved = fromRow(row);

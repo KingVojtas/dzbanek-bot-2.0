@@ -14,7 +14,7 @@ import type { SteamDealItem } from '../../core/types';
 import type { KitchenBoard } from '../../kitchen/KitchenBoard';
 import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
-import { resolveDealTargets, type DealTarget } from '../targets';
+import { resolveDealTargets, resolveGuildSendableChannel, type DealTarget } from '../targets';
 import { attachSteamArtwork } from './SteamArtwork';
 import {
   attachSteamShelfMeta,
@@ -209,7 +209,7 @@ export class SteamDealsService {
       if (sent) posted += 1;
       // Even when the digest was a repeat: the wishlists may still have news.
       await this.radar
-        ?.post(target.guildId, target.guildName, target.channel, mine)
+        ?.post(target.guildId, target.guildName, await this.radarChannel(target), mine)
         .catch((error) =>
           this.logger.error(`Wishlist radar failed in ${target.guildName}:`, error),
         );
@@ -291,6 +291,17 @@ export class SteamDealsService {
       this.logger.error('Wishlist radar scan failed:', error);
       return new Map();
     }
+  }
+
+  /** The server's own setting, then its channel from config, then the Steam channel. */
+  private async radarChannel(target: DealTarget): Promise<SendableChannels> {
+    const ids = [target.settings.wishlistChannelId, ...this.config.wishlist.channelIds];
+    for (const id of ids) {
+      if (!id) continue;
+      const channel = await resolveGuildSendableChannel(this.client, id, target.guildId);
+      if (channel) return channel;
+    }
+    return target.channel;
   }
 
   private async wishlistsIn(guildId: string, scan: WishlistScan): Promise<WishlistScan> {
