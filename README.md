@@ -93,7 +93,25 @@ Very Positive games (score ≥ 8, or ≥ 80% positive with at least 10 reviews) 
 
 The card has no header and no banner: just ten numbered rows. Each row shows the game’s box art, the `−75%` chip, the struck and current price, a one-line description from the Steam store, then a quiet line with the game’s style (up to three tags, e.g. Action, Shooter, Open World), Steam’s review label for well-reviewed games, and when the sale ends. A single footer line names the day and has an **All specials** button. Art that Discord can’t load is left out, and a row without art gets a **Store** button instead. Near Discord’s text limit the descriptions shorten first, then go, then the tags. Every row stays.
 
-The same 10-game lineup is remembered per server. A repeat stays in the pot. An empty feed stays quiet too.
+The same 10-game lineup is remembered per server. A repeat stays in the pot. An empty feed stays quiet too. Before the ten are picked, every game is checked against Steam’s own price, so a sale the feed still lists after it ended is left out.
+
+### 🎯 Wishlist Radar
+
+Link your Steam profile once, and Dzbanek watches your Steam wishlist. Each morning after the digest, the Steam channel gets a radar card if anything you wished for went on sale. It pings only the people with something new.
+
+- **🤝 Wanted together** lists games that two or more people in the server wishlisted, with their art, the price, and who wants them. Buy them together.
+- **🎯 For @you** lists your own hits, deepest discount first, with the price and when the sale ends.
+- A digest row that someone wishlisted gets a quiet `👀 @name` line. That one doesn’t ping.
+
+Each hit is announced once per discount. A game that drops from −50 % to −75 % pings again, and an unchanged sale stays quiet. A restart doesn’t repeat anything.
+
+| Command                 | What it does                                                           |
+| ----------------------- | ---------------------------------------------------------------------- |
+| `/steam link <profile>` | Link your Steam profile (link, custom name, or 17-digit ID).           |
+| `/steam wishlist`       | See, privately, everything on your wishlist that is on sale right now. |
+| `/steam unlink`         | Stop watching your wishlist.                                           |
+
+The wishlist has to be public: Steam → Edit Profile → Privacy Settings → **Game details: Public**. No Steam API key is needed. The link is stored per Discord user, so it works in every server the bot shares with you.
 
 ### 🎁 Epic free games
 

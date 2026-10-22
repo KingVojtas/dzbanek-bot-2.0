@@ -22,6 +22,7 @@ import {
   type SteamStoreProfile,
 } from './SteamBlockbuster';
 import { SteamFeedReader } from './SteamFeedReader';
+import { digestWishers, type WishlistRadar, type WishlistScan } from './WishlistRadar';
 import { SteamSpecialsReader, attachSteamSaleEnds } from './SteamSpecialsReader';
 import {
   extractAppId,
@@ -54,6 +55,7 @@ export class SteamDealsService {
   private readonly specials = new SteamSpecialsReader();
   private pollInFlight: Promise<void> | null = null;
   private kitchen: KitchenBoard | null = null;
+  private radar: WishlistRadar | null = null;
 
   constructor(
     private readonly client: Client,
@@ -65,6 +67,10 @@ export class SteamDealsService {
 
   setKitchen(kitchen: KitchenBoard): void {
     this.kitchen = kitchen;
+  }
+
+  setRadar(radar: WishlistRadar): void {
+    this.radar = radar;
   }
 
   async poll(): Promise<void> {
@@ -192,11 +198,21 @@ export class SteamDealsService {
       this.logger.warn(`Steam: no artwork for ${missingArt} of ${top.length} games.`);
     }
 
+    const scan = await this.scanWishlists();
+
     let posted = 0;
     for (const target of targets) {
       this.kitchen?.recordSteam(target.guildId, top, prices, reviewMap, target.channel.id);
-      const sent = await this.postToGuild(target, top, fingerprint, prices, reviewMap);
+      const mine = await this.wishlistsIn(target.guildId, scan);
+      const wishers = digestWishers(top, mine);
+      const sent = await this.postToGuild(target, top, fingerprint, prices, reviewMap, wishers);
       if (sent) posted += 1;
+      // Even when the digest was a repeat: the wishlists may still have news.
+      await this.radar
+        ?.post(target.guildId, target.guildName, target.channel, mine)
+        .catch((error) =>
+          this.logger.error(`Wishlist radar failed in ${target.guildName}:`, error),
+        );
       this.kitchen?.refresh(target.guildId);
     }
 
@@ -209,6 +225,7 @@ export class SteamDealsService {
     fingerprint: string,
     prices: Map<string, string | null>,
     reviewMap: Map<string, SteamReviewInfo | null>,
+    wishers: Map<string, string[]>,
   ): Promise<boolean> {
     const scope = steamDigestScope(target.guildId);
 
@@ -233,10 +250,12 @@ export class SteamDealsService {
     }
 
     try {
-      const display = buildSteamDealsDisplay(top, prices, reviewMap);
+      const display = buildSteamDealsDisplay(top, prices, reviewMap, wishers);
+      // The 👀 line names people; the radar card is the one that pings.
       const sent = await target.channel.send({
         components: display.components,
         flags: display.flags,
+        allowedMentions: { parse: [] },
       });
       if (lastDigest) {
         try {
@@ -262,6 +281,22 @@ export class SteamDealsService {
       return [item.id, review] as const;
     });
     return new Map(entries);
+  }
+
+  private async scanWishlists(): Promise<WishlistScan> {
+    if (!this.radar) return new Map();
+    try {
+      return await this.radar.scan();
+    } catch (error) {
+      this.logger.error('Wishlist radar scan failed:', error);
+      return new Map();
+    }
+  }
+
+  private async wishlistsIn(guildId: string, scan: WishlistScan): Promise<WishlistScan> {
+    const guild = this.client.guilds.cache.get(guildId);
+    if (!guild || !this.radar || scan.size === 0) return new Map();
+    return this.radar.forGuild(guild, scan);
   }
 
   /** Steam DE's live price for each game; null when Steam did not answer. */

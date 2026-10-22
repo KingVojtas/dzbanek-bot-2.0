@@ -74,3 +74,10 @@ model RadioCatch {
   @@index([guildId, caughtAt])
   @@index([guildId, userId, caughtAt])
 }
+
+/// A member's Steam profile, for Wishlist Radar. One per Discord user, shared by every server.
+model SteamLink {
+  userId   String   @id
+  steamId  String
+  linkedAt DateTime @default(now())
+}

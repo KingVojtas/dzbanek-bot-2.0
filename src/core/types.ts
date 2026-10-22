@@ -9,6 +9,8 @@ import type { Readable } from 'node:stream';
 import type { Config } from '../config';
 import type { Logger } from './logger';
 import type { GuildSettingsStore } from '../deals/guild-settings';
+import type { WishlistRadar } from '../deals/steam/WishlistRadar';
+import type { SteamLinkStore } from '../deals/steam/steam-links';
 import type { KitchenBoard } from '../kitchen/KitchenBoard';
 import type { MusicManager } from '../music/MusicManager';
 import type { RadioManager } from '../radio/RadioManager';
@@ -21,6 +23,8 @@ export interface Services {
   radio: RadioManager;
   guildSettings: GuildSettingsStore;
   kitchen: KitchenBoard;
+  steamLinks: SteamLinkStore;
+  wishlistRadar: WishlistRadar;
 }
 
 /** Loop modes for music queue. */

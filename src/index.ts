@@ -9,12 +9,14 @@ import { DISCORD_TOKEN, config } from './config';
 import { createClient } from './core/client';
 import { logger, type Logger } from './core/logger';
 import type { Services } from './core/types';
-import { ensureGuildSettingsColumns } from './db/client';
+import { ensureGuildSettingsColumns, ensureSteamLinkTable } from './db/client';
 import { migrateJsonStoresIfNeeded } from './db/migrate-json';
 import { EpicFreeGamesService } from './deals/epic/EpicFreeGamesService';
 import { GuildSettingsStore } from './deals/guild-settings';
 import { SeenStore } from './deals/seen-store';
 import { SteamDealsService } from './deals/steam/SteamDealsService';
+import { WishlistRadar } from './deals/steam/WishlistRadar';
+import { SteamLinkStore } from './deals/steam/steam-links';
 import { registerEvents } from './events';
 import { KitchenBoard } from './kitchen/KitchenBoard';
 import { KITCHEN_CHART_CRON } from './kitchen/chart';
@@ -35,10 +37,13 @@ async function main(): Promise<void> {
   const commands = buildCommandCollection();
 
   await ensureGuildSettingsColumns();
+  await ensureSteamLinkTable();
   await migrateJsonStoresIfNeeded();
 
   const guildSettings = new GuildSettingsStore();
   const seen = new SeenStore(config.steam.maxSeenIds);
+  const steamLinks = new SteamLinkStore();
+  const wishlistRadar = new WishlistRadar(steamLinks, seen, logger);
   const music = new MusicManager(config, logger);
   const radio = new RadioManager(logger);
   music.setPreempt((guildId) => radio.stop(guildId));
@@ -74,11 +79,14 @@ async function main(): Promise<void> {
     radio,
     guildSettings,
     kitchen,
+    steamLinks,
+    wishlistRadar,
   };
 
   const steamService = new SteamDealsService(client, seen, config, logger, guildSettings);
   const epicService = new EpicFreeGamesService(client, seen, config, logger, guildSettings);
   steamService.setKitchen(kitchen);
+  steamService.setRadar(wishlistRadar);
   epicService.setKitchen(kitchen);
 
   registerEvents(client, commands, services);

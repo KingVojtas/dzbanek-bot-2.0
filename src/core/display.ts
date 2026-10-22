@@ -621,6 +621,7 @@ function steamRow(
   apiPrice: string | null,
   review: SteamReviewInfo | null | undefined,
   extras: SteamExtras,
+  wishers: string[] = [],
 ): SectionBuilder | TextDisplayBuilder {
   const title = steamDealTitle(item);
   const lines = [
@@ -629,7 +630,11 @@ function steamRow(
   ];
   const blurb = extras.blurb > 0 ? plainBlurb(item.description, extras.blurb) : '';
   if (blurb) lines.push(blurb);
-  const meta = [extras.tags ? tagLine(item.tags, 3) : '', steamReviewLabel(review)]
+  const meta = [
+    extras.tags ? tagLine(item.tags, 3) : '',
+    steamReviewLabel(review),
+    wisherLine(wishers),
+  ]
     .filter(Boolean)
     .join(' · ');
   if (meta) lines.push(`-# ${meta}`);
@@ -645,11 +650,17 @@ interface SteamExtras {
   tags: boolean;
 }
 
+/** `👀 <@a>, <@b>`: members whose Steam wishlist has this game. Empty for nobody. */
+function wisherLine(userIds: string[]): string {
+  return userIds.length > 0 ? `👀 ${userIds.map((id) => `<@${id}>`).join(', ')}` : '';
+}
+
 function steamContainer(
   top: SteamDealItem[],
   prices: Map<string, string | null>,
   reviews: Map<string, SteamReviewInfo | null>,
   extras: SteamExtras,
+  wishers: Map<string, string[]>,
 ): ContainerBuilder {
   const container = new ContainerBuilder().setAccentColor(SITE_STEAM);
 
@@ -661,7 +672,14 @@ function steamContainer(
   top.forEach((item, i) =>
     addBlock(
       container,
-      steamRow(i + 1, item, prices.get(item.id) ?? null, reviews.get(item.id), extras),
+      steamRow(
+        i + 1,
+        item,
+        prices.get(item.id) ?? null,
+        reviews.get(item.id),
+        extras,
+        wishers.get(item.id),
+      ),
     ),
   );
 
@@ -685,6 +703,8 @@ export function buildSteamDealsDisplay(
   items: SteamDealItem[],
   prices: Map<string, string | null>,
   reviews: Map<string, SteamReviewInfo | null> = new Map(),
+  /** Deal id → members who wishlisted it. Shown as mentions; send with pings off. */
+  wishers: Map<string, string[]> = new Map(),
 ): V2Display {
   const top = items.slice(0, STEAM_DIGEST_SIZE);
   // Near Discord's text cap the blurbs shorten first, then go, then the tags. Prices stay.
@@ -694,10 +714,110 @@ export function buildSteamDealsDisplay(
     { blurb: 0, tags: true },
     { blurb: 0, tags: false },
   ];
-  let container = steamContainer(top, prices, reviews, tries[0]!);
+  let container = steamContainer(top, prices, reviews, tries[0]!, wishers);
   for (const extras of tries.slice(1)) {
     if (fitsV2([container])) break;
-    container = steamContainer(top, prices, reviews, extras);
+    container = steamContainer(top, prices, reviews, extras, wishers);
+  }
+  return { components: [container], flags: MessageFlags.IsComponentsV2 };
+}
+
+/* ---------- Wishlist Radar ---------- */
+
+/** A wishlisted game on sale, with Steam's live price line (`formatSteamPrice`). */
+export interface WishlistGame {
+  item: SteamDealItem;
+  price: string | null;
+}
+
+export interface WishlistRadarView {
+  /** On sale and wishlisted by two or more members. */
+  together: { game: WishlistGame; userIds: string[] }[];
+  /** Each member's hits, deepest discount first. */
+  people: { userId: string; games: WishlistGame[] }[];
+}
+
+const RADAR_COLOR = 0x5dd39e;
+
+/** In the radar card's footer. Also how a radar card is told apart from the digest. */
+export const RADAR_MARKER = 'Wishlist Radar';
+
+function radarLine(game: WishlistGame): string {
+  const money = steamMoneyLine(steamPriceBits(game.item, game.price), false);
+  const ends = steamSaleEnds(game.item.expires);
+  return [`**${linked(steamDealTitle(game.item), game.item.link)}**`, money, ends]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+interface RadarLimits {
+  together: number;
+  perPerson: number;
+}
+
+function radarContainer(view: WishlistRadarView, limits: RadarLimits): ContainerBuilder {
+  const container = new ContainerBuilder().setAccentColor(RADAR_COLOR);
+  const together = view.together.slice(0, limits.together);
+  if (together.length > 0) {
+    container.addTextDisplayComponents(textBlock(['### 🤝 Wanted together']));
+    for (const { game, userIds } of together) {
+      const title = steamDealTitle(game.item);
+      const ends = steamSaleEnds(game.item.expires);
+      addBlock(
+        container,
+        artSection(
+          [
+            `**${linked(title, game.item.link)}**`,
+            steamMoneyLine(steamPriceBits(game.item, game.price), false),
+            `-# ${[`🤝 ${userIds.map((id) => `<@${id}>`).join(', ')}`, ends].filter(Boolean).join(' · ')}`,
+          ],
+          httpImage(game.item.image),
+          title,
+          { label: 'Store', url: game.item.link },
+        ),
+      );
+    }
+    container.addSeparatorComponents(divider());
+  }
+
+  for (const person of view.people) {
+    if (person.games.length === 0) continue;
+    const shown = person.games.slice(0, limits.perPerson);
+    const more = person.games.length - shown.length;
+    container.addTextDisplayComponents(
+      textBlock([
+        `🎯 **For <@${person.userId}>**`,
+        ...shown.map((game) => `- ${radarLine(game)}`),
+        more > 0 ? `-# and ${more} more · /steam wishlist` : '',
+      ]),
+    );
+  }
+
+  container
+    .addSeparatorComponents(divider())
+    .addTextDisplayComponents(
+      textBlock([
+        `-# 🎯 ${RADAR_MARKER} · games on your Steam wishlist that are on sale · /steam link to join`,
+      ]),
+    );
+  return container;
+}
+
+/**
+ * Wishlist Radar: games two or more members want, with their art, then each
+ * member's own sale hits as compact lines. Shortens to fit Discord's caps.
+ */
+export function buildWishlistRadarDisplay(view: WishlistRadarView, perPerson = 5): V2Display {
+  const tries: RadarLimits[] = [
+    { together: 4, perPerson },
+    { together: 4, perPerson: Math.min(perPerson, 3) },
+    { together: 2, perPerson: Math.min(perPerson, 2) },
+    { together: 0, perPerson: 1 },
+  ];
+  let container = radarContainer(view, tries[0]!);
+  for (const limits of tries.slice(1)) {
+    if (fitsV2([container])) break;
+    container = radarContainer(view, limits);
   }
   return { components: [container], flags: MessageFlags.IsComponentsV2 };
 }

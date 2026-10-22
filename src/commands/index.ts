@@ -4,6 +4,7 @@ import { setup } from './admin/setup';
 import { buildHelpCommand } from './help';
 import { textRoom, voiceRoom } from './rooms';
 import { radio } from './radio';
+import { steam } from './steam';
 import { nowPlaying } from './music/nowplaying';
 import { pause } from './music/pause';
 import { play } from './music/play';
@@ -18,6 +19,7 @@ const commandList: Command[] = [
   textRoom,
   voiceRoom,
   radio,
+  steam,
   play,
   queue,
   nowPlaying,

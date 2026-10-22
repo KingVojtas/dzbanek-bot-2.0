@@ -28,6 +28,7 @@ const GROUPS: { title: string; names: string[]; note?: string }[] = [
     names: ['play', 'queue', 'nowplaying', 'skip', 'pause', 'volume', 'remove', 'stop'],
   },
   { title: '📻 Radio', names: ['radio'] },
+  { title: '🎯 Steam wishlist', names: ['steam'] },
   { title: '🍪 Kitchen & setup', names: ['setup'], note: 'Manage Server' },
   { title: '🚪 Rooms', names: ['textroom', 'voiceroom'], note: 'Admin' },
   { title: '❓ Help', names: ['help'] },
@@ -36,7 +37,7 @@ const GROUPS: { title: string; names: string[]; note?: string }[] = [
 const INTRO =
   '## 🍪 What’s cooking\n' +
   'Dzbanek plays YouTube and Spotify, streams Czech radio live, posts Steam deals and Epic ' +
-  'freebies, and keeps the Kitchen Board up to date.';
+  'freebies, pings you when your Steam wishlist goes on sale, and keeps the Kitchen Board up to date.';
 
 const FOOTER =
   '-# Pause, skip, previous, volume, loop and shuffle also live as buttons on the Now Playing card.';

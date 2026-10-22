@@ -10,6 +10,7 @@ import { commandList } from '../src/commands';
 import { buildHelpDisplay } from '../src/commands/help';
 import {
   EPIC_SHELF_MARKER,
+  RADAR_MARKER,
   STEAM_SHELF_MARKER,
   V2_COMPONENT_MAX,
   V2_TEXT_MAX,
@@ -17,6 +18,7 @@ import {
   buildNowPlayingDisplay,
   buildQueueDisplay,
   buildSteamDealsDisplay,
+  buildWishlistRadarDisplay,
   collectMessageTextContent,
   epicGameTitle,
   extractEpicTitles,
@@ -33,6 +35,13 @@ import {
 import { buildSiteEmbed, type EmbedCard } from '../src/core/embeds';
 import type { EpicFreeGame, SteamDealItem, Track } from '../src/core/types';
 import type { SteamReviewInfo } from '../src/deals/steam/SteamReviewApi';
+import { parseSteamProfileInput } from '../src/deals/steam/SteamWishlist';
+import {
+  digestWishers,
+  radarView,
+  type WishlistHit,
+  type WishlistScan,
+} from '../src/deals/steam/WishlistRadar';
 import { buildKitchenChartDisplay } from '../src/kitchen/chart';
 import {
   KITCHEN_BUTTON_SUFFIX,
@@ -767,6 +776,77 @@ checkEmbedCard(
   }),
   ['"inline":true', '"inline":false'],
 );
+
+/* ---------- Wishlist Radar ---------- */
+
+{
+  const hit = (appId: number, percent: number): WishlistHit => ({
+    appId: String(appId),
+    percent,
+    price: `~~39,99€~~ → **${(39.99 * (1 - percent / 100)).toFixed(2).replace('.', ',')}€** (-${percent}%)`,
+    item: {
+      ...steamItem(appId - 1000),
+      id: `wish_${appId}`,
+      link: `https://store.steampowered.com/app/${appId}/Wished_${appId}_With_A_Long_Name/`,
+      gameName: `Wished Game ${appId} With A Fairly Long Store Name`,
+      discount: `-${percent}%`,
+    },
+  });
+
+  // Six people with twenty hits each; the first six games are wanted by everyone.
+  const crowd: WishlistScan = new Map(
+    Array.from({ length: 6 }, (_, person) => [
+      `10${person}`,
+      Array.from({ length: 20 }, (_, i) => hit(1001 + (i < 6 ? i : person * 20 + i), 80 - i)),
+    ]),
+  );
+  const view = radarView(crowd, crowd);
+  checkV2('radar-crowded', () => buildWishlistRadarDisplay(view), [
+    '🤝 Wanted together',
+    '🤝 <@100>, <@101>, <@102>, <@103>, <@104>, <@105>',
+    '🎯 **For <@100>**',
+    '/steam wishlist',
+    RADAR_MARKER,
+  ]);
+
+  // Only new hits count: the shared game shows when it is new for one of the two.
+  const pair: WishlistScan = new Map([
+    ['1', [hit(1001, 50), hit(1002, 40)]],
+    ['2', [hit(1001, 50)]],
+  ]);
+  const fresh: WishlistScan = new Map([['2', [hit(1001, 50)]]]);
+  const freshView = radarView(pair, fresh);
+  if (
+    freshView.together.length !== 1 ||
+    freshView.together[0]!.userIds.join(',') !== '1,2' ||
+    freshView.people.map((person) => person.userId).join(',') !== '2'
+  ) {
+    fail('radar-fresh', JSON.stringify(freshView.people.map((person) => person.userId)));
+  } else ok('radar-fresh', 'only people with new hits get a line; the shared game names both');
+
+  const digestTop = [steamItem(1), steamItem(2)];
+  const wishers = digestWishers(digestTop, pair);
+  checkV2(
+    'steam-digest-wishers',
+    () => buildSteamDealsDisplay(digestTop, new Map(), new Map(), wishers),
+    ['👀 <@1>, <@2>', '👀 <@1>'],
+  );
+
+  const cases: [string, string | null][] = [
+    ['https://steamcommunity.com/profiles/76561197960287930/', 'id:76561197960287930'],
+    ['https://steamcommunity.com/id/gabelogannewell', 'vanity:gabelogannewell'],
+    ['76561197960287930', 'id:76561197960287930'],
+    ['  kingvojtas ', 'vanity:kingvojtas'],
+    ['not a profile!', null],
+  ];
+  const wrong = cases.filter(([input, want]) => {
+    const got = parseSteamProfileInput(input);
+    const text = got ? (got.kind === 'id' ? `id:${got.steamId}` : `vanity:${got.name}`) : null;
+    return text !== want;
+  });
+  if (wrong.length > 0) fail('steam-profile-input', wrong.map(([input]) => input).join(' | '));
+  else ok('steam-profile-input', 'links, custom names, raw ids, and junk');
+}
 
 /* ---------- /help (Components V2) ---------- */
 

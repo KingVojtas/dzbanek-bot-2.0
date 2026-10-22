@@ -58,6 +58,48 @@ export async function fetchSteamPrice(appId: string): Promise<SteamPriceInfo | n
   };
 }
 
+const PRICE_CHUNK = 50;
+
+/**
+ * Many games' Steam DE prices, 50 per request. Steam answers several ids at
+ * once only with `filters=price_overview`. Free and unlisted games are missing.
+ */
+export async function fetchSteamPrices(appIds: string[]): Promise<Map<string, SteamPriceInfo>> {
+  const prices = new Map<string, SteamPriceInfo>();
+  const ids = [...new Set(appIds.filter((id) => /^\d+$/.test(id)))];
+  for (let start = 0; start < ids.length; start += PRICE_CHUNK) {
+    const chunk = ids.slice(start, start + PRICE_CHUNK);
+    const url = `${API_URL}?appids=${chunk.join(',')}&filters=price_overview&cc=${PRICE_CC}`;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await fetch(url, {
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(12_000),
+        });
+        if (response.status === 429 && attempt === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 800));
+          continue;
+        }
+        if (!response.ok) break;
+        const json = (await response.json()) as Record<string, RawAppEntry>;
+        for (const id of chunk) {
+          const price = json[id]?.data?.price_overview;
+          if (!json[id]?.success || !price) continue;
+          prices.set(id, {
+            initialFormatted: price.initial_formatted,
+            finalFormatted: price.final_formatted,
+            discountPercent: price.discount_percent,
+          });
+        }
+      } catch {
+        /* this chunk is skipped; the rest still count */
+      }
+      break;
+    }
+  }
+  return prices;
+}
+
 /** Example: `~~41,99€~~ → **8,39€** (-80%)` */
 export function formatSteamPrice(info: SteamPriceInfo): string {
   return `~~${info.initialFormatted}~~ → **${info.finalFormatted}** (-${info.discountPercent}%)`;

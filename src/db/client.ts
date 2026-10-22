@@ -36,6 +36,16 @@ export async function ensureGuildSettingsColumns(): Promise<void> {
   );
 }
 
+/** Same reason: the Wishlist Radar table has to exist before the first `/steam link`. */
+export async function ensureSteamLinkTable(): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    'CREATE TABLE IF NOT EXISTS "SteamLink" (' +
+      '"userId" TEXT NOT NULL PRIMARY KEY, ' +
+      '"steamId" TEXT NOT NULL, ' +
+      '"linkedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+  );
+}
+
 if (process.env.NODE_ENV !== 'production') {
   global.prisma = prisma;
 }
