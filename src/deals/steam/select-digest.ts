@@ -1,3 +1,4 @@
+import { STEAM_SHELF_MARKER } from '../../core/display';
 import type { SteamDealItem } from '../../core/types';
 import { extractAppId, parseDiscountPercent } from './SteamPriceApi';
 import { isGoodReview, type SteamReviewInfo } from './SteamReviewApi';
@@ -112,9 +113,7 @@ export function selectSteamDigest(
   return picked;
 }
 
-/** Bump when the card layout changes so today's post is replaced once. */
-const STEAM_DIGEST_LAYOUT = 'blurb';
-
+/** Keyed on the card's footer marker, so changing that one string replaces today's post once. */
 export function steamDigestFingerprint(items: SteamDealItem[]): string {
-  return `${STEAM_DIGEST_LAYOUT}:${items.map((item) => item.id).join('|')}`;
+  return `${STEAM_SHELF_MARKER}:${items.map((item) => item.id).join('|')}`;
 }

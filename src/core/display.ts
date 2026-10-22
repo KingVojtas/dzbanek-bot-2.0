@@ -35,8 +35,11 @@ const EPIC_LATER_COLOR = 0x8b93a7;
 /** Games per Steam digest. */
 export const STEAM_DIGEST_SIZE = 10;
 
-/** In the current Steam card's footer. An older card without it is replaced once. */
-export const STEAM_SHELF_MARKER = 'prices in € (Steam DE)';
+/**
+ * In the current Steam card's footer, and part of the digest fingerprint.
+ * Change it when the layout changes: every server's card is replaced once.
+ */
+export const STEAM_SHELF_MARKER = 'euro prices from Steam DE';
 
 /** In the current Epic card's footer. An older card without it is replaced once. */
 export const EPIC_SHELF_MARKER = 'Free to keep forever once claimed';
