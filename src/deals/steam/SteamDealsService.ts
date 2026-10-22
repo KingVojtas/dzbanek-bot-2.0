@@ -209,7 +209,7 @@ export class SteamDealsService {
       if (sent) posted += 1;
       // Even when the digest was a repeat: the wishlists may still have news.
       await this.radar
-        ?.post(target.guildId, target.guildName, await this.radarChannel(target), mine)
+        ?.post(target.guildName, await this.radarChannel(target), mine)
         .catch((error) =>
           this.logger.error(`Wishlist radar failed in ${target.guildName}:`, error),
         );

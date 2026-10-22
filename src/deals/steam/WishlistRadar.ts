@@ -52,8 +52,9 @@ interface CachedShelf {
 /** Most people one card names; more would crowd past Discord's component cap. */
 const RADAR_PEOPLE_MAX = 20;
 
-function radarScope(guildId: string, userId: string): string {
-  return `wish:${guildId}:${userId}`;
+/** Per channel: moving the radar to a new channel announces the current sales there once. */
+function radarScope(channelId: string, userId: string): string {
+  return `wish:${channelId}:${userId}`;
 }
 
 /** Same game, same discount: announced once. A deeper cut counts as new. */
@@ -154,19 +155,14 @@ export class WishlistRadar {
 
   /**
    * Post this server's new hits. Only people with something new are pinged,
-   * and each hit is announced once per discount.
+   * and each hit is announced once per discount in each channel.
    */
-  async post(
-    guildId: string,
-    guildName: string,
-    channel: SendableChannels,
-    scan: WishlistScan,
-  ): Promise<void> {
+  async post(guildName: string, channel: SendableChannels, scan: WishlistScan): Promise<void> {
     const fresh: WishlistScan = new Map();
     for (const [userId, hits] of scan) {
       const unseen: WishlistHit[] = [];
       for (const hit of hits) {
-        if (!(await this.seen.has(radarScope(guildId, userId), hitKey(hit)))) unseen.push(hit);
+        if (!(await this.seen.has(radarScope(channel.id, userId), hitKey(hit)))) unseen.push(hit);
       }
       if (unseen.length > 0) fresh.set(userId, unseen);
     }
@@ -183,7 +179,7 @@ export class WishlistRadar {
       allowedMentions: { users: [...fresh.keys()] },
     });
     for (const [userId, hits] of fresh) {
-      await this.seen.add(radarScope(guildId, userId), hits.map(hitKey));
+      await this.seen.add(radarScope(channel.id, userId), hits.map(hitKey));
     }
     const count = [...fresh.values()].reduce((sum, list) => sum + list.length, 0);
     this.logger.info(
