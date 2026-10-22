@@ -44,6 +44,7 @@ export class RadioSession {
   private metadataTimer: ReturnType<typeof setInterval> | null = null;
   private lastTrackKey = '';
   private currentTrack: NowPlayingTrack | null = null;
+  private trackSince = Date.now();
 
   constructor(
     readonly connection: VoiceConnection,
@@ -63,6 +64,11 @@ export class RadioSession {
 
   get nowPlaying(): NowPlayingTrack | null {
     return this.currentTrack;
+  }
+
+  /** Epoch ms when the song on air last changed. */
+  get nowPlayingSince(): number {
+    return this.trackSince;
   }
 
   getNowPlayingMessage(): Message | null {
@@ -110,6 +116,7 @@ export class RadioSession {
     this.playResource();
     this.lastTrackKey = '';
     this.currentTrack = null;
+    this.trackSince = Date.now();
   }
 
   async waitForStart(timeoutMs = 15_000): Promise<void> {
@@ -146,6 +153,7 @@ export class RadioSession {
     const changed = key !== this.lastTrackKey;
     this.lastTrackKey = key;
     this.currentTrack = track;
+    if (changed) this.trackSince = Date.now();
     if (changed) await this.pushNowPlayingEmbed();
     return this.currentTrack;
   }
@@ -245,6 +253,8 @@ export class RadioSession {
     try {
       const display = buildRadioPlayingDisplay(this.currentStation, {
         track: this.currentTrack,
+        channelId: this.channelId,
+        since: this.trackSince,
       });
       await message.edit({
         embeds: display.embeds,

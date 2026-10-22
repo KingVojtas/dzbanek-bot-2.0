@@ -51,6 +51,22 @@ export function radioNightWeekKey(timeZone: string, date = new Date()): string {
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+/** The coming Friday's vote opening and Radio Night start; today's while 20:00 is still ahead. */
+export function nextRadioNight(
+  timeZone: string,
+  date = new Date(),
+): { voteOpens: Date; starts: Date } {
+  const parts = zonedParts(timeZone, date);
+  const index = WEEKDAYS.indexOf(parts.weekday as (typeof WEEKDAYS)[number]);
+  let days = (4 - (index === -1 ? 4 : index) + 7) % 7;
+  if (days === 0 && parts.hour >= RADIO_VOTE_END_HOUR) days = 7;
+  const fridayKey = addCalendarDays(parts.dateKey, days);
+  return {
+    voteOpens: zonedDateTimeToUtc(timeZone, fridayKey, RADIO_VOTE_START_HOUR, 0),
+    starts: zonedDateTimeToUtc(timeZone, fridayKey, RADIO_VOTE_END_HOUR, 0),
+  };
+}
+
 export interface ChartWeek {
   mondayKey: string;
   fridayKey: string;

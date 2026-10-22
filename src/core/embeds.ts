@@ -28,6 +28,8 @@ export interface SiteEmbedOptions {
   color: number;
   author?: string;
   authorUrl?: string;
+  /** Small round picture before the author line. */
+  authorIcon?: string;
   title?: string;
   url?: string;
   description?: string;
@@ -35,6 +37,8 @@ export interface SiteEmbedOptions {
   footer?: string;
   thumbnail?: string;
   image?: string;
+  /** Epoch ms, shown after the footer in each reader's own clock. */
+  timestamp?: number;
 }
 
 function isLink(value: string | undefined): value is string {
@@ -48,11 +52,11 @@ function isLink(value: string | undefined): value is string {
 export function buildSiteEmbed(opts: SiteEmbedOptions): EmbedBuilder {
   const embed = new EmbedBuilder().setColor(opts.color);
   if (opts.author) {
-    embed.setAuthor(
-      isLink(opts.authorUrl)
-        ? { name: opts.author.slice(0, 256), url: opts.authorUrl }
-        : { name: opts.author.slice(0, 256) },
-    );
+    embed.setAuthor({
+      name: opts.author.slice(0, 256),
+      ...(isLink(opts.authorUrl) ? { url: opts.authorUrl } : {}),
+      ...(isLink(opts.authorIcon) ? { iconURL: opts.authorIcon } : {}),
+    });
   }
   if (opts.title) embed.setTitle(opts.title.slice(0, 256));
   if (opts.title && isLink(opts.url)) embed.setURL(opts.url);
@@ -70,6 +74,7 @@ export function buildSiteEmbed(opts: SiteEmbedOptions): EmbedBuilder {
   if (opts.footer) embed.setFooter({ text: opts.footer.slice(0, 2048) });
   if (isLink(opts.thumbnail)) embed.setThumbnail(opts.thumbnail);
   if (isLink(opts.image)) embed.setImage(opts.image);
+  if (opts.timestamp && Number.isFinite(opts.timestamp)) embed.setTimestamp(opts.timestamp);
   return embed;
 }
 

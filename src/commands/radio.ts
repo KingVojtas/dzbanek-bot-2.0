@@ -6,11 +6,12 @@ import {
   type ChatInputCommandInteraction,
   type VoiceBasedChannel,
 } from 'discord.js';
-import { SITE_BEAT, buildReplyEmbed, buildSiteEmbed } from '../core/embeds';
+import { buildReplyEmbed, buildSiteEmbed } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { memberVoiceChannel, replyEphemeral } from './music/_util';
 import { buildRadioPlayingDisplay } from '../radio/embed';
 import { RADIO_NIGHT_LABEL } from '../kitchen/display';
+import { nextRadioNight } from '../kitchen/time';
 import { STATION_LIST, getStation } from '../radio/station';
 
 export const radio: Command = {
@@ -122,8 +123,11 @@ async function playRadio(
     services.radio.station(guildId)?.id === station.id;
 
   if (alreadyThisStation) {
+    const session = services.radio.get(guildId);
     const display = buildRadioPlayingDisplay(station, {
-      track: services.radio.get(guildId)?.nowPlaying,
+      track: session?.nowPlaying,
+      channelId: voiceChannel.id,
+      since: session?.nowPlayingSince,
     });
     await interaction.reply({
       embeds: display.embeds,
@@ -144,6 +148,8 @@ async function playRadio(
     const session = await services.radio.play(voiceChannel, station);
     const display = buildRadioPlayingDisplay(station, {
       track: session.nowPlaying,
+      channelId: voiceChannel.id,
+      since: session.nowPlayingSince,
     });
     await interaction.editReply({
       embeds: display.embeds,
@@ -243,18 +249,29 @@ async function scheduleRadioNight(
   });
   services.kitchen.refresh(guildId);
 
+  const night = nextRadioNight(services.config.timezone);
+  const starts = Math.floor(night.starts.getTime() / 1000);
+  const voteOpens = Math.floor(night.voteOpens.getTime() / 1000);
+  const voteLine =
+    night.voteOpens.getTime() <= Date.now()
+      ? 'Open now on the Kitchen Board · 💋 🎸 🥁'
+      : `Opens <t:${voteOpens}:R> on the Kitchen Board · 💋 🎸 🥁`;
   await interaction.reply({
     embeds: [
       buildSiteEmbed({
-        color: SITE_BEAT,
+        color: station.color,
         author: '🌙 Radio Night',
+        authorIcon: station.logoUrl,
         title: 'On the calendar',
+        description: `Every ${RADIO_NIGHT_LABEL} (Prague), the kitchen tunes in together.`,
         fields: [
-          ['When', `${RADIO_NIGHT_LABEL} (Prague)`],
-          ['Fallback', station.name],
+          ['Next one', `<t:${starts}:F>\n<t:${starts}:R>`],
           ['Channel', `<#${voiceChannel.id}>`],
-          ['Vote', 'Opens Friday 12:00 on the Kitchen Board', true],
+          ['Tie or no votes', station.name],
+          ['Vote', voteLine, true],
         ],
+        footer: 'Most votes wins · /radio night-off to cancel',
+        thumbnail: station.logoUrl,
       }),
     ],
   });

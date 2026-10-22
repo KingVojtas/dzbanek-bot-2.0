@@ -158,22 +158,30 @@ export const setup: Command = {
       const idleRadio = settings.idleRadioEnabled
         ? `On · ${lastStation?.name ?? 'Radio Beat'}`
         : 'Off';
+      const features: [string, string, boolean?][] = [
+        ['💸 Steam', steam],
+        ['🎁 Epic', epic],
+        ['👋 Welcome', welcome],
+        ['🚪 Goodbye', goodbye],
+        ['🍪 Kitchen Board', kitchen],
+        ['📻 Idle radio', idleRadio],
+        ['🌙 Radio Night', radioNight, true],
+      ];
+      const on = features.filter(([, value]) => value !== 'Off').length;
       await interaction.reply({
         embeds: [
           buildSiteEmbed({
             color: SITE_CLAY,
             author: '⚙️ Setup',
             title: interaction.guild?.name ?? 'This server',
-            fields: [
-              ['Steam', steam],
-              ['Epic', epic],
-              ['Welcome', welcome],
-              ['Goodbye', goodbye],
-              ['Kitchen Board', kitchen],
-              ['Idle radio', idleRadio],
-              ['Radio Night', radioNight, true],
-            ],
+            description: `**${on} of ${features.length}** features on`,
+            fields: features.map(([name, value, wide]) => [
+              name,
+              value === 'Off' ? '⚫ Off' : `🟢 ${value}`,
+              wide,
+            ]),
             footer: '/setup <feature> to change a channel · /radio night to schedule',
+            thumbnail: interaction.guild?.iconURL({ size: 128 }) ?? undefined,
           }),
         ],
         flags: MessageFlags.Ephemeral,

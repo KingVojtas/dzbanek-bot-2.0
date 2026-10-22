@@ -627,13 +627,18 @@ checkV2('steam-empty', () => buildSteamDealsDisplay([], new Map()), [
         positionSec: 42,
         volume: 1.25,
         hasHistory: true,
+        next: track('Next'),
       }),
     [
-      '🔊 Now Playing',
-      'Requested by <@42> · YouTube',
+      '🔊 Now Playing · YouTube',
+      'by **Artist**',
+      '"name":"Requested by","value":"<@42>"',
       '`0:42`',
       '`3:20`',
-      '3 up next · Volume 125%',
+      '"name":"Ends","value":"<t:',
+      '🔊 125%',
+      '[Next](https://www.youtube.com/watch?v=dQw4w9WgXcQ) `3:20` · and 2 more',
+      '3 up next · 🔁 Looping the queue',
       'https://cdn.example.com/now.jpg',
     ],
   );
@@ -652,7 +657,7 @@ checkV2('steam-empty', () => buildSteamDealsDisplay([], new Map()), [
         paused: true,
         loopMode: 'off',
       }),
-    ['⏸️ Paused', 'Nothing up next', 'music:resume'],
+    ['⏸️ Paused · YouTube', '"name":"Length"', 'Nothing yet.', 'Nothing up next', 'music:resume'],
   );
 
   const fresh = JSON.stringify(
@@ -679,7 +684,15 @@ checkV2('steam-empty', () => buildSteamDealsDisplay([], new Map()), [
     'queue-card',
     () =>
       buildQueueDisplay(now, [now, ...Array.from({ length: 12 }, (_, i) => track(`T${i + 1}`))]),
-    ['📜 Queue', 'Now: **[Now]', '1. [T1]', 'Page 1 of 2 · 12 up next', '◀ Prev', 'Next ▶'],
+    [
+      '📜 Queue',
+      '12 up next · 40:00',
+      '🔊 **[Now]',
+      '`1.` [T1]',
+      '· <@42>',
+      'Page 1 of 2',
+      'queue:page:1',
+    ],
   );
   checkEmbedCard('queue-empty-after', () => buildQueueDisplay(now, [now]), ['– Nothing up next']);
 }
@@ -691,18 +704,26 @@ checkEmbedCard(
   () =>
     buildRadioPlayingDisplay(STATIONS.beat, {
       track: { artist: 'Example Artist', title: 'Example Song' },
+      channelId: '77',
+      since: Date.now(),
     }),
   [
-    '● Live · Radio Beat',
-    'Example Artist — Example Song',
+    '🔴 LIVE · Radio Beat',
+    STATIONS.beat.logoUrl,
+    '"title":"Example Song"',
+    'by **Example Artist**',
     'První bigbít u nás',
-    'Edits itself when the song on air changes',
+    '🎧 in <#77>',
+    'On air since',
+    '"timestamp"',
     'radio:stop',
     'radio:catch',
   ],
 );
 checkEmbedCard('radio-no-song', () => buildRadioPlayingDisplay(STATIONS.kiss), [
   '"title":"Live stream"',
+  'Edits itself when the song on air changes',
+  '"disabled":true',
 ]);
 
 checkEmbedCard(

@@ -23,6 +23,7 @@ import {
   queueTotalPages,
   upcomingQueue,
   type EmbedCard,
+  type SiteField,
 } from './embeds';
 import type { EpicFreeGame, LoopMode, SteamDealItem, Track } from './types';
 
@@ -137,6 +138,27 @@ function upNextLine(count: number): string {
   return count > 0 ? `${count} up next` : 'Nothing up next';
 }
 
+/** A paused card goes grey, so it reads as stopped from across the chat. */
+const PAUSED_COLOR = 0x8b93a7;
+
+const LOOP_FOOTER: Record<LoopMode, string> = {
+  off: '',
+  track: '🔂 Repeating this track',
+  queue: '🔁 Looping the queue',
+};
+
+function requesterOf(track: Track): string {
+  return track.requestedById ? `<@${track.requestedById}>` : track.requestedBy;
+}
+
+/** Sum of the known lengths; `+` when some are unknown. */
+function runtime(tracks: Track[]): string {
+  const known = tracks.filter((track) => track.durationSec > 0);
+  if (known.length === 0) return '';
+  const total = known.reduce((sum, track) => sum + track.durationSec, 0);
+  return `${formatClock(total)}${known.length < tracks.length ? '+' : ''}`;
+}
+
 export interface NowPlayingDisplayOptions {
   track: Track;
   /** Tracks after the current one. */
@@ -148,6 +170,8 @@ export interface NowPlayingDisplayOptions {
   volume?: number;
   /** Enables ⏮ Previous. */
   hasHistory?: boolean;
+  /** The track after this one, named on the card. */
+  next?: Track | null;
 }
 
 /** Now Playing card, as on the website: who asked, the clock, the transport row. */
@@ -155,26 +179,54 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): EmbedCar
   const { track, queueLength, paused, loopMode } = opts;
   const positionSec = Math.max(0, opts.positionSec ?? 0);
   const durationSec = track.durationSec > 0 ? track.durationSec : 0;
-  const requester = track.requestedById ? `<@${track.requestedById}>` : track.requestedBy;
   const volume = opts.volume ?? 1;
   const volumePct = Math.round(volume * 100);
 
+  const artist = plainBlurb(track.uploader, 80);
   const description = [
-    `Requested by ${requester} · ${musicSourceLabel(track.source)}`,
+    artist ? `by **${artist}**` : '',
     `\`${formatClock(positionSec)}\` ${progressBar(positionSec, durationSec)} \`${
       durationSec > 0 ? formatClock(durationSec) : 'Live'
     }\``,
-  ].join('\n');
-  const footer = [upNextLine(queueLength)];
-  if (volumePct !== 100) footer.push(`Volume ${volumePct}%`);
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  // The edit ticker keeps this fresh; the relative half ticks on its own between edits.
+  const endsAt = Math.floor(Date.now() / 1000 + Math.max(0, durationSec - positionSec));
+  const timing: SiteField =
+    !paused && durationSec > 0
+      ? ['Ends', `<t:${endsAt}:t> · <t:${endsAt}:R>`]
+      : ['Length', formatDuration(durationSec)];
+
+  const next = opts.next;
+  const upNext =
+    loopMode === 'track'
+      ? '🔂 This one again'
+      : next
+        ? [
+            `${linked(linkText(next.title, 80), next.sourceUrl || next.url)} \`${formatDuration(next.durationSec)}\``,
+            queueLength > 1 ? `and ${queueLength - 1} more` : '',
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : 'Nothing yet. `/play` adds more.';
+
+  const footer = [upNextLine(queueLength), LOOP_FOOTER[loopMode]].filter(Boolean).join(' · ');
 
   const embed = buildSiteEmbed({
-    color: SITE_CLAY,
-    author: paused ? '⏸️ Paused' : '🔊 Now Playing',
+    color: paused ? PAUSED_COLOR : SITE_CLAY,
+    author: `${paused ? '⏸️ Paused' : '🔊 Now Playing'} · ${musicSourceLabel(track.source)}`,
     title: track.title,
     url: track.sourceUrl || track.url,
     description,
-    footer: footer.join(' · '),
+    fields: [
+      ['Requested by', requesterOf(track)],
+      timing,
+      ['Volume', `${volumePct < 100 ? '🔉' : '🔊'} ${volumePct}%`],
+      ['Up next', upNext, true],
+    ],
+    footer,
     thumbnail: track.thumbnail,
   });
 
@@ -182,16 +234,27 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): EmbedCar
     new ButtonBuilder()
       .setCustomId(paused ? 'music:resume' : 'music:pause')
       .setLabel(paused ? 'Resume' : 'Pause')
+      .setEmoji(paused ? '▶️' : '⏸️')
+      .setStyle(paused ? ButtonStyle.Success : ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('music:skip')
+      .setLabel('Skip')
+      .setEmoji('⏭️')
       .setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('music:skip').setLabel('Skip').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('music:stop').setLabel('Stop').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId('music:stop')
+      .setLabel('Stop')
+      .setEmoji('⏹️')
+      .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
       .setCustomId('music:loop')
       .setLabel(loopMode === 'off' ? 'Loop' : loopMode === 'track' ? 'Repeat' : 'Queue')
+      .setEmoji(loopMode === 'track' ? '🔂' : '🔁')
       .setStyle(loopMode === 'off' ? ButtonStyle.Secondary : ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId('music:shuffle')
       .setLabel('Shuffle')
+      .setEmoji('🔀')
       .setStyle(ButtonStyle.Secondary),
   );
 
@@ -236,35 +299,45 @@ export function buildQueueDisplay(current: Track | null, queue: Track[], page = 
   const lines: string[] = [];
   if (current) {
     const title = linkText(current.title, 200);
-    lines.push(`Now: **${linked(title, current.sourceUrl || current.url)}**`, '');
+    lines.push(
+      `🔊 **${linked(title, current.sourceUrl || current.url)}** \`${formatDuration(current.durationSec)}\``,
+      `-# Requested by ${requesterOf(current)}`,
+      '',
+    );
   }
   if (pageTracks.length > 0) {
+    const width = String(start + pageTracks.length).length;
     pageTracks.forEach((track, i) => {
       const title = linkText(track.title, 80);
       lines.push(
-        `${start + i + 1}. ${linked(title, track.sourceUrl || track.url)} \`${formatDuration(track.durationSec)}\``,
+        `\`${String(start + i + 1).padStart(width)}.\` ${linked(title, track.sourceUrl || track.url)} \`${formatDuration(track.durationSec)}\` · ${requesterOf(track)}`,
       );
     });
   } else {
-    lines.push('– Nothing up next');
+    lines.push('– Nothing up next. `/play` adds more.');
   }
 
+  const total = runtime(upcoming);
   const embed = buildSiteEmbed({
     color: SITE_CLAY,
     author: '📜 Queue',
+    title: [upNextLine(upcoming.length), total].filter(Boolean).join(' · '),
     description: lines.join('\n'),
-    footer: `Page ${safePage + 1} of ${totalPages} · ${upNextLine(upcoming.length)}`,
+    footer: `Page ${safePage + 1} of ${totalPages}`,
+    thumbnail: current?.thumbnail,
   });
 
   const row = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${QUEUE_BUTTON_PREFIX}${safePage - 1}`)
-      .setLabel('◀ Prev')
+      .setLabel('Prev')
+      .setEmoji('◀️')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage <= 0),
     new ButtonBuilder()
       .setCustomId(`${QUEUE_BUTTON_PREFIX}${safePage + 1}`)
-      .setLabel('Next ▶')
+      .setLabel('Next')
+      .setEmoji('▶️')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(safePage >= totalPages - 1),
   );

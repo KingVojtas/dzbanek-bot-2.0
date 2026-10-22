@@ -14,7 +14,7 @@ Play from YouTube (a link or a search) and from Spotify (track, album, or playli
 
 It is quick about it. A search reads only YouTube’s result list, about 2 s instead of 6. A YouTube link starts downloading while its title is still being read. A Spotify album or playlist starts its first song as soon as that one is found, and the rest join the queue in order while you listen. Anything played in the last 6 hours resolves instantly.
 
-Now Playing is a Components v2 card: album art, a progress bar, and transport buttons. When the next track starts, the previous card is cleared so the chat stays tidy.
+Now Playing is an embed card: the artist, the video art, a progress bar, when the song ends (a live countdown), the next track by name, the volume, and transport buttons. It goes grey while paused. When the next track starts, the previous card is cleared so the chat stays tidy. `/queue` shows the total running time and who asked for each song.
 
 | Command              | What it does                                                                            |
 | -------------------- | --------------------------------------------------------------------------------------- |
@@ -41,7 +41,7 @@ When the queue goes quiet, Dzbanek waits **120 seconds** (configurable). If peop
 
 ### 📻 Live radio
 
-`/radio play` joins **your** voice channel and streams a Czech Icecast station. The card wears the station logo and brand color, and it names the track on air. Metadata is checked about every **20 seconds**, and the **same message** is edited when the song changes.
+`/radio play` joins **your** voice channel and streams a Czech Icecast station. The card wears the station logo and brand color. It names the song and artist on air, shows the album cover when the station sends one, the voice channel, and when the song came on. Metadata is checked about every **20 seconds**, and the **same message** is edited when the song changes.
 
 | Choice  | Station    | Stream                                      |
 | ------- | ---------- | ------------------------------------------- |
@@ -63,7 +63,7 @@ Beat often sends only a station tag over Icecast. During shows such as **Hard & 
 | `/radio night`          | Schedule Friday 20:00 Radio Night in a voice channel.    |
 | `/radio night-off`      | Cancel scheduled Radio Night.                            |
 
-The card has **Website**, **Catch**, and **Stop**. Stop wants you in the bot’s voice channel. Catch saves the artist and title for you. The reply grows a **Play** button, which finds that song on YouTube and queues it the same way `/play` does. The Kitchen Board keeps the server’s latest catch, and only the person who saved it can press Play there.
+The card has **🍪 Catch**, **⏹️ Stop**, and **🌐 Website**. Catch is greyed out while nothing is on air. Stop wants you in the bot’s voice channel. Catch saves the artist and title for you. The reply grows a **Play** button, which finds that song on YouTube and queues it the same way `/play` does. The Kitchen Board keeps the server’s latest catch, and only the person who saved it can press Play there.
 
 Radio stays up. It does not wander off during a quiet stretch. Switching stations reuses the same connection and retires the previous card.
 

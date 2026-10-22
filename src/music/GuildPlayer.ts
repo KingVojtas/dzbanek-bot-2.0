@@ -113,9 +113,11 @@ export class GuildPlayer {
   buildNowPlayingPanel(track: Track = this.current!): EmbedCard {
     const raw = this.getPlaybackPositionSec();
     const positionSec = track.durationSec > 0 ? Math.min(raw, track.durationSec) : raw;
+    const upcoming = upcomingQueue(this.current, this.queue);
     return buildNowPlayingDisplay({
       track,
-      queueLength: upcomingQueue(this.current, this.queue).length,
+      next: upcoming[0] ?? null,
+      queueLength: upcoming.length,
       paused: this.paused,
       loopMode: this.loopMode,
       positionSec,
