@@ -10,9 +10,10 @@ import {
   type Collection,
   type InteractionReplyOptions,
 } from 'discord.js';
-import { QUEUE_BUTTON_PREFIX, buildQueueDisplay } from '../core/display';
+import { QUEUE_BUTTON_PREFIX, WISHLIST_BUTTON_PREFIX, buildQueueDisplay } from '../core/display';
 import { buildReplyEmbed, type EmbedCard, type ReplyTone } from '../core/embeds';
 import type { Command, Services } from '../core/types';
+import { wishlistCard } from '../commands/steam';
 import { RadioCatchStore } from '../kitchen/catches';
 import { CATCH_PLAY_PREFIX, KITCHEN_BUTTON_SUFFIX, RADIO_VOTE_PREFIX } from '../kitchen/display';
 import { isStationId } from '../kitchen/votes';
@@ -91,6 +92,11 @@ async function handleButton(interaction: ButtonInteraction, services: Services):
     return;
   }
 
+  if (interaction.customId.startsWith(WISHLIST_BUTTON_PREFIX)) {
+    await handleWishlistPage(interaction, services);
+    return;
+  }
+
   if (!interaction.customId.startsWith(QUEUE_BUTTON_PREFIX)) return;
 
   const page = Number.parseInt(interaction.customId.slice(QUEUE_BUTTON_PREFIX.length), 10);
@@ -109,6 +115,25 @@ async function handleButton(interaction: ButtonInteraction, services: Services):
   }
 
   await updateCard(interaction, buildQueueDisplay(player.current, player.queue, page));
+}
+
+/** Flip the private wishlist card. Only its owner ever sees it, so the clicker is the owner. */
+async function handleWishlistPage(
+  interaction: ButtonInteraction,
+  services: Services,
+): Promise<void> {
+  const page = Number.parseInt(interaction.customId.slice(WISHLIST_BUTTON_PREFIX.length), 10);
+  // A cold cache reads the whole wishlist again, which can outlast Discord's 3 s.
+  await interaction.deferUpdate();
+  const card = await wishlistCard(interaction.user.id, services, Number.isFinite(page) ? page : 0);
+  if ('text' in card) {
+    await interaction.followUp({
+      embeds: [buildReplyEmbed(card.tone, card.text)],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  await interaction.editReply({ components: card.components });
 }
 
 /**

@@ -18,6 +18,7 @@ import {
   buildNowPlayingDisplay,
   buildQueueDisplay,
   buildSteamDealsDisplay,
+  buildWishlistDisplay,
   buildWishlistRadarDisplay,
   collectMessageTextContent,
   epicGameTitle,
@@ -31,6 +32,7 @@ import {
   steamPriceBits,
   v2TextLength,
   type V2Display,
+  type WishlistShelfEntry,
 } from '../src/core/display';
 import { buildSiteEmbed, type EmbedCard } from '../src/core/embeds';
 import type { EpicFreeGame, SteamDealItem, Track } from '../src/core/types';
@@ -846,6 +848,52 @@ checkEmbedCard(
   });
   if (wrong.length > 0) fail('steam-profile-input', wrong.map(([input]) => input).join(' | '));
   else ok('steam-profile-input', 'links, custom names, raw ids, and junk');
+}
+
+/* ---------- /steam wishlist ---------- */
+
+{
+  const entry = (n: number, kind: WishlistShelfEntry['kind']): WishlistShelfEntry => {
+    const item: SteamDealItem = {
+      ...steamItem(n),
+      id: `wish_${n}`,
+      gameName: `Wished ${kind} game number ${n} with a long store name`,
+      salePrice: kind === 'price' ? '9,99€' : undefined,
+      originalPrice: undefined,
+      discount: kind === 'sale' ? '-75%' : undefined,
+    };
+    return {
+      item,
+      kind,
+      price: kind === 'sale' ? '~~39,99€~~ → **9,99€** (-75%)' : null,
+      note: kind === 'soon' ? 'Q4 2026' : undefined,
+    };
+  };
+  const kinds: WishlistShelfEntry['kind'][] = ['sale', 'sale', 'price', 'free', 'soon', 'gone'];
+  const shelf = Array.from({ length: 23 }, (_, i) => entry(i + 1, kinds[i % kinds.length]!));
+  shelf.sort((a, b) => kinds.indexOf(a.kind) - kinds.indexOf(b.kind));
+  checkV2('wishlist-page-1', () => buildWishlistDisplay(shelf, 0, '76561199217764066'), [
+    '**🎯 Your Steam wishlist**',
+    '23 games · **8 on sale** · the sales save 240,00€',
+    '`−75%` ~~39,99€~~ → **9,99€**',
+    '⏳ ends <t:',
+    'Page 1 of 3',
+    'steamwish:page:1',
+    'https://store.steampowered.com/wishlist/profiles/76561199217764066/',
+  ]);
+  checkV2('wishlist-page-3', () => buildWishlistDisplay(shelf, 2, '76561199217764066'), [
+    'Page 3 of 3',
+    'Not sold on Steam right now',
+  ]);
+  checkV2('wishlist-page-2', () => buildWishlistDisplay(shelf, 1, '76561199217764066'), [
+    '**9,99€**\\n-# Not on sale',
+    '**Free to play**',
+    '🗓️ **Coming soon**\\n-# Q4 2026',
+  ]);
+  checkV2('wishlist-short', () => buildWishlistDisplay([entry(1, 'price')], 0, '1'), [
+    '1 game · nothing on sale right now',
+    'Page 1 of 1',
+  ]);
 }
 
 /* ---------- /help (Components V2) ---------- */

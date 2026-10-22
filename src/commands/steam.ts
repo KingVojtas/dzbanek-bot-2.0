@@ -1,5 +1,5 @@
 import { MessageFlags, SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
-import { buildWishlistRadarDisplay } from '../core/display';
+import { buildWishlistDisplay, type V2Display } from '../core/display';
 import { buildReplyEmbed, type ReplyTone } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { fetchWishlist, resolveSteamId } from '../deals/steam/SteamWishlist';
@@ -46,7 +46,7 @@ async function link(interaction: ChatInputCommandInteraction, services: Services
     interaction,
     'success',
     `🎯 Linked. I am watching **${wishlist.length}** game(s) on your wishlist. When one goes on ` +
-      'sale, the Steam channel pings you once. `/steam wishlist` shows what is on sale right now.',
+      'sale, the Steam channel pings you once. `/steam wishlist` shows your whole wishlist with prices.',
   );
 }
 
@@ -61,37 +61,41 @@ async function unlink(interaction: ChatInputCommandInteraction, services: Servic
   );
 }
 
+/**
+ * One page of the member's whole wishlist, or a sentence saying why not.
+ * Shared by `/steam wishlist` and the card's page buttons.
+ */
+export async function wishlistCard(
+  userId: string,
+  services: Services,
+  page: number,
+): Promise<V2Display | { tone: ReplyTone; text: string }> {
+  const row = await services.steamLinks.get(userId);
+  if (!row) return { tone: 'warn', text: '🔗 Link your Steam profile first: `/steam link`.' };
+  const entries = await services.wishlistRadar.shelf(userId, row.steamId, page);
+  if (entries === null) {
+    return { tone: 'error', text: '❌ Steam did not answer. Try again in a minute.' };
+  }
+  if (entries.length === 0) {
+    return {
+      tone: 'info',
+      text: `Your wishlist looks empty. If it has games, it is private.
+${PRIVATE_HELP}`,
+    };
+  }
+  return buildWishlistDisplay(entries, page, row.steamId);
+}
+
 async function wishlist(
   interaction: ChatInputCommandInteraction,
   services: Services,
 ): Promise<void> {
-  const row = await services.steamLinks.get(interaction.user.id);
-  if (!row) {
-    await answer(interaction, 'warn', '🔗 Link your Steam profile first: `/steam link`.');
+  const card = await wishlistCard(interaction.user.id, services, 0);
+  if ('text' in card) {
+    await answer(interaction, card.tone, card.text);
     return;
   }
-  const hits = await services.wishlistRadar.scanOne(row.userId, row.steamId);
-  if (hits === null) {
-    await answer(interaction, 'error', '❌ Steam did not answer. Try again in a minute.');
-    return;
-  }
-  if (hits.length === 0) {
-    await answer(
-      interaction,
-      'info',
-      `Nothing on your wishlist is on sale right now. If it has games, check that it is public.\n${PRIVATE_HELP}`,
-    );
-    return;
-  }
-  const display = buildWishlistRadarDisplay(
-    { together: [], people: [{ userId: row.userId, games: hits }] },
-    10,
-  );
-  await interaction.editReply({
-    components: display.components,
-    flags: display.flags,
-    allowedMentions: { parse: [] },
-  });
+  await interaction.editReply({ components: card.components, flags: card.flags });
 }
 
 export const steam: Command = {
@@ -113,7 +117,7 @@ export const steam: Command = {
       sub.setName('unlink').setDescription('Stop watching your Steam wishlist.'),
     )
     .addSubcommand((sub) =>
-      sub.setName('wishlist').setDescription('See what on your wishlist is on sale right now.'),
+      sub.setName('wishlist').setDescription('See your whole wishlist with prices, sales first.'),
     ),
 
   async execute(interaction, services) {

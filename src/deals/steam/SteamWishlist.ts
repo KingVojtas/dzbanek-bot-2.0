@@ -64,20 +64,54 @@ export async function fetchWishlist(steamId: string): Promise<string[] | null> {
   }
 }
 
-export interface SteamAppName {
+export interface SteamStoreItem {
   name: string;
   /** Store page, e.g. `https://store.steampowered.com/app/1145360/Hades/`. */
   url: string;
+  isFree: boolean;
+  comingSoon: boolean;
+  /** For a game not out yet: "To be announced", "Q4 2026", "Dec 2026", or a Discord date. */
+  releaseNote: string;
 }
 
-/** Names and store links for many games at once. Missing ids are left out. */
-export async function fetchAppNames(appIds: string[]): Promise<Map<string, SteamAppName>> {
-  const names = new Map<string, SteamAppName>();
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+interface RawRelease {
+  steam_release_date?: number;
+  custom_release_date_message?: string;
+  coming_soon_display?: string;
+}
+
+/** Steam's own wording for when an unreleased game comes out. */
+export function releaseNote(release: RawRelease | undefined): string {
+  if (!release) return '';
+  const custom = release.custom_release_date_message?.trim();
+  if (custom) return custom;
+  const sec = release.steam_release_date;
+  if (!sec) return '';
+  const date = new Date(sec * 1000);
+  const year = date.getUTCFullYear();
+  switch (release.coming_soon_display) {
+    case 'date_year':
+      return String(year);
+    case 'date_quarter':
+      return `Q${Math.floor(date.getUTCMonth() / 3) + 1} ${year}`;
+    case 'date_month':
+      return `${MONTHS[date.getUTCMonth()]} ${year}`;
+    default:
+      return `<t:${sec}:D>`;
+  }
+}
+
+/** Names, store links, and release state for many games at once. Missing ids are left out. */
+export async function fetchStoreItems(appIds: string[]): Promise<Map<string, SteamStoreItem>> {
+  const items = new Map<string, SteamStoreItem>();
   for (let start = 0; start < appIds.length; start += NAMES_CHUNK) {
     const chunk = appIds.slice(start, start + NAMES_CHUNK);
     const input = {
       ids: chunk.map((appId) => ({ appid: Number(appId) })),
       context: { language: 'english', country_code: 'DE', steam_realm: 1 },
+      data_request: { include_release: true },
     };
     try {
       const response = await fetch(
@@ -87,20 +121,30 @@ export async function fetchAppNames(appIds: string[]): Promise<Map<string, Steam
       if (!response.ok) continue;
       const json = (await response.json()) as {
         response?: {
-          store_items?: { appid?: number; name?: string; store_url_path?: string }[];
+          store_items?: {
+            appid?: number;
+            name?: string;
+            store_url_path?: string;
+            is_free?: boolean;
+            is_coming_soon?: boolean;
+            release?: RawRelease;
+          }[];
         };
       };
       for (const item of json.response?.store_items ?? []) {
         if (!item.appid || !item.name) continue;
         const path = item.store_url_path?.replace(/^\/+|\/+$/g, '') || `app/${item.appid}`;
-        names.set(String(item.appid), {
+        items.set(String(item.appid), {
           name: item.name,
           url: `https://store.steampowered.com/${path}/`,
+          isFree: Boolean(item.is_free),
+          comingSoon: Boolean(item.is_coming_soon),
+          releaseNote: item.is_coming_soon ? releaseNote(item.release) : '',
         });
       }
     } catch {
       /* this chunk goes nameless; the rest still count */
     }
   }
-  return names;
+  return items;
 }

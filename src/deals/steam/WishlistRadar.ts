@@ -1,8 +1,11 @@
 import type { Guild, SendableChannels } from 'discord.js';
 import {
+  WISHLIST_PAGE_SIZE,
   buildWishlistRadarDisplay,
   type WishlistGame,
   type WishlistRadarView,
+  type WishlistShelfEntry,
+  type WishlistShelfKind,
 } from '../../core/display';
 import type { Logger } from '../../core/logger';
 import type { SteamDealItem } from '../../core/types';
@@ -15,7 +18,7 @@ import {
   type SteamPriceInfo,
 } from './SteamPriceApi';
 import { attachSteamSaleEnds } from './SteamSpecialsReader';
-import { fetchAppNames, fetchWishlist } from './SteamWishlist';
+import { fetchStoreItems, fetchWishlist, type SteamStoreItem } from './SteamWishlist';
 import type { SteamLinkStore } from './steam-links';
 
 /** A wishlisted game that is on sale right now. */
@@ -26,6 +29,25 @@ export interface WishlistHit extends WishlistGame {
 
 /** Linked member → their hits, deepest discount first. */
 export type WishlistScan = Map<string, WishlistHit[]>;
+
+/** How long a read wishlist serves page flips before Steam is asked again. */
+const SHELF_TTL_MS = 5 * 60_000;
+
+const KIND_ORDER: Record<WishlistShelfKind, number> = {
+  sale: 0,
+  price: 1,
+  free: 2,
+  soon: 3,
+  gone: 4,
+};
+
+interface CachedShelf {
+  steamId: string;
+  at: number;
+  entries: WishlistShelfEntry[];
+  /** Pages whose box art has been looked up. */
+  artPages: Set<number>;
+}
 
 /** Most people one card names; more would crowd past Discord's component cap. */
 const RADAR_PEOPLE_MAX = 20;
@@ -44,6 +66,8 @@ function hitKey(hit: WishlistHit): string {
  * wishlist, prices the union once, and keeps only what is on sale.
  */
 export class WishlistRadar {
+  private readonly shelves = new Map<string, CachedShelf>();
+
   constructor(
     private readonly links: SteamLinkStore,
     private readonly seen: SeenStore,
@@ -66,29 +90,40 @@ export class WishlistRadar {
     return hits;
   }
 
-  /** One member's hits right now, for `/steam wishlist`. Null when Steam did not answer. */
-  async scanOne(userId: string, steamId: string): Promise<WishlistHit[] | null> {
-    const ids = await fetchWishlist(steamId);
-    if (!ids) return null;
-    const hits = await this.hitsFor(new Map([[userId, ids]]));
-    return hits.get(userId) ?? [];
+  /**
+   * A member's whole wishlist for `/steam wishlist`, sales first, with box art
+   * for `page`. Null when Steam did not answer.
+   */
+  async shelf(userId: string, steamId: string, page: number): Promise<WishlistShelfEntry[] | null> {
+    let cached = this.shelves.get(userId);
+    if (!cached || cached.steamId !== steamId || Date.now() - cached.at > SHELF_TTL_MS) {
+      const ids = await fetchWishlist(steamId);
+      if (!ids) return null;
+      cached = { steamId, at: Date.now(), entries: await readShelf(ids), artPages: new Set() };
+      this.shelves.set(userId, cached);
+    }
+    const pages = Math.max(1, Math.ceil(cached.entries.length / WISHLIST_PAGE_SIZE));
+    const safePage = Math.min(Math.max(0, page), pages - 1);
+    if (!cached.artPages.has(safePage)) {
+      const start = safePage * WISHLIST_PAGE_SIZE;
+      await attachSteamArtwork(
+        cached.entries.slice(start, start + WISHLIST_PAGE_SIZE).map((entry) => entry.item),
+      );
+      cached.artPages.add(safePage);
+    }
+    return cached.entries;
   }
 
   private async hitsFor(wishlists: Map<string, string[]>): Promise<WishlistScan> {
     const union = [...new Set([...wishlists.values()].flat())];
     const prices = await fetchSteamPrices(union);
     const onSale = union.filter((id) => (prices.get(id)?.discountPercent ?? 0) > 0);
-    const names = await fetchAppNames(onSale);
+    const store = await fetchStoreItems(onSale);
 
     const items = new Map<string, SteamDealItem>();
     for (const appId of onSale) {
-      const name = names.get(appId);
-      const url = name?.url ?? `https://store.steampowered.com/app/${appId}/`;
       items.set(appId, {
-        id: `wish_${appId}`,
-        title: name?.name ?? `App ${appId}`,
-        gameName: name?.name ?? `App ${appId}`,
-        link: url,
+        ...wishItem(appId, store.get(appId)),
         discount: `-${prices.get(appId)!.discountPercent}%`,
       });
     }
@@ -155,6 +190,55 @@ export class WishlistRadar {
       `Wishlist radar: ${count} new hit(s) for ${fresh.size} member(s) in ${guildName}.`,
     );
   }
+}
+
+function wishItem(appId: string, store: SteamStoreItem | undefined): SteamDealItem {
+  const name = store?.name ?? `App ${appId}`;
+  return {
+    id: `wish_${appId}`,
+    title: name,
+    gameName: name,
+    link: store?.url ?? `https://store.steampowered.com/app/${appId}/`,
+  };
+}
+
+/**
+ * Every game on a wishlist, sorted for the card: deepest sale first, then
+ * full price, free, coming soon, and gone, each in the member's own order.
+ */
+async function readShelf(ids: string[]): Promise<WishlistShelfEntry[]> {
+  const [prices, store] = await Promise.all([fetchSteamPrices(ids), fetchStoreItems(ids)]);
+  const entries = ids.map(
+    (appId, order): WishlistShelfEntry & { order: number; percent: number } => {
+      const item = wishItem(appId, store.get(appId));
+      const price = prices.get(appId);
+      const info = store.get(appId);
+      if (price && price.discountPercent > 0) {
+        item.discount = `-${price.discountPercent}%`;
+        return {
+          item,
+          kind: 'sale',
+          price: formatSteamPrice(price),
+          order,
+          percent: price.discountPercent,
+        };
+      }
+      if (price) {
+        item.salePrice = price.finalFormatted;
+        return { item, kind: 'price', price: null, order, percent: 0 };
+      }
+      if (info?.isFree) return { item, kind: 'free', price: null, order, percent: 0 };
+      if (info?.comingSoon) {
+        return { item, kind: 'soon', price: null, note: info.releaseNote, order, percent: 0 };
+      }
+      return { item, kind: 'gone', price: null, order, percent: 0 };
+    },
+  );
+  entries.sort(
+    (a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || b.percent - a.percent || a.order - b.order,
+  );
+  await attachSteamSaleEnds(entries.filter((entry) => entry.kind === 'sale').map((e) => e.item));
+  return entries.map(({ item, kind, price, note }) => ({ item, kind, price, note }));
 }
 
 function toHit(appId: string, item: SteamDealItem, price: SteamPriceInfo): WishlistHit {

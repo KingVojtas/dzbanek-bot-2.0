@@ -105,11 +105,11 @@ Link your Steam profile once, and Dzbanek watches your Steam wishlist. Each morn
 
 Each hit is announced once per discount. A game that drops from −50 % to −75 % pings again, and an unchanged sale stays quiet. A restart doesn’t repeat anything.
 
-| Command                 | What it does                                                           |
-| ----------------------- | ---------------------------------------------------------------------- |
-| `/steam link <profile>` | Link your Steam profile (link, custom name, or 17-digit ID).           |
-| `/steam wishlist`       | See, privately, everything on your wishlist that is on sale right now. |
-| `/steam unlink`         | Stop watching your wishlist.                                           |
+| Command                 | What it does                                                                                                                              |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `/steam link <profile>` | Link your Steam profile (link, custom name, or 17-digit ID).                                                                              |
+| `/steam wishlist`       | See, privately, your whole wishlist with prices: sales first with the struck price, then full price, free, coming soon. Ten games a page. |
+| `/steam unlink`         | Stop watching your wishlist.                                                                                                              |
 
 The wishlist has to be public: Steam → Edit Profile → Privacy Settings → **Game details: Public**. No Steam API key is needed. The link is stored per Discord user, so it works in every server the bot shares with you.
 
