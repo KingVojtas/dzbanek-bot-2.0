@@ -14,7 +14,7 @@ import { QUEUE_BUTTON_PREFIX, buildQueueDisplay } from '../core/display';
 import { buildReplyEmbed, type EmbedCard, type ReplyTone } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { RadioCatchStore } from '../kitchen/catches';
-import { CATCH_PLAY_PREFIX, RADIO_VOTE_PREFIX } from '../kitchen/display';
+import { CATCH_PLAY_PREFIX, KITCHEN_BUTTON_SUFFIX, RADIO_VOTE_PREFIX } from '../kitchen/display';
 import { isStationId } from '../kitchen/votes';
 import type { GuildPlayer } from '../music/GuildPlayer';
 import { playSearch } from '../music/play-search';
@@ -149,8 +149,14 @@ async function handleMusicButton(
     return;
   }
 
+  // The Kitchen Board's controls carry a suffix: they act, then the board redraws.
+  const onBoard = interaction.customId.endsWith(KITCHEN_BUTTON_SUFFIX);
+  const id = onBoard
+    ? interaction.customId.slice(0, -KITCHEN_BUTTON_SUFFIX.length)
+    : interaction.customId;
+
   // Looking at the queue changes nothing, so anyone may open it.
-  if (interaction.customId === 'music:queue') {
+  if (id === 'music:queue') {
     const display = buildQueueDisplay(player.current, player.queue, 0);
     await interaction.reply({
       embeds: display.embeds,
@@ -170,8 +176,6 @@ async function handleMusicButton(
     return;
   }
 
-  const id = interaction.customId;
-
   if (id === 'music:stop') {
     await interaction.deferUpdate();
     player.stop();
@@ -182,6 +186,7 @@ async function handleMusicButton(
   if (id === 'music:skip') {
     await interaction.deferUpdate();
     player.skip();
+    services.kitchen.refresh(guildId);
     return;
   }
 
@@ -219,7 +224,13 @@ async function handleMusicButton(
     return;
   }
 
+  if (onBoard) {
+    await interaction.deferUpdate();
+    services.kitchen.refresh(guildId);
+    return;
+  }
   await updateCard(interaction, player.buildNowPlayingPanel());
+  services.kitchen.refresh(guildId);
 }
 
 async function handleRadioButton(

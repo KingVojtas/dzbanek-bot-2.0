@@ -1,8 +1,21 @@
-import { ContainerBuilder, MessageFlags, TextDisplayBuilder } from 'discord.js';
-import type { V2Display } from '../core/display';
+import {
+  ContainerBuilder,
+  MediaGalleryBuilder,
+  MediaGalleryItemBuilder,
+  MessageFlags,
+  SeparatorBuilder,
+  TextDisplayBuilder,
+} from 'discord.js';
 import { prisma } from '../db/client';
 import { STATION_LIST } from '../radio/station';
-import { KITCHEN_COLOR } from './display';
+import {
+  KITCHEN_COLOR,
+  KITCHEN_HERO_FILE,
+  KitchenFiles,
+  VOTE_EMOJI,
+  tallyBar,
+  type KitchenDisplay,
+} from './display';
 import type { VoteCounts } from './votes';
 
 export const KITCHEN_CHART_CRON = '0 18 * * 0';
@@ -77,32 +90,59 @@ export function buildKitchenChartDisplay(view: {
   weekLabel: string;
   songs: ChartSongLine[];
   night?: ChartNight;
-}): V2Display {
-  const lines = [`### ${view.weekLabel}`, '', '**Caught**'];
-  if (view.songs.length === 0) {
-    lines.push('*The oven stayed cold.*');
-  } else {
-    for (const song of view.songs) {
-      lines.push(`**${plain(song.title, 80)}** — ${plain(song.artist, 60)}`);
-      lines.push(`-# ${formatNames(song.names)}`);
-    }
+}): KitchenDisplay {
+  const files = new KitchenFiles();
+  const container = new ContainerBuilder().setAccentColor(KITCHEN_COLOR);
+  const photo = files.url(KITCHEN_HERO_FILE);
+  if (photo) {
+    container.addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(
+        new MediaGalleryItemBuilder().setURL(photo).setDescription('The Kitchen after dark'),
+      ),
+    );
   }
+
+  const songs = ['### 🎣 Caught on the radio'];
+  if (view.songs.length === 0) {
+    songs.push('*Nobody caught a song this week. The radio kept playing anyway.*');
+  } else {
+    view.songs.forEach((song, i) => {
+      const badge = ['🥇', '🥈', '🥉'][i] ?? `${i + 1}.`;
+      const times = song.names.length > 1 ? ` · caught ${song.names.length}×` : '';
+      songs.push(`${badge} **${plain(song.title, 80)}** — ${plain(song.artist, 60)}`);
+      songs.push(`-# ${formatNames(song.names)}${times}`);
+    });
+  }
+
+  container
+    .addTextDisplayComponents(
+      text([`## 📬 The week in the kitchen`, `-# ${view.weekLabel} · Sunday postcard`]),
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+    .addTextDisplayComponents(text(songs));
 
   if (view.night) {
-    const bits = STATION_LIST.map(
-      (station) => `${station.choiceName} **${view.night!.counts[station.id]}**`,
-    );
-    lines.push('', '**Radio Night**', bits.join(' · '));
-    if (view.night.winnerName) lines.push(`**${plain(view.night.winnerName, 40)}** won`);
+    const counts = view.night.counts;
+    const total = STATION_LIST.reduce((sum, station) => sum + counts[station.id], 0);
+    const night = ['### 🌙 Radio Night'];
+    for (const station of STATION_LIST) {
+      const label = `${VOTE_EMOJI[station.id]} ${station.choiceName.padEnd(10)}`;
+      night.push(`\`${label} ${tallyBar(counts[station.id], total)}\` **${counts[station.id]}**`);
+    }
+    if (view.night.winnerName) {
+      night.push(`🏆 **${plain(view.night.winnerName, 40)}** took the night`);
+    }
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(text(night));
   }
 
-  lines.push('', '-# The Kitchen · this week');
+  container.addTextDisplayComponents(text(['-# 🍪 The Kitchen · see you next week']));
+  return { components: [container], flags: MessageFlags.IsComponentsV2, files: files.list() };
+}
 
-  const container = new ContainerBuilder()
-    .setAccentColor(KITCHEN_COLOR)
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n').slice(0, 4000)));
-
-  return { components: [container], flags: MessageFlags.IsComponentsV2 };
+function text(lines: string[]): TextDisplayBuilder {
+  return new TextDisplayBuilder().setContent(lines.join('\n').slice(0, 4000));
 }
 
 /** Remember which station Radio Night actually started, keyed by Friday’s date. */

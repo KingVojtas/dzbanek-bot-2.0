@@ -13,8 +13,19 @@ import {
 import type { Config } from '../config';
 import type { Logger } from '../core/logger';
 import type { EpicFreeGame, SteamDealItem } from '../core/types';
-import { collectMessageTextContent } from '../core/display';
+import {
+  collectMessageTextContent,
+  discordTime,
+  epicWorth,
+  linkText,
+  steamMoneyLine,
+  steamPriceBits,
+  steamReviewChip,
+  steamSaleEnds,
+} from '../core/display';
+import { upcomingQueue } from '../core/embeds';
 import { isUnknownMessage } from '../core/discord-errors';
+import type { SteamReviewInfo } from '../deals/steam/SteamReviewApi';
 import type { SeenStore } from '../deals/seen-store';
 import { resolveGuildSendableChannel } from '../deals/targets';
 import type { GuildSettingsStore } from '../deals/guild-settings';
@@ -36,7 +47,13 @@ import {
   type KitchenDealTeaser,
 } from './display';
 import { RadioCatchStore } from './catches';
-import { chartWeek, isRadioVoteOpen, radioNightWeekKey } from './time';
+import {
+  RADIO_VOTE_END_HOUR,
+  chartWeek,
+  isRadioVoteOpen,
+  radioNightWeekKey,
+  zonedDateTimeToUtc,
+} from './time';
 import { RadioNightVoteStore, isStationId, type VoteCounts } from './votes';
 
 const TICK_MS = 20_000;
@@ -45,7 +62,14 @@ const DEBOUNCE_MS = 1_200;
 interface SteamSnapshot {
   items: SteamDealItem[];
   prices: Map<string, string | null>;
-  reviews: Map<string, string>;
+  reviews: Map<string, SteamReviewInfo | null>;
+  /** Where the full digest was posted. */
+  channelId?: string;
+}
+
+interface EpicSnapshot {
+  games: EpicFreeGame[];
+  channelId?: string;
 }
 
 function calendarDate(timeZone: string): string {
@@ -59,7 +83,7 @@ function displayName(member: GuildMember): string {
 /** One living Kitchen Board message per guild, edited in place. */
 export class KitchenBoard {
   private readonly steamByGuild = new Map<string, SteamSnapshot>();
-  private readonly epicByGuild = new Map<string, EpicFreeGame[]>();
+  private readonly epicByGuild = new Map<string, EpicSnapshot>();
   private readonly lastKey = new Map<string, string>();
   private readonly debounce = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly inFlight = new Map<string, Promise<void>>();
@@ -124,13 +148,14 @@ export class KitchenBoard {
     guildId: string,
     items: SteamDealItem[],
     prices: Map<string, string | null>,
-    reviews: Map<string, string>,
+    reviews: Map<string, SteamReviewInfo | null>,
+    channelId?: string,
   ): void {
-    this.steamByGuild.set(guildId, { items, prices, reviews });
+    this.steamByGuild.set(guildId, { items, prices, reviews, channelId });
   }
 
-  recordEpic(guildId: string, games: EpicFreeGame[]): void {
-    this.epicByGuild.set(guildId, games);
+  recordEpic(guildId: string, games: EpicFreeGame[], channelId?: string): void {
+    this.epicByGuild.set(guildId, { games, channelId });
   }
 
   refresh(guildId: string): void {
@@ -246,7 +271,11 @@ export class KitchenBoard {
 
       const display = buildKitchenChartDisplay({ weekLabel: week.label, songs, night });
       try {
-        await channel.send({ components: display.components, flags: display.flags });
+        await channel.send({
+          components: display.components,
+          flags: display.flags,
+          files: display.files,
+        });
         await seen.add(scope, [week.mondayKey]);
         this.logger.info(`Kitchen chart posted in ${guild.name}.`);
       } catch (error) {
@@ -348,25 +377,27 @@ export class KitchenBoard {
     );
     const key = kitchenViewKey(view);
     const display = buildKitchenBoardDisplay(view);
-    const payload = {
-      embeds: display.embeds,
+    // `attachments: []` drops the previous upload so the kitchen photos never pile up.
+    const edit = {
+      embeds: [] as [],
       components: display.components,
-      files: display.files ?? [],
+      flags: display.flags,
+      files: display.files,
+      attachments: [] as [],
     };
 
-    let stale: Message | null = null;
+    let legacy: Message | null = null;
     if (settings.kitchenMessageId) {
       try {
         // Usually a cache hit. A deleted board fails here or on edit and is re-posted below.
         const existing = await channel.messages.fetch(settings.kitchenMessageId);
         if (isComponentsV2(existing)) {
-          stale = existing;
-        } else {
           if (this.lastKey.get(guildId) === key) return;
-          await existing.edit(payload);
+          await existing.edit(edit);
           this.lastKey.set(guildId, key);
           return;
         }
+        legacy = existing;
       } catch (error) {
         // Only a deleted board is replaced. A rate limit or outage must not post a second one.
         if (!isUnknownMessage(error)) throw error;
@@ -374,25 +405,25 @@ export class KitchenBoard {
       }
     }
 
-    const recovered = stale ?? (await this.findExistingBoard(channel));
-    if (recovered && !isComponentsV2(recovered)) {
-      if (this.lastKey.get(guildId) === key) {
-        await this.guildSettings.upsert(guildId, { kitchenMessageId: recovered.id });
-        return;
-      }
-      await recovered.edit(payload);
+    const recovered = legacy ?? (await this.findExistingBoard(channel));
+    if (recovered && isComponentsV2(recovered)) {
+      if (this.lastKey.get(guildId) !== key) await recovered.edit(edit);
       await this.guildSettings.upsert(guildId, { kitchenMessageId: recovered.id });
       this.lastKey.set(guildId, key);
       return;
     }
 
-    const sent = await channel.send(payload);
+    const sent = await channel.send({
+      components: display.components,
+      flags: display.flags,
+      files: display.files,
+    });
     await this.guildSettings.upsert(guildId, { kitchenMessageId: sent.id });
     this.lastKey.set(guildId, key);
     if (recovered) {
-      // A board from before the website layout. Discord will not edit it into an embed.
+      // An embed board from the short-lived website layout. Cards replace it once.
       await recovered.delete().catch(() => {});
-      this.logger.info(`Kitchen board replaced with the website layout in ${guild.name}.`);
+      this.logger.info(`Kitchen board reposted as cards in ${guild.name}.`);
       return;
     }
     this.logger.info(`Kitchen board posted in ${guild.name}.`);
@@ -426,9 +457,12 @@ export class KitchenBoard {
     const stereo = this.stereoFor(guild.id);
     const voice = this.voiceSnapshot(guild);
     const steamSnap = this.steamByGuild.get(guild.id);
-    const epicGames = this.epicByGuild.get(guild.id) ?? [];
+    const epicSnap = this.epicByGuild.get(guild.id);
     const nightStation = settings.radioNightEnabled
       ? getStation(settings.radioNightStation ?? '')
+      : undefined;
+    const nightChannel = settings.radioNightChannelId
+      ? guild.channels.cache.get(settings.radioNightChannelId)
       : undefined;
 
     let radioVote: KitchenBoardView['radioVote'];
@@ -437,10 +471,13 @@ export class KitchenBoard {
       settings.radioNightChannelId &&
       isRadioVoteOpen(this.config.timezone)
     ) {
-      const counts = await this.votes.counts(guild.id, radioNightWeekKey(this.config.timezone));
+      const weekKey = radioNightWeekKey(this.config.timezone);
+      const counts = await this.votes.counts(guild.id, weekKey);
+      const closes = zonedDateTimeToUtc(this.config.timezone, weekKey, RADIO_VOTE_END_HOUR, 0);
       radioVote = {
         counts,
         total: counts.kiss + counts.rock + counts.beat,
+        closesAt: Math.floor(closes.getTime() / 1000),
       };
     }
 
@@ -452,9 +489,11 @@ export class KitchenBoard {
       listeners: voice.listeners,
       voiceChannelName: voice.name,
       steam: steamTeaser(steamSnap),
-      epic: epicTeaser(epicGames),
+      epic: epicTeaser(epicSnap),
       joinsToday,
-      radioNight: nightStation ? { stationName: nightStation.name } : undefined,
+      radioNight: nightStation
+        ? { stationName: nightStation.name, channelName: nightChannel?.name }
+        : undefined,
       radioVote,
       latestCatch: caught
         ? {
@@ -462,6 +501,8 @@ export class KitchenBoard {
             title: caught.title,
             artist: caught.artist,
             by: catcher ? displayName(catcher) : 'Someone',
+            coverUrl: caught.coverUrl ?? undefined,
+            stationName: getStation(caught.stationId)?.name,
           }
         : undefined,
     };
@@ -481,6 +522,9 @@ export class KitchenBoard {
         sourceLabel: station.name,
         color: station.color,
         websiteUrl: station.websiteUrl,
+        tagline: station.slogan,
+        artUrl: track?.coverUrl,
+        logoUrl: station.logoUrl,
       };
     }
 
@@ -497,6 +541,10 @@ export class KitchenBoard {
         titleUrl: track.sourceUrl || track.url,
         color: track.source === 'spotify' ? 0x1db954 : 0xff0000,
         paused: player.paused,
+        artUrl: track.thumbnail,
+        durationSec: track.durationSec > 0 ? track.durationSec : undefined,
+        queueLength: upcomingQueue(track, player.queue).length,
+        requestedBy: track.requestedBy,
       };
     }
 
@@ -533,31 +581,62 @@ function pickStationId(value: string | null | undefined): StationId | null {
   return null;
 }
 
-/** Top deal, as the board's Steam field: the game, its discount, and what it costs now. */
+/** The deal of the day: its art, the price line from the digest, and where the other nine are. */
 function steamTeaser(snap: SteamSnapshot | undefined): KitchenDealTeaser | undefined {
   const item = snap?.items[0];
   if (!snap || !item) return undefined;
-  const price = snap.prices.get(item.id) ?? '';
-  const pay = price.match(/\*\*([^*]+)\*\*/)?.[1]?.trim() || item.salePrice?.trim() || '';
-  const percent = parseInt(
-    (item.discount ?? price.match(/\((-?\d+)%\)/)?.[1] ?? '').replace(/\D/g, ''),
-    10,
-  );
-  const discount = percent > 0 ? `−${percent}%` : '';
+  const more = snap.items.length - 1;
+  const rest =
+    more > 0 ? `+${more} more ${snap.channelId ? `in <#${snap.channelId}>` : 'on the shelf'}` : '';
   return {
+    kicker: '💸 STEAM DEAL OF THE DAY',
     title: item.gameName,
-    line: [discount, pay].filter(Boolean).join(' · ') || 'On sale',
+    line: steamMoneyLine(steamPriceBits(item, snap.prices.get(item.id) ?? null)) || 'On sale',
+    note: [steamReviewChip(snap.reviews.get(item.id)), steamSaleEnds(item.expires), rest]
+      .filter(Boolean)
+      .join(' · '),
     url: item.link,
+    image: item.image,
   };
 }
 
-function epicTeaser(games: EpicFreeGame[]): KitchenDealTeaser | undefined {
-  const current = games.find((g) => !g.isUpcoming) ?? games[0];
-  if (!current) return undefined;
+/** This week's freebie with its countdown, or the next one when nothing is free. */
+function epicTeaser(snap: EpicSnapshot | undefined): KitchenDealTeaser | undefined {
+  const free = snap?.games.filter((g) => !g.isUpcoming) ?? [];
+  const soon = snap?.games.filter((g) => g.isUpcoming) ?? [];
+  const lead = free[0] ?? soon[0];
+  if (!snap || !lead) return undefined;
+  const worth = epicWorth(lead.originalPrice);
+  const where = snap.channelId ? `<#${snap.channelId}>` : '';
+
+  if (lead.isUpcoming) {
+    const unlocks = discordTime(lead.upcomingStartDate, 'R');
+    return {
+      kicker: '🔜 NEXT FREE ON EPIC',
+      title: lead.title,
+      line: [unlocks ? `🔓 Free ${unlocks}` : '🔓 Free soon', worth ? `worth ${worth}` : '']
+        .filter(Boolean)
+        .join(' · '),
+      note: where,
+      url: lead.storeUrl,
+      image: lead.image ?? lead.heroImage,
+    };
+  }
+
+  const ends = discordTime(lead.endDate, 'R');
+  const next = soon[0];
+  const nextUp = next
+    ? `next up: ${linkText(next.title, 40)} ${discordTime(next.upcomingStartDate, 'R')}`.trim()
+    : '';
   return {
-    title: current.title,
-    line: current.isUpcoming ? 'Coming next' : 'Free this week',
-    url: current.storeUrl,
+    kicker: '🎁 FREE ON EPIC THIS WEEK',
+    title: lead.title,
+    line: `**🆓 FREE**${worth ? ` ~~${worth}~~` : ''}${ends ? ` · ⏳ ends ${ends}` : ''}`,
+    note: [free.length > 1 ? `+${free.length - 1} more free` : '', nextUp, where]
+      .filter(Boolean)
+      .join(' · '),
+    url: lead.storeUrl,
+    image: lead.image ?? lead.heroImage,
   };
 }
 

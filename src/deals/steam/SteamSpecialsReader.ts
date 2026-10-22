@@ -1,5 +1,6 @@
 import { STEAM_DIGEST_SIZE } from '../../core/display';
 import type { SteamDealItem } from '../../core/types';
+import { extractAppId } from './SteamPriceApi';
 import { isSteamFloorPrice, uniqueSteamApps } from './select-digest';
 
 const FEATURED_URL = 'https://store.steampowered.com/api/featuredcategories?cc=de&l=english';
@@ -92,7 +93,7 @@ export class SteamSpecialsReader {
         const name = (row.name ?? '').replace(/\s+/g, ' ').trim();
         const expires =
           row.discount_expiration && row.discount_expiration > 0
-            ? new Date(row.discount_expiration * 1000).toISOString().slice(0, 10)
+            ? new Date(row.discount_expiration * 1000).toISOString()
             : undefined;
         batch.items.push({
           id: `steam_${appId}`,
@@ -180,6 +181,64 @@ function mergeSpecials(left: CollectedSpecials, right: CollectedSpecials): Colle
     reviewCounts,
     error: left.error ?? right.error,
   };
+}
+
+/**
+ * The moment the current price stops, as an ISO time the card counts down to.
+ * One store request for the whole digest.
+ * A missing answer leaves whatever end date the feed or featured list already had.
+ */
+export async function attachSteamSaleEnds(items: SteamDealItem[]): Promise<void> {
+  const ids = [
+    ...new Set(
+      items.map((item) => extractAppId(item.link)).filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (ids.length === 0) return;
+  const ends = await fetchSaleEnds(ids);
+  for (const item of items) {
+    const appId = extractAppId(item.link);
+    const end = appId ? ends.get(appId) : undefined;
+    if (end) item.expires = end;
+  }
+}
+
+async function fetchSaleEnds(appIds: string[]): Promise<Map<string, string>> {
+  const ends = new Map<string, string>();
+  try {
+    const input = {
+      ids: appIds.map((appId) => ({ appid: Number(appId) })),
+      context: { language: 'english', country_code: 'DE', steam_realm: 1 },
+      data_request: { include_all_purchase_options: true },
+    };
+    const url = `https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=${encodeURIComponent(JSON.stringify(input))}`;
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!response.ok) return ends;
+    const json = (await response.json()) as {
+      response?: {
+        store_items?: Array<{
+          appid?: number;
+          best_purchase_option?: { active_discounts?: Array<{ discount_end_date?: number }> };
+        }>;
+      };
+    };
+    const now = Date.now() / 1000;
+    for (const item of json.response?.store_items ?? []) {
+      const appId = item.appid ? String(item.appid) : '';
+      if (!appId) continue;
+      const upcoming = (item.best_purchase_option?.active_discounts ?? [])
+        .map((discount) => discount.discount_end_date ?? 0)
+        .filter((stamp) => stamp > now);
+      if (upcoming.length === 0) continue;
+      ends.set(appId, new Date(Math.min(...upcoming) * 1000).toISOString());
+    }
+  } catch {
+    return ends;
+  }
+  return ends;
 }
 
 /** Pull discounted games out of a Steam search `results_html` blob. */

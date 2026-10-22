@@ -1,6 +1,7 @@
 import type { Client, Message, SendableChannels, TextBasedChannel } from 'discord.js';
 import type { Config } from '../../config';
 import {
+  EPIC_SHELF_MARKER,
   buildEpicFreeGamesDisplay,
   collectMessageTextContent,
   epicGameTitle,
@@ -69,7 +70,7 @@ interface RawApiResponse {
 }
 
 /** Bump when the card layout changes so the current lineup is posted once. */
-const EPIC_LAYOUT = 'site';
+const EPIC_LAYOUT = 'deluxe';
 
 function lineupFingerprint(games: EpicFreeGame[]): string {
   const body = games
@@ -133,7 +134,7 @@ export class EpicFreeGamesService {
     const fingerprint = lineupFingerprint(games);
     let posted = 0;
     for (const target of targets) {
-      this.kitchen?.recordEpic(target.guildId, games);
+      this.kitchen?.recordEpic(target.guildId, games, target.channel.id);
       const sent = await this.postToGuild(target, games, fingerprint);
       if (sent) posted += 1;
       this.kitchen?.refresh(target.guildId);
@@ -175,8 +176,11 @@ export class EpicFreeGamesService {
     }
 
     try {
-      const card = buildEpicFreeGamesDisplay(games);
-      const sent = await target.channel.send({ embeds: card.embeds, components: card.components });
+      const display = buildEpicFreeGamesDisplay(games);
+      const sent = await target.channel.send({
+        components: display.components,
+        flags: display.flags,
+      });
       await this.store.add(scope, [fingerprint]);
       this.logger.info(`Epic: posted free games to ${target.guildName}.`);
       await reactQuietly(sent, ['🎁', '🆓', '⭐']);
@@ -237,7 +241,7 @@ export class EpicFreeGamesService {
 
   private titlesMatch(lastMessage: Message, games: EpicFreeGame[]): boolean {
     const blob = collectMessageTextContent(lastMessage);
-    if (!/Yours to keep once claimed/i.test(blob)) return false;
+    if (!blob.includes(EPIC_SHELF_MARKER)) return false;
     const lastTitles = extractEpicTitles(blob);
     const newTitles = selectEpicLineup(games).map(epicGameTitle);
     return (

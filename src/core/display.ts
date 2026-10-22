@@ -3,8 +3,11 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ContainerBuilder,
+  MediaGalleryBuilder,
+  MediaGalleryItemBuilder,
   MessageFlags,
   SectionBuilder,
+  SeparatorBuilder,
   TextDisplayBuilder,
   ThumbnailBuilder,
   type MessageActionRowComponentBuilder,
@@ -13,7 +16,6 @@ import { isGoodReview, type SteamReviewInfo } from '../deals/steam/SteamReviewAp
 import {
   QUEUE_PAGE_SIZE,
   SITE_CLAY,
-  SITE_EPIC,
   SITE_STEAM,
   buildSiteEmbed,
   formatClock,
@@ -26,18 +28,76 @@ import type { EpicFreeGame, LoopMode, SteamDealItem, Track } from './types';
 
 const STEAM_SPECIALS_URL = 'https://store.steampowered.com/specials';
 const EPIC_FREE_URL = 'https://store.epicgames.com/en-US/free-games';
+const EPIC_COLOR = 0x26bbff;
+const EPIC_LATER_COLOR = 0x8b93a7;
 
 /** Games per Steam digest. */
 export const STEAM_DIGEST_SIZE = 10;
 
-/** In the current Steam card's footer. An older card without it still needs a refresh. */
-export const STEAM_SHELF_MARKER = 'prices in €';
-const EPIC_DIGEST_MAX = 6;
+/** In the current Steam card's footer. An older card without it is replaced once. */
+export const STEAM_SHELF_MARKER = 'prices in € · Steam DE';
 
-/** Components V2 message, for the cards the website does not show. */
+/** In the current Epic card's footer. An older card without it is replaced once. */
+export const EPIC_SHELF_MARKER = 'Free to keep forever once claimed';
+
+const EPIC_FREE_MAX = 4;
+const EPIC_SOON_MAX = 3;
+
+/** Discord's cap on components in one message, nested ones included. */
+export const V2_COMPONENT_MAX = 40;
+
+/** Components V2 message: Steam, Epic, the Kitchen Board, and the cards beside them. */
 export interface V2Display {
   components: ContainerBuilder[];
   flags: typeof MessageFlags.IsComponentsV2;
+}
+
+/** Every node with a component type counts toward the cap: buttons, thumbnails, and all. */
+export function countV2Components(containers: { toJSON(): unknown }[]): number {
+  let count = 0;
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (!node || typeof node !== 'object') return;
+    const rec = node as Record<string, unknown>;
+    if (typeof rec.type === 'number') count += 1;
+    for (const value of Object.values(rec)) {
+      if (value && typeof value === 'object') walk(value);
+    }
+  };
+  walk(containers.map((container) => container.toJSON()));
+  return count;
+}
+
+/** Discord's cap on all the text in one Components V2 message. */
+export const V2_TEXT_MAX = 4000;
+
+/** Every text display's content, added up. */
+export function v2TextLength(containers: { toJSON(): unknown }[]): number {
+  let length = 0;
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (!node || typeof node !== 'object') return;
+    const rec = node as Record<string, unknown>;
+    if (typeof rec.content === 'string') length += rec.content.length;
+    for (const value of Object.values(rec)) {
+      if (value && typeof value === 'object') walk(value);
+    }
+  };
+  walk(containers.map((container) => container.toJSON()));
+  return length;
+}
+
+/** Inside both caps: the component count and the text. */
+export function fitsV2(containers: { toJSON(): unknown }[]): boolean {
+  return (
+    countV2Components(containers) <= V2_COMPONENT_MAX && v2TextLength(containers) <= V2_TEXT_MAX
+  );
 }
 
 const YOUTUBE_COLOR = 0xff0000;
@@ -242,8 +302,8 @@ export function buildQueuedTrackDisplay(
 }
 
 function thumbnailFor(url: string | undefined, alt: string): ThumbnailBuilder | null {
-  if (!url || !/^https?:\/\//i.test(url)) return null;
-  return new ThumbnailBuilder().setURL(url).setDescription(alt.slice(0, 100));
+  if (!url || !/^(https?:\/\/|attachment:\/\/)/i.test(url)) return null;
+  return new ThumbnailBuilder().setURL(url).setDescription(alt.slice(0, 100) || 'Artwork');
 }
 
 function httpImage(url: string | undefined): string | undefined {
@@ -251,138 +311,98 @@ function httpImage(url: string | undefined): string | undefined {
   return url;
 }
 
-function fallbackPriceLine(item: SteamDealItem): string {
-  if (item.salePrice && item.originalPrice) {
-    return `~~${item.originalPrice}~~ → **${item.salePrice}**`;
-  }
-  if (item.salePrice) return `**${item.salePrice}**`;
-  if (item.originalPrice) return item.originalPrice;
-  return '';
-}
-
-function discountLabel(item: SteamDealItem, apiPrice: string | null): string {
-  const fromPrice = apiPrice?.match(/\((-?\d+)%\)\s*$/)?.[1];
-  const raw = item.discount ?? fromPrice ?? '';
-  const n = parseInt(String(raw).replace(/\D/g, ''), 10);
-  if (!Number.isFinite(n) || n <= 0) return '';
-  return `−${n}%`;
-}
-
-function priceParts(price: string): { pay: string; was: string } {
-  return {
-    pay: price.match(/\*\*([^*]+)\*\*/)?.[1]?.trim() ?? '',
-    was: price.match(/~~([^~]+)~~/)?.[1]?.trim() ?? '',
-  };
-}
-
-/** The website's chip: Steam's own review label for a well-reviewed game, otherwise Special. */
-function steamChip(review: SteamReviewInfo | null | undefined): string {
-  return review && isGoodReview(review) && review.scoreDesc ? review.scoreDesc : 'Special';
-}
-
-/** Title as it appears in a digest row. Duplicate checks compare against this. */
-export function steamDealTitle(item: SteamDealItem): string {
-  return linkText(item.gameName, 80);
-}
-
-function steamDealLine(
-  n: number,
-  item: SteamDealItem,
-  apiPrice: string | null,
-  review: SteamReviewInfo | null | undefined,
-): string {
-  const name = linked(steamDealTitle(item), item.link);
-  const discount = discountLabel(item, apiPrice);
-  const { pay, was } = priceParts(apiPrice ?? fallbackPriceLine(item));
-  const money = [
-    discount ? `\`${discount}\`` : '',
-    was ? `~~${was}~~` : '',
-    pay ? `**${pay}**` : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
-  return [`${n}. ${name}`, steamChip(review), money].filter(Boolean).join(' · ');
-}
-
-function pragueClock(): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-    timeZone: 'Europe/Prague',
-  }).format(new Date());
-}
-
-/** Numbered titles from a Steam digest's text, in order. */
-export function extractSteamDigestTitles(blob: string): string[] {
-  return [...blob.matchAll(/^\d+\.\s+\[([^\]]+)\]/gm)].map((m) => m[1]!.trim());
+function textBlock(lines: string[]): TextDisplayBuilder {
+  return new TextDisplayBuilder().setContent(lines.filter(Boolean).join('\n').slice(0, 4000));
 }
 
 /**
- * Steam digest, as on the website: one numbered line per game with its review
- * chip, discount, and euro price.
+ * A section has to carry a thumbnail or a button. Art wins; a store link
+ * stands in when the art is missing, so a row never loses its shape.
  */
-export function buildSteamDealsDisplay(
-  items: SteamDealItem[],
-  prices: Map<string, string | null>,
-  reviews: Map<string, SteamReviewInfo | null> = new Map(),
-): EmbedCard {
-  const top = items.slice(0, STEAM_DIGEST_SIZE);
-  const lines = top.map((item, i) =>
-    steamDealLine(i + 1, item, prices.get(item.id) ?? null, reviews.get(item.id)),
+function artSection(
+  lines: string[],
+  art: string | undefined,
+  alt: string,
+  fallback?: { label: string; url: string | undefined },
+): SectionBuilder | TextDisplayBuilder {
+  const text = textBlock(lines);
+  const thumb = thumbnailFor(art, alt);
+  if (thumb)
+    return new SectionBuilder().addTextDisplayComponents(text).setThumbnailAccessory(thumb);
+  if (fallback?.url && /^https?:\/\//i.test(fallback.url)) {
+    return new SectionBuilder()
+      .addTextDisplayComponents(text)
+      .setButtonAccessory(
+        new ButtonBuilder()
+          .setStyle(ButtonStyle.Link)
+          .setLabel(fallback.label)
+          .setURL(fallback.url),
+      );
+  }
+  return text;
+}
+
+function addBlock(container: ContainerBuilder, block: SectionBuilder | TextDisplayBuilder): void {
+  if (block instanceof SectionBuilder) container.addSectionComponents(block);
+  else container.addTextDisplayComponents(block);
+}
+
+function divider(): SeparatorBuilder {
+  return new SeparatorBuilder().setDivider(true);
+}
+
+function linkButton(label: string, url: string, emoji?: string): ButtonBuilder {
+  const button = new ButtonBuilder()
+    .setStyle(ButtonStyle.Link)
+    .setLabel(label.length <= 80 ? label : `${label.slice(0, 79).trimEnd()}…`)
+    .setURL(url);
+  return emoji ? button.setEmoji(emoji) : button;
+}
+
+function linkRow(buttons: ButtonBuilder[]): ActionRowBuilder<MessageActionRowComponentBuilder> {
+  return new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+    buttons.slice(0, 5),
   );
-
-  const embed = buildSiteEmbed({
-    color: SITE_STEAM,
-    author: `Steam · ${pragueClock()}`,
-    title: 'Steam Daily Deals',
-    url: STEAM_SPECIALS_URL,
-    description: lines.length > 0 ? lines.join('\n') : 'The shelf is empty right now.',
-    footer: `${top.length} game${top.length === 1 ? '' : 's'} · ${STEAM_SHELF_MARKER}`,
-  });
-
-  const row = new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-    new ButtonBuilder()
-      .setStyle(ButtonStyle.Link)
-      .setLabel('Browse specials')
-      .setEmoji('💸')
-      .setURL(STEAM_SPECIALS_URL),
-  );
-
-  return { embeds: [embed], components: [row] };
 }
 
-function epicDate(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
-  });
-}
-
-/** Skip a missing or zero store price. Epic still sends "$0.00" for some rows. */
-function epicWorth(price: string | undefined): string {
-  const value = price?.replace(/\s+/g, ' ').trim() ?? '';
-  if (!value || /^[^0-9]*0+([.,]0+)?$/.test(value)) return '';
-  return value;
-}
-
-/** Live countdown. Falls back to a plain date when the store time is unreadable. */
-function discordWhen(iso: string | undefined, style: 'R' | 'D'): string {
+/** Discord timestamp: it ticks in every reader's own clock. Empty when unreadable. */
+export function discordTime(iso: string | undefined, style: 'R' | 'D' | 'f' | 't'): string {
   if (!iso) return '';
   const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return epicDate(iso);
+  if (!Number.isFinite(ms)) return '';
   return `<t:${Math.floor(ms / 1000)}:${style}>`;
 }
 
-function dealBlurb(value: string | undefined, limit = 150): string {
+/** "1.234,56€", "59,99€", "$19.99" → cents. Null when no number is there. */
+export function moneyToCents(value: string | undefined): number | null {
+  const digits = value?.replace(/[^\d.,]/g, '') ?? '';
+  if (!/\d/.test(digits)) return null;
+  const match = digits.match(/^(.*?)[.,](\d{2})$/);
+  const whole = (match ? match[1]! : digits).replace(/[.,]/g, '');
+  const cents = Number(whole || '0') * 100 + (match ? Number(match[2]) : 0);
+  return Number.isFinite(cents) ? cents : null;
+}
+
+/** Steam's own euro style: `1.234,56€`. */
+function euros(cents: number): string {
+  const whole = Math.floor(cents / 100).toLocaleString('de-DE');
+  return `${whole},${String(cents % 100).padStart(2, '0')}€`;
+}
+
+/** 650000 → "650K", 1200000 → "1.2M". */
+function compactCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 10_000) return `${Math.round(n / 1_000)}K`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+  return String(n);
+}
+
+function plainBlurb(value: string | undefined, limit = 150): string {
   if (!value) return '';
   const text = value
     .replace(/<br\s*\/?>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
-    .replace(/[*_`[\]~|]/g, '')
+    .replace(/[*_`[\]~|>#]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (text.length <= limit) return text;
@@ -391,31 +411,289 @@ function dealBlurb(value: string | undefined, limit = 150): string {
   return `${(word > 80 ? cut.slice(0, word) : cut).trimEnd()}…`;
 }
 
-function claimLabel(title: string): string {
-  const label = `Claim ${title.replace(/\s+/g, ' ').trim()}`;
-  return label.length <= 80 ? label : `${label.slice(0, 79).trimEnd()}…`;
+function pragueDay(): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    timeZone: 'Europe/Prague',
+  }).format(new Date());
 }
 
-function epicActionRow(
-  claim: EpicFreeGame | undefined,
-): ActionRowBuilder<MessageActionRowComponentBuilder> {
-  const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
-  if (claim?.storeUrl && claim.storeUrl !== EPIC_FREE_URL) {
-    row.addComponents(
-      new ButtonBuilder()
-        .setStyle(ButtonStyle.Link)
-        .setLabel(claimLabel(claim.title))
-        .setURL(claim.storeUrl),
+/* ---------- Steam ---------- */
+
+function fallbackPriceLine(item: SteamDealItem): string {
+  if (item.salePrice && item.originalPrice) {
+    return `~~${item.originalPrice}~~ → **${item.salePrice}**`;
+  }
+  if (item.salePrice) return `**${item.salePrice}**`;
+  return '';
+}
+
+export interface SteamPriceBits {
+  /** 75 for −75 %. Zero when unknown. */
+  percent: number;
+  /** What it costs today. */
+  pay: string;
+  /** The struck price. */
+  was: string;
+}
+
+/** Discount, today's price, and the struck price, from the store answer or the feed row. */
+export function steamPriceBits(item: SteamDealItem, apiPrice: string | null): SteamPriceBits {
+  const source = apiPrice ?? fallbackPriceLine(item);
+  const pay = source.match(/\*\*([^*]+)\*\*/)?.[1]?.trim() || item.salePrice?.trim() || '';
+  const was =
+    source.match(/~~([^~]+)~~/)?.[1]?.trim() ||
+    (item.salePrice ? (item.originalPrice?.trim() ?? '') : '');
+  const fromPrice = apiPrice?.match(/\((-?\d+)%\)\s*$/)?.[1];
+  const n = parseInt(String(item.discount ?? fromPrice ?? '').replace(/\D/g, ''), 10);
+  return { percent: Number.isFinite(n) && n > 0 ? n : 0, pay, was };
+}
+
+/** `−75%` chip, the struck price, today's price, and what stays in your pocket. */
+export function steamMoneyLine(bits: SteamPriceBits): string {
+  const chip = bits.percent ? `\`−${bits.percent}%\`` : '';
+  const price = bits.pay
+    ? bits.was
+      ? `~~${bits.was}~~ → **${bits.pay}**`
+      : `**${bits.pay}**`
+    : '';
+  const was = moneyToCents(bits.was);
+  const pay = moneyToCents(bits.pay);
+  const save = was != null && pay != null && was > pay ? `you save ${euros(was - pay)}` : '';
+  return [[chip, price].filter(Boolean).join(' '), save].filter(Boolean).join(' · ');
+}
+
+const REVIEW_EMOJI: Record<string, string> = {
+  'Overwhelmingly Positive': '🏆',
+  'Very Positive': '💎',
+  Positive: '👍',
+  'Mostly Positive': '👍',
+};
+
+/** Steam's own label, only for a game players actually like. */
+export function steamReviewChip(review: SteamReviewInfo | null | undefined): string {
+  if (!review || !isGoodReview(review) || !review.scoreDesc) return '';
+  const emoji = REVIEW_EMOJI[review.scoreDesc] ?? '⭐';
+  return `${emoji} ${review.scoreDesc} · ${review.positivePct}% of ${compactCount(review.totalReviews)}`;
+}
+
+const SALE_MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/** A live countdown when Steam gave the hour, the day otherwise. Empty once it has passed. */
+export function steamSaleEnds(value: string | undefined): string {
+  const text = value?.replace(/\s+/g, ' ').trim() ?? '';
+  if (!text) return '';
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) {
+    const ms = Date.parse(text);
+    if (!Number.isFinite(ms) || ms <= Date.now()) return '';
+    return `⏳ ends <t:${Math.floor(ms / 1000)}:R>`;
+  }
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!iso) return `⏳ ends ${text.replace(/^(ends|until)\s+/i, '')}`;
+  const month = SALE_MONTHS[Number(iso[2]) - 1] ?? '';
+  return `⏳ ends ${Number(iso[3])} ${month}`;
+}
+
+function tagLine(tags: string | undefined, limit: number): string {
+  return (tags ?? '')
+    .split('·')
+    .map((tag) => tag.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, limit)
+    .join(', ');
+}
+
+/** Title as it appears in a digest row. Duplicate checks compare against this. */
+export function steamDealTitle(item: SteamDealItem): string {
+  return linkText(item.gameName, 80);
+}
+
+const MEDALS = ['🥇', '🥈', '🥉'];
+
+function rankBadge(rank: number): string {
+  return MEDALS[rank - 1] ?? `${rank} ·`;
+}
+
+function steamRow(
+  rank: number,
+  item: SteamDealItem,
+  apiPrice: string | null,
+  review: SteamReviewInfo | null | undefined,
+  extras: SteamExtras,
+): SectionBuilder | TextDisplayBuilder {
+  const title = steamDealTitle(item);
+  const lines = [
+    `### ${rankBadge(rank)} ${linked(title, item.link)}`,
+    steamMoneyLine(steamPriceBits(item, apiPrice)),
+  ];
+  const blurb = rank === 1 && extras.blurb ? plainBlurb(item.description, 170) : '';
+  if (blurb) lines.push(`> ${blurb}`);
+  const tags = extras.tags ? tagLine(item.tags, 3) : '';
+  const meta = [steamReviewChip(review), tags, steamSaleEnds(item.expires)]
+    .filter(Boolean)
+    .join(' · ');
+  if (meta) lines.push(`-# ${meta}`);
+  return artSection(lines, httpImage(item.image), title, { label: 'Store', url: item.link });
+}
+
+/** What the whole shelf costs today against what it cost yesterday. */
+function steamShelfTotal(
+  items: SteamDealItem[],
+  prices: Map<string, string | null>,
+): { count: number; pay: number; was: number } | null {
+  let count = 0;
+  let pay = 0;
+  let was = 0;
+  for (const item of items) {
+    const bits = steamPriceBits(item, prices.get(item.id) ?? null);
+    const payCents = moneyToCents(bits.pay);
+    const wasCents = moneyToCents(bits.was);
+    if (payCents == null || wasCents == null || wasCents <= payCents) continue;
+    count += 1;
+    pay += payCents;
+    was += wasCents;
+  }
+  return count >= 2 ? { count, pay, was } : null;
+}
+
+interface SteamExtras {
+  hero: boolean;
+  grab: boolean;
+  blurb: boolean;
+  tags: boolean;
+}
+
+function steamContainer(
+  top: SteamDealItem[],
+  prices: Map<string, string | null>,
+  reviews: Map<string, SteamReviewInfo | null>,
+  extras: SteamExtras,
+): ContainerBuilder {
+  const lead = top[0];
+  const container = new ContainerBuilder()
+    .setAccentColor(SITE_STEAM)
+    .addTextDisplayComponents(
+      textBlock([
+        `## 💸 [Steam Daily Deals](${STEAM_SPECIALS_URL})`,
+        top.length > 0
+          ? `-# ${pragueDay()} · the ${top.length} best discounts on Steam today`
+          : `-# ${pragueDay()}`,
+      ]),
+    );
+
+  const hero = extras.hero ? httpImage(lead?.heroImage) : undefined;
+  if (lead && hero) {
+    const bits = steamPriceBits(lead, prices.get(lead.id) ?? null);
+    container.addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(
+        new MediaGalleryItemBuilder()
+          .setURL(hero)
+          .setDescription(
+            [`Deal of the day: ${steamDealTitle(lead)}`, bits.percent ? `−${bits.percent}%` : '']
+              .filter(Boolean)
+              .join(' · ')
+              .slice(0, 1024),
+          ),
+      ),
     );
   }
-  row.addComponents(
-    new ButtonBuilder()
-      .setStyle(ButtonStyle.Link)
-      .setLabel('Browse free games')
-      .setEmoji('🎁')
-      .setURL(EPIC_FREE_URL),
+
+  if (top.length === 0) {
+    container.addTextDisplayComponents(
+      textBlock(['The shelf is empty right now. Steam is between sales.']),
+    );
+  }
+  top.forEach((item, i) =>
+    addBlock(
+      container,
+      steamRow(i + 1, item, prices.get(item.id) ?? null, reviews.get(item.id), extras),
+    ),
   );
-  return row;
+
+  const total = steamShelfTotal(top, prices);
+  container
+    .addSeparatorComponents(divider())
+    .addTextDisplayComponents(
+      textBlock([
+        total
+          ? `🧾 All ${total.count} together: **${euros(total.pay)}** instead of ~~${euros(total.was)}~~. That's **${euros(total.was - total.pay)}** that stays in your pocket.`
+          : '',
+        `-# 🕒 A fresh shelf every morning at 03:33 · ${STEAM_SHELF_MARKER}`,
+      ]),
+    );
+
+  const buttons = [linkButton('Browse all specials', STEAM_SPECIALS_URL, '💸')];
+  if (extras.grab && lead?.link && /^https?:\/\//i.test(lead.link)) {
+    buttons.push(linkButton(`Grab ${steamDealTitle(lead)}`, lead.link, '🛒'));
+  }
+  container.addActionRowComponents(linkRow(buttons));
+  return container;
+}
+
+/**
+ * Steam digest: a banner of the deal of the day, ten ranked store rows with
+ * their art, prices, Steam's review label, tags, and a countdown to the end of
+ * the sale, then what the whole shelf saves you.
+ */
+export function buildSteamDealsDisplay(
+  items: SteamDealItem[],
+  prices: Map<string, string | null>,
+  reviews: Map<string, SteamReviewInfo | null> = new Map(),
+): V2Display {
+  const top = items.slice(0, STEAM_DIGEST_SIZE);
+  // Near Discord's caps the extras go first: the second button, the banner,
+  // the blurb, then the tags. Prices and ranks always stay.
+  const tries: SteamExtras[] = [
+    { hero: true, grab: true, blurb: true, tags: true },
+    { hero: true, grab: false, blurb: true, tags: true },
+    { hero: false, grab: false, blurb: true, tags: true },
+    { hero: false, grab: false, blurb: false, tags: true },
+    { hero: false, grab: false, blurb: false, tags: false },
+  ];
+  let container = steamContainer(top, prices, reviews, tries[0]!);
+  for (const extras of tries.slice(1)) {
+    if (fitsV2([container])) break;
+    container = steamContainer(top, prices, reviews, extras);
+  }
+  return { components: [container], flags: MessageFlags.IsComponentsV2 };
+}
+
+/* ---------- Epic ---------- */
+
+/** Skip a missing or zero store price. Epic still sends "$0.00" for some rows. */
+export function epicWorth(price: string | undefined): string {
+  const value = price?.replace(/\s+/g, ' ').trim() ?? '';
+  if (!value || /^[^0-9]*0+([.,]0+)?$/.test(value)) return '';
+  return value;
+}
+
+/** "$19.99" + "$24.99" → "$44.98". Empty when the currencies differ or a price is missing. */
+function epicWorthTotal(games: EpicFreeGame[]): string {
+  const worths = games.map((game) => epicWorth(game.originalPrice));
+  if (worths.length < 2 || worths.some((worth) => !worth)) return '';
+  const symbols = new Set(worths.map((worth) => worth.replace(/[\d.,\s]/g, '')));
+  if (symbols.size !== 1) return '';
+  const cents = worths.map(moneyToCents);
+  if (cents.some((value) => value == null)) return '';
+  const sum = cents.reduce<number>((total, value) => total + (value ?? 0), 0);
+  const symbol = [...symbols][0] ?? '';
+  const amount = (sum / 100).toFixed(2);
+  return worths[0]!.trim().startsWith(symbol) ? `${symbol}${amount}` : `${amount}${symbol}`;
 }
 
 /** Title as it appears on the Epic card. Duplicate checks compare against this. */
@@ -423,67 +701,169 @@ export function epicGameTitle(game: EpicFreeGame): string {
   return linkText(game.title, 120);
 }
 
-function epicFreeLine(game: EpicFreeGame): string {
-  const worth = epicWorth(game.originalPrice);
-  const ends = discordWhen(game.endDate, 'R');
-  return [
-    `**${linked(epicGameTitle(game), game.storeUrl)}**`,
-    [worth ? `~~${worth}~~` : '', '**Free**'].filter(Boolean).join(' '),
-    ends ? `ends ${ends}` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
-}
-
-function epicSoonLine(game: EpicFreeGame): string {
-  const freeAt = discordWhen(game.upcomingStartDate, 'R');
-  return [`**${linked(epicGameTitle(game), game.storeUrl)}**`, freeAt ? `free ${freeAt}` : '']
-    .filter(Boolean)
-    .join(' · ');
-}
-
 /** The games one Epic card names: free ones first, then what comes next. */
 export function selectEpicLineup(games: EpicFreeGame[]): EpicFreeGame[] {
-  const current = games.filter((g) => !g.isUpcoming).slice(0, EPIC_DIGEST_MAX);
-  const upcoming = games.filter((g) => g.isUpcoming).slice(0, EPIC_DIGEST_MAX);
+  const current = games.filter((g) => !g.isUpcoming).slice(0, EPIC_FREE_MAX);
+  const upcoming = games.filter((g) => g.isUpcoming).slice(0, EPIC_SOON_MAX);
   return [...current, ...upcoming];
 }
 
-/** Bold linked titles from an Epic card's text, in order. */
-export function extractEpicTitles(blob: string): string[] {
-  return [...blob.matchAll(/\*\*\[([^\]]+)\]\(/g)].map((m) => m[1]!.trim());
+function epicFreeRow(game: EpicFreeGame, lead: boolean): SectionBuilder | TextDisplayBuilder {
+  const title = epicGameTitle(game);
+  const worth = epicWorth(game.originalPrice);
+  const lines = [
+    `### ${linked(title, game.storeUrl)}`,
+    `**🆓 FREE**${worth ? ` ~~${worth}~~` : ''}`,
+  ];
+  const endsIn = discordTime(game.endDate, 'R');
+  const seller = linkText(game.seller ?? '', 60);
+  if (lead) {
+    const endsAt = discordTime(game.endDate, 'f');
+    if (endsIn) lines.push(`⏳ Free until ${endsAt} · ${endsIn}`);
+    const blurb = plainBlurb(game.description, 240);
+    if (blurb) lines.push(`> ${blurb}`);
+    if (seller) lines.push(`-# by ${seller}`);
+  } else {
+    const meta = [endsIn ? `⏳ ends ${endsIn}` : '', seller ? `by ${seller}` : '']
+      .filter(Boolean)
+      .join(' · ');
+    if (meta) lines.push(`-# ${meta}`);
+  }
+  return artSection(lines, httpImage(game.image) ?? httpImage(game.heroImage), title, {
+    label: 'Store',
+    url: game.storeUrl,
+  });
+}
+
+function epicSoonRow(game: EpicFreeGame): SectionBuilder | TextDisplayBuilder {
+  const title = epicGameTitle(game);
+  const worth = epicWorth(game.originalPrice);
+  const unlocks = discordTime(game.upcomingStartDate, 'R');
+  const from = discordTime(game.upcomingStartDate, 'D');
+  const until = discordTime(game.endDate, 'D');
+  const lines = [`### ${linked(title, game.storeUrl)}`];
+  if (unlocks) lines.push(`🔓 Free ${unlocks}`);
+  const meta = [from && until ? `${from} – ${until}` : '', worth ? `worth ${worth}` : '']
+    .filter(Boolean)
+    .join(' · ');
+  if (meta) lines.push(`-# ${meta}`);
+  return artSection(lines, httpImage(game.image) ?? httpImage(game.heroImage), title, {
+    label: 'Store',
+    url: game.storeUrl,
+  });
+}
+
+/** Wide store art for each game that is free now, as one gallery. */
+function epicGallery(games: EpicFreeGame[]): MediaGalleryBuilder | null {
+  const gallery = new MediaGalleryBuilder();
+  const seen = new Set<string>();
+  for (const game of games) {
+    const url = httpImage(game.heroImage) ?? httpImage(game.image);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    const worth = epicWorth(game.originalPrice);
+    gallery.addItems(
+      new MediaGalleryItemBuilder()
+        .setURL(url)
+        .setDescription(
+          [game.title, 'free to keep', worth ? `worth ${worth}` : '']
+            .filter(Boolean)
+            .join(' · ')
+            .slice(0, 1024),
+        ),
+    );
+  }
+  return seen.size > 0 ? gallery : null;
+}
+
+function epicHeader(current: number, upcoming: number): TextDisplayBuilder {
+  const bits: string[] = [];
+  if (current > 0) bits.push(`${current} free now`);
+  if (upcoming > 0) bits.push(`${upcoming} coming next`);
+  return textBlock([
+    `## 🎁 [Epic Free Games](${EPIC_FREE_URL})`,
+    `-# ${[pragueDay(), ...bits].join(' · ')}`,
+  ]);
+}
+
+function epicFooter(container: ContainerBuilder, current: EpicFreeGame[]): void {
+  const total = epicWorthTotal(current);
+  container
+    .addSeparatorComponents(divider())
+    .addTextDisplayComponents(
+      textBlock([
+        total ? `💰 **${total}** worth of games, yours for nothing this week.` : '',
+        `-# 🎁 ${EPIC_SHELF_MARKER} · checked daily at 12:00 and 17:00`,
+      ]),
+    );
+  const buttons = current
+    .filter((game) => game.storeUrl && game.storeUrl !== EPIC_FREE_URL)
+    .slice(0, 3)
+    .map((game) => linkButton(`Claim ${game.title.replace(/\s+/g, ' ').trim()}`, game.storeUrl));
+  buttons.push(linkButton('All free games', EPIC_FREE_URL, '🎁'));
+  container.addActionRowComponents(linkRow(buttons));
 }
 
 /**
- * Epic card, as on the website: what is free now with its cover, and a quieter
- * Coming next field.
+ * Epic digest: a gallery of this week's free games, a row for each with its
+ * box art and a live countdown, Claim buttons, then a quieter Coming next card.
  */
-export function buildEpicFreeGamesDisplay(games: EpicFreeGame[]): EmbedCard {
+export function buildEpicFreeGamesDisplay(games: EpicFreeGame[]): V2Display {
   const lineup = selectEpicLineup(games);
   const current = lineup.filter((g) => !g.isUpcoming);
   const upcoming = lineup.filter((g) => g.isUpcoming);
-  const lead = current[0] ?? upcoming[0];
+  const components: ContainerBuilder[] = [];
 
-  const lines = current.map(epicFreeLine);
-  const blurb = dealBlurb(current[0]?.description, 240);
-  if (blurb) lines.push('', `*${blurb}*`);
-  if (current.length === 0) {
-    lines.push(upcoming.length > 0 ? 'Nothing free right now.' : 'No free games listed right now.');
+  if (current.length > 0) {
+    const free = new ContainerBuilder()
+      .setAccentColor(EPIC_COLOR)
+      .addTextDisplayComponents(epicHeader(current.length, upcoming.length));
+    const gallery = epicGallery(current);
+    if (gallery) free.addMediaGalleryComponents(gallery);
+    current.forEach((game, i) => addBlock(free, epicFreeRow(game, i === 0)));
+    epicFooter(free, current);
+    components.push(free);
+
+    if (upcoming.length > 0) {
+      const later = new ContainerBuilder()
+        .setAccentColor(EPIC_LATER_COLOR)
+        .addTextDisplayComponents(textBlock(['### 🔜 Coming next', '-# Set a reminder.']));
+      for (const game of upcoming) addBlock(later, epicSoonRow(game));
+      components.push(later);
+    }
+  } else {
+    const card = new ContainerBuilder()
+      .setAccentColor(upcoming.length > 0 ? EPIC_LATER_COLOR : EPIC_COLOR)
+      .addTextDisplayComponents(epicHeader(0, upcoming.length));
+    const next = discordTime(upcoming[0]?.upcomingStartDate, 'R');
+    card.addTextDisplayComponents(
+      textBlock([
+        upcoming.length > 0
+          ? `Nothing free right now. The next drop unlocks ${next || 'soon'}.`
+          : 'No free games listed right now.',
+      ]),
+    );
+    for (const game of upcoming) addBlock(card, epicSoonRow(game));
+    epicFooter(card, []);
+    components.push(card);
   }
 
-  const embed = buildSiteEmbed({
-    color: SITE_EPIC,
-    author: 'Epic Games Store',
-    title: current.length === 0 && upcoming.length > 0 ? 'Coming soon' : 'Free now',
-    url: EPIC_FREE_URL,
-    description: lines.join('\n'),
-    fields:
-      upcoming.length > 0 ? [['Coming next', upcoming.map(epicSoonLine).join('\n'), true]] : [],
-    footer: 'Yours to keep once claimed',
-    image: httpImage(lead?.heroImage) ?? httpImage(lead?.image),
-  });
+  return { components, flags: MessageFlags.IsComponentsV2 };
+}
 
-  return { embeds: [embed], components: [epicActionRow(current[0])] };
+/** Linked `###` headings from a Steam or Epic card's text, in order. */
+function headingTitles(blob: string): string[] {
+  return [...blob.matchAll(/^###\s+[^[\n]*?\[([^\]]+)\]\(/gm)].map((m) => m[1]!.trim());
+}
+
+/** Ranked titles from a Steam digest's text, in order. */
+export function extractSteamDigestTitles(blob: string): string[] {
+  return headingTitles(blob);
+}
+
+/** Free and upcoming titles from an Epic card's text, in order. */
+export function extractEpicTitles(blob: string): string[] {
+  return headingTitles(blob);
 }
 
 /** Flatten Components V2 + embeds to plain text for duplicate detection. */
@@ -515,15 +895,18 @@ export function collectMessageTextContent(message: {
   const walk = (node: unknown, depth = 0): void => {
     if (!node || typeof node !== 'object' || depth > 12) return;
     const obj = node as Record<string, unknown>;
-    if (typeof obj.content === 'string') chunks.push(obj.content);
+    // Builders and received components carry the same text in `data`, getters,
+    // and their JSON. Reading only the JSON keeps each line once, so a digest
+    // reads back exactly the titles it shows.
     if (typeof obj.toJSON === 'function') {
       try {
         walk(obj.toJSON(), depth + 1);
       } catch {
         /* ignore */
       }
+      return;
     }
-    if (obj.data && typeof obj.data === 'object') walk(obj.data, depth + 1);
+    if (typeof obj.content === 'string') chunks.push(obj.content);
     if (Array.isArray(obj.components)) {
       for (const child of obj.components) walk(child, depth + 1);
     }

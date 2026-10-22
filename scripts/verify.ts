@@ -7,7 +7,16 @@ import type { Readable } from 'node:stream';
 import { promisify } from 'node:util';
 import { Client, Events, GatewayIntentBits } from 'discord.js';
 import { DISCORD_TOKEN, config } from '../src/config';
-import { STEAM_DIGEST_SIZE, STEAM_SHELF_MARKER, buildSteamDealsDisplay } from '../src/core/display';
+import {
+  STEAM_DIGEST_SIZE,
+  STEAM_SHELF_MARKER,
+  buildSteamDealsDisplay,
+  collectMessageTextContent,
+  countV2Components,
+  extractSteamDigestTitles,
+  fitsV2,
+  v2TextLength,
+} from '../src/core/display';
 import type { SteamDealItem } from '../src/core/types';
 import { SteamFeedReader } from '../src/deals/steam/SteamFeedReader';
 import { SteamSpecialsReader, parseSteamSearchHtml } from '../src/deals/steam/SteamSpecialsReader';
@@ -278,12 +287,15 @@ function checkSteamRows(): void {
       [quiet.id, null],
     ]),
   );
-  const blob = JSON.stringify(display.embeds.map((embed) => embed.toJSON()));
+  const blob = JSON.stringify(display.components.map((component) => component.toJSON()));
   const wants = [
     'Steam Daily Deals',
     STEAM_SHELF_MARKER,
-    '1. [Red Dead Redemption 2](https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/) · Very Positive · `−75%` ~~59,99€~~ **14,99€**',
-    '2. [Plain Game](https://store.steampowered.com/app/1/Plain/) · Special · **9,99€**',
+    '### 🥇 [Red Dead Redemption 2](https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/)',
+    '`−75%` ~~59,99€~~ → **14,99€** · you save 45,00€',
+    '💎 Very Positive · 91% of 600K',
+    '### 🥈 [Plain Game](https://store.steampowered.com/app/1/Plain/)',
+    '**9,99€**',
   ];
   const missing = wants.filter((part) => !blob.includes(part));
   if (missing.length > 0) {
@@ -302,13 +314,22 @@ function checkSteamRows(): void {
     full,
     new Map(full.map((item) => [item.id, '~~39,99€~~ → **19,99€** (-50%)'])),
   );
-  const description = fullDisplay.embeds[0]?.toJSON().description ?? '';
-  const lines = description.split('\n').length;
-  if (lines !== STEAM_DIGEST_SIZE || description.length > 4096) {
-    fail('steam-row-card', `10-game card has ${lines} lines and ${description.length} characters`);
+  const rows = extractSteamDigestTitles(
+    collectMessageTextContent({ components: fullDisplay.components }),
+  ).length;
+  const chars = v2TextLength(fullDisplay.components);
+  const parts = countV2Components(fullDisplay.components);
+  if (rows !== STEAM_DIGEST_SIZE || !fitsV2(fullDisplay.components)) {
+    fail(
+      'steam-row-card',
+      `10-game card has ${rows} rows, ${parts} components, ${chars} characters`,
+    );
     return;
   }
-  ok('steam-row-card', `numbered rows, review chips, prices, ${description.length} characters`);
+  ok(
+    'steam-row-card',
+    `ranked rows, review chips, prices, ${parts} components, ${chars} characters`,
+  );
 }
 
 async function checkSteam(): Promise<void> {

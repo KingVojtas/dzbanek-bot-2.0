@@ -6,11 +6,18 @@ import {
   AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
-  type EmbedBuilder,
+  ContainerBuilder,
+  MediaGalleryBuilder,
+  MediaGalleryItemBuilder,
+  MessageFlags,
+  SectionBuilder,
+  SeparatorBuilder,
+  TextDisplayBuilder,
+  ThumbnailBuilder,
   type MessageActionRowComponentBuilder,
 } from 'discord.js';
-import { linkText } from '../core/display';
-import { SITE_GLOW, buildSiteEmbed, type EmbedCard, type SiteField } from '../core/embeds';
+import { formatDuration } from '../core/embeds';
+import { linkText, type V2Display } from '../core/display';
 import { STATION_LIST, type StationId } from '../radio/station';
 import type { VoteCounts } from './votes';
 
@@ -19,8 +26,14 @@ export const RADIO_NIGHT_CRON = '0 20 * * 5';
 export const RADIO_NIGHT_LABEL = 'Friday 20:00';
 export const RADIO_VOTE_PREFIX = 'kitchen:vote:';
 
+/**
+ * Music buttons on the board end in this. The handler acknowledges them and
+ * redraws the board, instead of turning the board into a Now Playing card.
+ */
+export const KITCHEN_BUTTON_SUFFIX = ':board';
+
+export const KITCHEN_HERO_FILE = 'kitchen-hero.jpg';
 const THUMB_FILE = 'kitchen-thumb.jpg';
-const THUMB_ATTACHMENT = `attachment://${THUMB_FILE}`;
 
 const assetsDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'assets');
 
@@ -32,7 +45,17 @@ export interface KitchenStereo {
   titleUrl?: string;
   color: number;
   websiteUrl?: string;
+  /** The station's slogan, beside the live badge. */
+  tagline?: string;
+  /** Album cover or video art. */
+  artUrl?: string;
+  /** Station mark, for a song without a cover. */
+  logoUrl?: string;
   paused?: boolean;
+  durationSec?: number;
+  /** Tracks after the current one. */
+  queueLength?: number;
+  requestedBy?: string;
 }
 
 export interface KitchenListener {
@@ -41,9 +64,15 @@ export interface KitchenListener {
 }
 
 export interface KitchenDealTeaser {
+  /** The small line above the title. */
+  kicker: string;
   title: string;
+  /** The price line. */
   line: string;
+  /** A quiet line underneath: reviews, the countdown, where the rest are. */
+  note?: string;
   url?: string;
+  image?: string;
 }
 
 export interface KitchenBoardView {
@@ -53,222 +82,405 @@ export interface KitchenBoardView {
   steam?: KitchenDealTeaser;
   epic?: KitchenDealTeaser;
   joinsToday: number;
-  radioNight?: { stationName: string };
-  radioVote?: { counts: VoteCounts; total: number };
+  radioNight?: { stationName: string; channelName?: string };
+  /** `closesAt` is a Unix time in seconds, for a live countdown. */
+  radioVote?: { counts: VoteCounts; total: number; closesAt?: number };
   latestCatch?: {
     userId: string;
     title: string;
     artist: string;
     by: string;
+    coverUrl?: string;
+    stationName?: string;
   };
 }
 
 export const CATCH_PLAY_PREFIX = 'kitchen:catch-play';
 
-const BOARD_LAYOUT = 'site';
+export interface KitchenDisplay extends V2Display {
+  files: AttachmentBuilder[];
+}
 
-/** Kiss, Rock, Beat: the names on the website's vote card. */
+/** Bump when the layout changes so every board redraws once. */
+const BOARD_LAYOUT = 'cards-deluxe';
+
 const VOTE_LABELS: Record<StationId, string> = { kiss: 'Kiss', rock: 'Rock', beat: 'Beat' };
+export const VOTE_EMOJI: Record<StationId, string> = { kiss: '💋', rock: '🎸', beat: '🥁' };
 
-function boardAuthor(stereo: KitchenStereo): string {
-  if (stereo.kind === 'radio') return `● Live · ${stereo.sourceLabel}`;
-  if (stereo.kind === 'music') {
-    return `${stereo.paused ? '⏸️ Paused' : '🔊 Now Playing'} · ${stereo.sourceLabel}`;
-  }
-  return 'The Kitchen';
-}
+/** The kitchen photos ride along as attachments. A missing file just leaves the art out. */
+export class KitchenFiles {
+  private readonly used = new Map<string, AttachmentBuilder>();
 
-function boardTitle(stereo: KitchenStereo): string {
-  if (stereo.kind === 'quiet') return 'Nothing on';
-  const title = stereo.title.trim();
-  const artist = stereo.artist.trim();
-  if (stereo.kind === 'radio' && artist && artist !== title) return `${artist} — ${title}`;
-  return title;
-}
-
-function dealValue(teaser: KitchenDealTeaser | undefined, empty: string): string {
-  if (!teaser) return empty;
-  const title = linkText(teaser.title, 80);
-  const name = teaser.url && /^https?:\/\//i.test(teaser.url) ? `[${title}](${teaser.url})` : title;
-  return teaser.line.trim() ? `${name} · ${teaser.line.trim()}` : name;
-}
-
-function nightValue(view: KitchenBoardView): string | null {
-  if (view.radioVote) return `${RADIO_NIGHT_LABEL} · the vote is open below`;
-  if (view.radioNight) return `${RADIO_NIGHT_LABEL} · ${view.radioNight.stationName}`;
-  return null;
-}
-
-function boardFields(view: KitchenBoardView): SiteField[] {
-  const fields: SiteField[] = [
-    ['In voice', String(view.voiceChannelName ? view.listeners.length : 0)],
-    ['Joined today', String(view.joinsToday)],
-    ['Steam', dealValue(view.steam, 'The shelf is clear')],
-    ['Epic', dealValue(view.epic, 'Nothing free this week')],
-  ];
-  const night = nightValue(view);
-  if (night) fields.push(['Radio Night', night, true]);
-  if (view.latestCatch) {
-    const { by, title, artist } = view.latestCatch;
-    const song = artist && artist !== title ? `${artist} — ${title}` : title;
-    fields.push(['Latest catch', `**${by.slice(0, 40)}** caught ${song.slice(0, 160)}`, true]);
-  }
-  return fields;
-}
-
-function kitchenThumb(): AttachmentBuilder | null {
-  const path = join(assetsDir, THUMB_FILE);
-  return existsSync(path) ? new AttachmentBuilder(path, { name: THUMB_FILE }) : null;
-}
-
-function boardButtons(
-  view: KitchenBoardView,
-): ActionRowBuilder<MessageActionRowComponentBuilder> | null {
-  const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
-  const stereo = view.stereo;
-  if (stereo.kind === 'radio') {
-    row.addComponents(
-      new ButtonBuilder().setCustomId('radio:stop').setLabel('Stop').setStyle(ButtonStyle.Danger),
-    );
-    if (stereo.websiteUrl && /^https?:\/\//i.test(stereo.websiteUrl)) {
-      row.addComponents(
-        new ButtonBuilder()
-          .setStyle(ButtonStyle.Link)
-          .setLabel('Website')
-          .setURL(stereo.websiteUrl),
-      );
+  url(name: string): string | undefined {
+    if (!this.used.has(name)) {
+      const path = join(assetsDir, name);
+      if (!existsSync(path)) return undefined;
+      this.used.set(name, new AttachmentBuilder(path, { name }));
     }
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId('radio:catch')
-        .setLabel('Catch')
-        .setStyle(ButtonStyle.Secondary),
-    );
+    return `attachment://${name}`;
   }
-  if (view.latestCatch) {
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId(CATCH_PLAY_PREFIX)
-        .setLabel('Play')
-        .setStyle(ButtonStyle.Primary),
-    );
+
+  list(): AttachmentBuilder[] {
+    return [...this.used.values()];
   }
-  return row.components.length > 0 ? row : null;
 }
 
-function tallyBar(n: number, total: number): string {
+function isLink(url: string | undefined): url is string {
+  return Boolean(url && /^(https?:\/\/|attachment:\/\/)/i.test(url));
+}
+
+function linked(text: string, url: string | undefined): string {
+  return url && /^https?:\/\//i.test(url) ? `[${text}](${url})` : text;
+}
+
+/** Text that sits inside bold, italics, or a heading. */
+function plain(value: string, max: number): string {
+  return value
+    .replace(/[\r\n*`_~|#>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+function textBlock(lines: string[]): TextDisplayBuilder {
+  return new TextDisplayBuilder().setContent(lines.filter(Boolean).join('\n').slice(0, 4000));
+}
+
+/** A section needs a thumbnail or a button. Without art the text stands alone. */
+function addArtBlock(
+  container: ContainerBuilder,
+  lines: string[],
+  art: string | undefined,
+  alt: string,
+): void {
+  const text = textBlock(lines);
+  if (!isLink(art)) {
+    container.addTextDisplayComponents(text);
+    return;
+  }
+  container.addSectionComponents(
+    new SectionBuilder()
+      .addTextDisplayComponents(text)
+      .setThumbnailAccessory(
+        new ThumbnailBuilder().setURL(art).setDescription(alt.slice(0, 100) || 'Artwork'),
+      ),
+  );
+}
+
+function addBanner(container: ContainerBuilder, url: string | undefined, alt: string): void {
+  if (!isLink(url)) return;
+  container.addMediaGalleryComponents(
+    new MediaGalleryBuilder().addItems(
+      new MediaGalleryItemBuilder().setURL(url).setDescription(alt.slice(0, 1024) || 'Artwork'),
+    ),
+  );
+}
+
+function divider(): SeparatorBuilder {
+  return new SeparatorBuilder().setDivider(true);
+}
+
+function button(
+  id: string,
+  label: string,
+  emoji: string,
+  style: ButtonStyle = ButtonStyle.Secondary,
+): ButtonBuilder {
+  return new ButtonBuilder().setCustomId(id).setLabel(label).setEmoji(emoji).setStyle(style);
+}
+
+function row(...buttons: ButtonBuilder[]): ActionRowBuilder<MessageActionRowComponentBuilder> {
+  return new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(buttons);
+}
+
+/* ---------- The stereo ---------- */
+
+function listenerLines(view: KitchenBoardView): string[] {
+  if (!view.voiceChannelName) return [];
+  const n = view.listeners.length;
+  const who = n === 0 ? 'nobody listening yet' : n === 1 ? '1 listening' : `${n} listening`;
+  const bits = [`🎧 **${plain(view.voiceChannelName, 60)}** · ${who}`];
+  const queued = view.stereo.kind === 'music' ? (view.stereo.queueLength ?? 0) : 0;
+  if (queued > 0) bits.push(`📜 ${queued} up next`);
+  const lines = [bits.join(' · ')];
+  if (n > 0) {
+    const shown = view.listeners.slice(0, 8).map((member) => plain(member.name, 32));
+    const extra = n - shown.length;
+    lines.push(`-# ${shown.join(' · ')}${extra > 0 ? ` · +${extra}` : ''}`);
+  }
+  return lines;
+}
+
+function quietStereo(files: KitchenFiles): ContainerBuilder {
+  const container = new ContainerBuilder().setAccentColor(KITCHEN_COLOR);
+  addBanner(
+    container,
+    files.url(KITCHEN_HERO_FILE),
+    'The Kitchen after dark: a jug, cookies, and tea',
+  );
+  container.addTextDisplayComponents(
+    textBlock([
+      '## 🍪 The Kitchen',
+      '*The stereo is off and the kettle is warm.*',
+      '-# 🎵 `/play` a song · 📻 `/radio play` a station',
+    ]),
+  );
+  return container;
+}
+
+function radioStereo(view: KitchenBoardView): ContainerBuilder {
+  const stereo = view.stereo;
+  const container = new ContainerBuilder().setAccentColor(stereo.color);
+  const tagline = stereo.tagline ? ` · *${plain(stereo.tagline, 60)}*` : '';
+  const title = plain(stereo.title, 200) || 'Live stream';
+  const artist = plain(stereo.artist, 120);
+  addArtBlock(
+    container,
+    [
+      `-# 🔴 LIVE · ${linked(plain(stereo.sourceLabel, 60), stereo.websiteUrl)}${tagline}`,
+      `## ${title}`,
+      artist && artist !== title ? `**${artist}**` : '',
+      ...listenerLines(view),
+    ],
+    stereo.artUrl ?? stereo.logoUrl,
+    artist ? `${artist} — ${title}` : title,
+  );
+
+  const buttons = [
+    button('radio:catch', 'Catch', '🍪', ButtonStyle.Success),
+    button('radio:stop', 'Stop', '⏹️', ButtonStyle.Danger),
+  ];
+  if (stereo.websiteUrl && /^https?:\/\//i.test(stereo.websiteUrl)) {
+    buttons.push(
+      new ButtonBuilder()
+        .setStyle(ButtonStyle.Link)
+        .setLabel('Website')
+        .setEmoji('🌐')
+        .setURL(stereo.websiteUrl),
+    );
+  }
+  container.addSeparatorComponents(divider()).addActionRowComponents(row(...buttons));
+  return container;
+}
+
+function musicStereo(view: KitchenBoardView): ContainerBuilder {
+  const stereo = view.stereo;
+  const container = new ContainerBuilder().setAccentColor(stereo.color);
+  const title = linkText(stereo.title, 200);
+  addBanner(container, stereo.artUrl, title);
+
+  const artist = plain(stereo.artist, 100);
+  const length = stereo.durationSec ? `\`${formatDuration(stereo.durationSec)}\`` : '';
+  const by = stereo.requestedBy ? `-# requested by ${plain(stereo.requestedBy, 40)}` : '';
+  container.addTextDisplayComponents(
+    textBlock([
+      `-# ${stereo.paused ? '⏸️ PAUSED' : '🔊 NOW PLAYING'} · ${plain(stereo.sourceLabel, 30)}`,
+      `## ${linked(title, stereo.titleUrl)}`,
+      [artist ? `**${artist}**` : '', length].filter(Boolean).join(' · '),
+      ...listenerLines(view),
+      by,
+    ]),
+  );
+
+  const toggle = stereo.paused
+    ? button(`music:resume${KITCHEN_BUTTON_SUFFIX}`, 'Resume', '▶️', ButtonStyle.Success)
+    : button(`music:pause${KITCHEN_BUTTON_SUFFIX}`, 'Pause', '⏸️');
+  container
+    .addSeparatorComponents(divider())
+    .addActionRowComponents(
+      row(
+        toggle,
+        button(`music:skip${KITCHEN_BUTTON_SUFFIX}`, 'Skip', '⏭️'),
+        button('music:queue', 'Queue', '📜'),
+        button(`music:stop${KITCHEN_BUTTON_SUFFIX}`, 'Stop', '⏹️', ButtonStyle.Danger),
+      ),
+    );
+  return container;
+}
+
+/* ---------- The pantry ---------- */
+
+function teaserLines(teaser: KitchenDealTeaser): string[] {
+  return [
+    `-# ${teaser.kicker}`,
+    `### ${linked(linkText(teaser.title, 100), teaser.url)}`,
+    teaser.line,
+    teaser.note ? `-# ${teaser.note}` : '',
+  ];
+}
+
+function pantryCard(view: KitchenBoardView): ContainerBuilder {
+  const container = new ContainerBuilder()
+    .setAccentColor(KITCHEN_COLOR)
+    .addTextDisplayComponents(
+      textBlock([
+        '### 🛒 The Pantry',
+        '-# Kitchen Board · the best deal today and this week’s freebie',
+      ]),
+    );
+  if (!view.steam && !view.epic) {
+    container.addTextDisplayComponents(
+      textBlock(['-# 💸 Steam · the shelf is clear', '-# 🎁 Epic · nothing free this week']),
+    );
+    return container;
+  }
+  if (view.steam) {
+    addArtBlock(container, teaserLines(view.steam), view.steam.image, view.steam.title);
+  } else {
+    container.addTextDisplayComponents(textBlock(['-# 💸 Steam · the shelf is clear']));
+  }
+  container.addSeparatorComponents(divider());
+  if (view.epic) {
+    addArtBlock(container, teaserLines(view.epic), view.epic.image, view.epic.title);
+  } else {
+    container.addTextDisplayComponents(textBlock(['-# 🎁 Epic · nothing free this week']));
+  }
+  return container;
+}
+
+/* ---------- The room ---------- */
+
+export function tallyBar(n: number, total: number): string {
   const width = 10;
   const filled = total > 0 ? Math.round((n / total) * width) : 0;
   return '▰'.repeat(filled) + '▱'.repeat(width - filled);
 }
 
-/** Friday's vote card, as on the website's Radio page. */
-function buildVoteEmbed(counts: VoteCounts, total: number): EmbedBuilder {
-  const lines = STATION_LIST.map((station) => {
+function voteLeader(counts: VoteCounts): StationId | null {
+  let best: StationId | null = null;
+  for (const station of STATION_LIST) {
     const n = counts[station.id];
-    return `\`${VOTE_LABELS[station.id].padEnd(4)} ${tallyBar(n, total)}\` **${n}**`;
-  });
-  return buildSiteEmbed({
-    color: SITE_GLOW,
-    author: '🌙 Kitchen Board · Radio Night',
-    title: 'Tonight at 20:00. Pick the station.',
-    description: lines.join('\n'),
-    footer: 'One vote each. You can change it.',
-  });
+    if (n > 0 && (best === null || n > counts[best])) best = station.id;
+  }
+  // A tie has no leader yet.
+  if (best && STATION_LIST.some((s) => s.id !== best && counts[s.id] === counts[best!])) {
+    return null;
+  }
+  return best;
+}
+
+function voteLines(vote: NonNullable<KitchenBoardView['radioVote']>): string[] {
+  const leader = voteLeader(vote.counts);
+  const closes = vote.closesAt ? `<t:${vote.closesAt}:R>` : 'at 20:00';
+  const lines = [`### 🌙 Radio Night · voting closes ${closes}`];
+  for (const station of STATION_LIST) {
+    const n = vote.counts[station.id];
+    const label = `${VOTE_EMOJI[station.id]} ${VOTE_LABELS[station.id].padEnd(4)}`;
+    lines.push(
+      `\`${label} ${tallyBar(n, vote.total)}\` **${n}**${station.id === leader ? ' 👑' : ''}`,
+    );
+  }
+  const votes = vote.total === 1 ? '1 vote so far' : `${vote.total} votes so far`;
+  lines.push(`-# One vote each, change it any time · ${votes}`);
+  return lines;
 }
 
 function voteButtons(counts: VoteCounts): ActionRowBuilder<MessageActionRowComponentBuilder> {
-  const leader = STATION_LIST.reduce<StationId>(
-    (best, station) => (counts[station.id] > counts[best] ? station.id : best),
-    'beat',
+  const leader = voteLeader(counts);
+  return row(
+    ...STATION_LIST.map((station) =>
+      button(
+        `${RADIO_VOTE_PREFIX}${station.id}`,
+        `${VOTE_LABELS[station.id]} · ${counts[station.id]}`,
+        VOTE_EMOJI[station.id],
+        station.id === leader ? ButtonStyle.Success : ButtonStyle.Secondary,
+      ),
+    ),
   );
-  const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
-  for (const station of STATION_LIST) {
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId(`${RADIO_VOTE_PREFIX}${station.id}`)
-        .setLabel(VOTE_LABELS[station.id])
-        .setStyle(
-          station.id === leader && counts[station.id] > 0
-            ? ButtonStyle.Success
-            : ButtonStyle.Secondary,
-        ),
+}
+
+function roomStatus(view: KitchenBoardView): string[] {
+  const lines: string[] = [];
+  if (view.joinsToday > 0) {
+    const n = view.joinsToday;
+    lines.push(`🍪 **${n}** ${n === 1 ? 'cookie' : 'cookies'} out of the jar today`);
+  }
+  if (view.radioNight && !view.radioVote) {
+    const where = view.radioNight.channelName
+      ? ` in 🔊 **${plain(view.radioNight.channelName, 60)}**`
+      : '';
+    lines.push(
+      `🌙 **Radio Night** · ${RADIO_NIGHT_LABEL} · ${plain(view.radioNight.stationName, 40)}${where}`,
     );
   }
-  return row;
+  return lines;
+}
+
+/** Bottom card. Left out when nobody caught a song, voted, joined, or set Radio Night. */
+function roomCard(view: KitchenBoardView, files: KitchenFiles): ContainerBuilder | null {
+  const status = roomStatus(view);
+  if (!view.latestCatch && !view.radioVote && status.length === 0) return null;
+  const container = new ContainerBuilder().setAccentColor(KITCHEN_COLOR);
+  let filled = false;
+
+  if (view.latestCatch) {
+    const caught = view.latestCatch;
+    const title = plain(caught.title, 100);
+    const artist = plain(caught.artist, 80);
+    const station = caught.stationName ? ` · off ${plain(caught.stationName, 30)}` : '';
+    addArtBlock(
+      container,
+      [
+        `-# 🎣 LATEST CATCH${station}`,
+        `### ${title}`,
+        artist && artist !== title ? `*${artist}*` : '',
+        `-# caught by **${plain(caught.by, 32)}** · only they can press Play`,
+      ],
+      caught.coverUrl ?? files.url(THUMB_FILE),
+      artist ? `${artist} — ${title}` : title,
+    );
+    container.addActionRowComponents(
+      row(button(CATCH_PLAY_PREFIX, 'Play it', '▶️', ButtonStyle.Primary)),
+    );
+    filled = true;
+  }
+
+  if (status.length > 0) {
+    if (filled) container.addSeparatorComponents(divider());
+    container.addTextDisplayComponents(textBlock(status));
+    filled = true;
+  }
+
+  if (view.radioVote) {
+    if (filled) container.addSeparatorComponents(divider());
+    container.addTextDisplayComponents(textBlock(voteLines(view.radioVote)));
+    container.addActionRowComponents(voteButtons(view.radioVote.counts));
+  }
+  return container;
 }
 
 /**
- * The website's Kitchen Board: what is on the stereo, who is in voice, the top
- * deals, and Radio Night. Friday's vote hangs underneath while it is open.
+ * The living Kitchen Board, three cards in one message: the stereo with its
+ * controls, the pantry with the top Steam deal and the Epic freebie, and the
+ * room with the latest catch, today's cookies, and Radio Night.
  */
-export function buildKitchenBoardDisplay(view: KitchenBoardView): EmbedCard {
-  const thumb = kitchenThumb();
-  const board = buildSiteEmbed({
-    color: view.stereo.kind === 'quiet' ? KITCHEN_COLOR : view.stereo.color,
-    author: boardAuthor(view.stereo),
-    authorUrl: view.stereo.kind === 'radio' ? view.stereo.websiteUrl : undefined,
-    title: boardTitle(view.stereo),
-    url: view.stereo.titleUrl,
-    fields: boardFields(view),
-    thumbnail: thumb ? THUMB_ATTACHMENT : undefined,
-  });
-
-  const embeds = [board];
-  const components: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
-  const buttons = boardButtons(view);
-  if (buttons) components.push(buttons);
-  if (view.radioVote) {
-    embeds.push(buildVoteEmbed(view.radioVote.counts, view.radioVote.total));
-    components.push(voteButtons(view.radioVote.counts));
-  }
-
-  return { embeds, components, files: thumb ? [thumb] : [] };
+export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay {
+  const files = new KitchenFiles();
+  const stereo =
+    view.stereo.kind === 'radio'
+      ? radioStereo(view)
+      : view.stereo.kind === 'music'
+        ? musicStereo(view)
+        : quietStereo(files);
+  const components = [stereo, pantryCard(view)];
+  const room = roomCard(view, files);
+  if (room) components.push(room);
+  return { components, flags: MessageFlags.IsComponentsV2, files: files.list() };
 }
 
+/** Everything the board shows. The same key means there is nothing to redraw. */
 export function kitchenViewKey(view: KitchenBoardView): string {
-  return [
-    BOARD_LAYOUT,
-    view.stereo.kind,
-    view.stereo.paused ? '1' : '0',
-    view.stereo.title,
-    view.stereo.artist,
-    view.stereo.sourceLabel,
-    view.stereo.titleUrl ?? '',
-    view.voiceChannelName ?? '',
-    String(view.listeners.length),
-    teaserKey(view.steam),
-    teaserKey(view.epic),
-    String(view.joinsToday),
-    view.radioNight?.stationName ?? '',
-    view.latestCatch
-      ? [
-          view.latestCatch.userId,
-          view.latestCatch.by,
-          view.latestCatch.title,
-          view.latestCatch.artist,
-        ].join(':')
-      : '',
-    view.radioVote
-      ? STATION_LIST.map((station) => `${station.id}:${view.radioVote!.counts[station.id]}`).join(
-          ',',
-        )
-      : '',
-  ].join('|');
+  return `${BOARD_LAYOUT}|${JSON.stringify(view)}`;
 }
 
-function teaserKey(teaser: KitchenDealTeaser | undefined): string {
-  if (!teaser) return '';
-  return [teaser.title, teaser.line, teaser.url ?? ''].join(':');
-}
-
-/** The current board, or one from before the website layout, which gets replaced. */
+/** The current board, or one from an older layout, which gets replaced. */
 export function looksLikeKitchenBoard(blob: string): boolean {
+  if (/kitchen board/i.test(blob) && /the pantry|radio night|in voice/i.test(blob)) return true;
   if (/\bin voice\b/i.test(blob) && /\bjoined today\b/i.test(blob)) return true;
   if (!/the kitchen/i.test(blob)) return false;
   if (/\bsteam\b/i.test(blob) && /\bepic\b/i.test(blob)) return true;
   return (
-    /live stereo|oven|quiet · the kitchen|on the stereo|jar’s full|cookies out of the jar/i.test(
+    /live stereo|oven’s off|quiet · the kitchen|on the stereo|jar’s full|cookies out of the jar/i.test(
       blob,
     ) || /● live|now playing/i.test(blob)
   );

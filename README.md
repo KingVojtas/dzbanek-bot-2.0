@@ -71,11 +71,15 @@ A restart puts that station back on if idle-radio is still on and people are sti
 
 ### 🍪 The Kitchen Board
 
-`/setup kitchen` hangs one living message and keeps editing it. Three cards stack in that message. The top card is the stereo: the song, or **The Kitchen** when nothing is on, who’s in voice, and **Catch** / **Stop** while the radio plays. The middle card stays amber: the top Steam deal (discount, price, and how many more) and the Epic free game. The bottom card shows up for the latest catch and its **Play** button, today’s joins, and Radio Night. Friday from **12:00 to 20:00** the vote buttons sit on that bottom card.
+`/setup kitchen` hangs one living message and keeps editing it. Three cards stack in that message:
+
+- **The stereo**, in the color of what’s playing. Radio shows a 🔴 LIVE badge with the station’s slogan, the song and artist, the album cover (or the station logo), and who’s listening, with **🍪 Catch**, **⏹️ Stop**, and **🌐 Website**. Music shows the video art as a banner, the length, who asked for it, and how many are up next, with **Pause / Resume**, **Skip**, **Queue**, and **Stop** right on the board. When nothing is on, the kitchen photo hangs there instead.
+- **The Pantry**, in amber. The Steam deal of the day with its cover, `−75%` chip, struck price, what you save, Steam’s review label, and a countdown to the end of the sale, plus how many more wait in the Steam channel. Under it, this week’s Epic freebie with its countdown, or the next one when nothing is free.
+- **The room**, when there’s news: the latest catch with its cover and a **▶️ Play it** button, today’s cookies, and Radio Night. Friday from **12:00 to 20:00** the vote sits here, with tally bars, a 👑 for the leader, a live countdown to 20:00, and 💋 / 🎸 / 🥁 buttons that show the count.
 
 Discord presence is the well. Each hour in Europe/Prague the three lines play once, twenty minutes each, in a new order: Purifying the source, Analyzing bacteria levels, Pouring fresh drops.
 
-On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for the week 📬: the songs people caught, and Friday’s Radio Night tally when anyone voted. The living board stays the live stereo.
+On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for the week 📬, with the kitchen photo on top: the songs people caught, with 🥇🥈🥉 and who caught them, and Friday’s Radio Night tally and winner when anyone voted. The living board stays the live stereo.
 
 ### 🌙 Radio Night
 
@@ -87,11 +91,15 @@ Every day at **03:33 Europe/Prague** Dzbanek reads Steam discounts from [game-de
 
 Very Positive games (score ≥ 8, or ≥ 80% positive with at least 10 reviews) sit at the top, deepest discount first. When the curated feed is shorter than 10, current Steam specials fill the empty seats — deepest discount, then the most reviews. Prices use the German storefront (`cc=de` → EUR).
 
+The card opens with a banner of the deal of the day. Then come ten ranked rows (🥇🥈🥉, then 4–10), each with the game’s box art, the `−75%` chip, the struck and current price, what you save, Steam’s review label for well-reviewed games, up to three store tags, and a live countdown to the end of the sale. The top game also gets its store blurb. At the bottom is the shelf’s total: what all ten cost today, against what they cost yesterday. **Browse all specials** and **Grab** the top deal sit underneath. Art that Discord can’t load is left out, and a row without art gets a **Store** button instead. Near Discord’s limits the card drops the extras first, and every row stays.
+
 The same 10-game lineup is remembered per server. A repeat stays in the pot. An empty feed stays quiet too.
 
 ### 🎁 Epic free games
 
 The Epic Store is checked at **12:00** and **17:00 Europe/Prague**, when the weekly free lineup usually turns over. Each server hears about a lineup once. The 03:33 slot belongs to Steam.
+
+The card opens with a gallery of this week’s free games. Under it, each game gets a row with its box art, **🆓 FREE** over the struck store price, and a live countdown to when it stops being free. The first game also shows its blurb and publisher. The card adds up what the week’s games are worth and carries a **Claim** button for each game, plus **All free games**. A grey **Coming next** card follows, with when each upcoming game unlocks.
 
 Both cupboards keep what they already served in SQLite (`data/bot.db`, Prisma), per server, so a restart cannot dish it out again.
 

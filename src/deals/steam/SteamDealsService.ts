@@ -15,11 +15,16 @@ import type { KitchenBoard } from '../../kitchen/KitchenBoard';
 import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
 import { resolveDealTargets, type DealTarget } from '../targets';
-import { attachStoreProfiles, type SteamStoreProfile } from './SteamBlockbuster';
+import { attachSteamArtwork, attachSteamHero } from './SteamArtwork';
+import {
+  attachSteamShelfMeta,
+  attachStoreProfiles,
+  type SteamStoreProfile,
+} from './SteamBlockbuster';
 import { SteamFeedReader } from './SteamFeedReader';
-import { SteamSpecialsReader } from './SteamSpecialsReader';
+import { SteamSpecialsReader, attachSteamSaleEnds } from './SteamSpecialsReader';
 import { extractAppId, fetchSteamPrice, formatSteamPrice } from './SteamPriceApi';
-import { fetchSteamReview, formatReview, type SteamReviewInfo } from './SteamReviewApi';
+import { fetchSteamReview, type SteamReviewInfo } from './SteamReviewApi';
 import {
   compareSteamDeals,
   isSteamFloorPrice,
@@ -150,16 +155,22 @@ export class SteamDealsService {
     const fingerprint = steamDigestFingerprint(top);
     const blockbusters = top.filter((item) => item.blockbuster).length;
     this.logger.info(`Steam: ${blockbusters} blockbuster(s) in this ${top.length}-game digest.`);
-    const prices = await this.fetchPrices(top);
-    const reviews = new Map<string, string>();
-    for (const item of top) {
-      const review = reviewMap.get(item.id);
-      if (review) reviews.set(item.id, formatReview(review));
+    // The banner reads the search capsule before the artwork pass swaps in portrait art.
+    const [prices] = await Promise.all([
+      this.fetchPrices(top),
+      attachSteamHero(top[0]),
+      attachSteamArtwork(top),
+      attachSteamShelfMeta(top, profiles),
+      attachSteamSaleEnds(top),
+    ]);
+    const missingArt = top.filter((item) => !item.image).length;
+    if (missingArt > 0) {
+      this.logger.warn(`Steam: no artwork for ${missingArt} of ${top.length} games.`);
     }
 
     let posted = 0;
     for (const target of targets) {
-      this.kitchen?.recordSteam(target.guildId, top, prices, reviews);
+      this.kitchen?.recordSteam(target.guildId, top, prices, reviewMap, target.channel.id);
       const sent = await this.postToGuild(target, top, fingerprint, prices, reviewMap);
       if (sent) posted += 1;
       this.kitchen?.refresh(target.guildId);
@@ -198,8 +209,11 @@ export class SteamDealsService {
     }
 
     try {
-      const card = buildSteamDealsDisplay(top, prices, reviewMap);
-      const sent = await target.channel.send({ embeds: card.embeds, components: card.components });
+      const display = buildSteamDealsDisplay(top, prices, reviewMap);
+      const sent = await target.channel.send({
+        components: display.components,
+        flags: display.flags,
+      });
       if (lastDigest) {
         try {
           await lastDigest.delete();
