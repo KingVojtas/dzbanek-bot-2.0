@@ -91,7 +91,7 @@ Every day at **03:33 Europe/Prague** Dzbanek reads Steam discounts from [game-de
 
 Very Positive games (score ≥ 8, or ≥ 80% positive with at least 10 reviews) sit at the top, deepest discount first. When the curated feed is shorter than 10, current Steam specials fill the empty seats — deepest discount, then the most reviews. Prices use the German storefront (`cc=de` → EUR).
 
-The card opens with a banner of the deal of the day. Then come ten ranked rows (🥇🥈🥉, then 4–10), each with the game’s box art, the `−75%` chip, the struck and current price, what you save, Steam’s review label for well-reviewed games, up to three store tags, and a live countdown to the end of the sale. The top game also gets its store blurb. At the bottom is the shelf’s total: what all ten cost today, against what they cost yesterday. **Browse all specials** and **Grab** the top deal sit underneath. Art that Discord can’t load is left out, and a row without art gets a **Store** button instead. Near Discord’s limits the card drops the extras first, and every row stays.
+The card has no header. It opens with a banner of the deal of the day, then ten numbered rows. Each row shows the game’s box art, the `−75%` chip, the struck and current price, and one quiet line with Steam’s review label (for well-reviewed games) and when the sale ends. A single footer line names the day and has an **All specials** button. Art that Discord can’t load is left out, and a row without art gets a **Store** button instead. Near Discord’s limits the card drops the banner first, and every row stays.
 
 The same 10-game lineup is remembered per server. A repeat stays in the pot. An empty feed stays quiet too.
 

@@ -291,10 +291,10 @@ function checkSteamRows(): void {
   const wants = [
     'Steam Daily Deals',
     STEAM_SHELF_MARKER,
-    '### 🥇 [Red Dead Redemption 2](https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/)',
-    '`−75%` ~~59,99€~~ → **14,99€** · you save 45,00€',
-    '💎 Very Positive · 91% of 600K',
-    '### 🥈 [Plain Game](https://store.steampowered.com/app/1/Plain/)',
+    '**1. [Red Dead Redemption 2](https://store.steampowered.com/app/1174180/Red_Dead_Redemption_2/)**',
+    '`−75%` ~~59,99€~~ → **14,99€**',
+    '💎 Very Positive',
+    '**2. [Plain Game](https://store.steampowered.com/app/1/Plain/)**',
     '**9,99€**',
   ];
   const missing = wants.filter((part) => !blob.includes(part));

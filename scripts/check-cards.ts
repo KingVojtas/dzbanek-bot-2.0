@@ -507,22 +507,21 @@ if (!looksLikeKitchenBoard('**Quiet** · The Kitchen\n### Oven’s off\n-# Jar�
   );
   const build = () => buildSteamDealsDisplay(items, prices, reviews);
   const json = checkV2('steam-digest-10', build, [
-    '## 💸 [Steam Daily Deals]',
-    'the 10 best discounts on Steam today',
-    '### 🥇 [Game 1](https://store.steampowered.com/app/1001/Game_1/)',
-    '### 4 · [Game 4]',
-    '`−90%` ~~59,99€~~ → **5,99€** · you save 54,00€',
-    '💎 Very Positive · 92% of 650K',
-    'Action, Adventure, Open World',
-    '⏳ ends <t:',
-    '> Winner of over 175 Game of the Year Awards',
+    '**1. [Game 1](https://store.steampowered.com/app/1001/Game_1/)**',
+    '**10. [Game 10]',
+    '`−90%` ~~59,99€~~ → **5,99€**',
+    '-# 💎 Very Positive · ⏳ ends <t:',
     'capsule_616x353.jpg',
-    'All 10 together: **59,90€** instead of ~~599,90€~~',
+    '💸 Steam Daily Deals · ',
     STEAM_SHELF_MARKER,
-    'Browse all specials',
+    '"label":"All specials"',
   ]);
   if (json.includes('Mixed')) fail('steam-chip', 'a Mixed game was labelled Mixed');
   else ok('steam-chip', 'only well-reviewed games wear a review label');
+  const clutter = ['## ', '### ', 'you save', '% of ', 'Open World', '> Winner', 'All 10 together'];
+  const left = clutter.filter((bit) => json.includes(bit));
+  if (left.length > 0) fail('steam-clean', `still shows ${left.join(' | ')}`);
+  else ok('steam-clean', 'no header, blurb, tags, savings, or shelf total');
 
   const text = v2MessageText(build());
   const titles = extractSteamDigestTitles(text);

@@ -36,7 +36,7 @@ const EPIC_LATER_COLOR = 0x8b93a7;
 export const STEAM_DIGEST_SIZE = 10;
 
 /** In the current Steam card's footer. An older card without it is replaced once. */
-export const STEAM_SHELF_MARKER = 'prices in € · Steam DE';
+export const STEAM_SHELF_MARKER = 'prices in € (Steam DE)';
 
 /** In the current Epic card's footer. An older card without it is replaced once. */
 export const EPIC_SHELF_MARKER = 'Free to keep forever once claimed';
@@ -524,8 +524,8 @@ export function steamPriceBits(item: SteamDealItem, apiPrice: string | null): St
   return { percent: Number.isFinite(n) && n > 0 ? n : 0, pay, was };
 }
 
-/** `−75%` chip, the struck price, today's price, and what stays in your pocket. */
-export function steamMoneyLine(bits: SteamPriceBits): string {
+/** `−75%` chip, the struck price, today's price, and (with `save`) what stays in your pocket. */
+export function steamMoneyLine(bits: SteamPriceBits, save = true): string {
   const chip = bits.percent ? `\`−${bits.percent}%\`` : '';
   const price = bits.pay
     ? bits.was
@@ -534,8 +534,9 @@ export function steamMoneyLine(bits: SteamPriceBits): string {
     : '';
   const was = moneyToCents(bits.was);
   const pay = moneyToCents(bits.pay);
-  const save = was != null && pay != null && was > pay ? `you save ${euros(was - pay)}` : '';
-  return [[chip, price].filter(Boolean).join(' '), save].filter(Boolean).join(' · ');
+  const saved =
+    save && was != null && pay != null && was > pay ? `you save ${euros(was - pay)}` : '';
+  return [[chip, price].filter(Boolean).join(' '), saved].filter(Boolean).join(' · ');
 }
 
 const REVIEW_EMOJI: Record<string, string> = {
@@ -582,24 +583,15 @@ export function steamSaleEnds(value: string | undefined): string {
   return `⏳ ends ${Number(iso[3])} ${month}`;
 }
 
-function tagLine(tags: string | undefined, limit: number): string {
-  return (tags ?? '')
-    .split('·')
-    .map((tag) => tag.replace(/\s+/g, ' ').trim())
-    .filter(Boolean)
-    .slice(0, limit)
-    .join(', ');
-}
-
 /** Title as it appears in a digest row. Duplicate checks compare against this. */
 export function steamDealTitle(item: SteamDealItem): string {
   return linkText(item.gameName, 80);
 }
 
-const MEDALS = ['🥇', '🥈', '🥉'];
-
-function rankBadge(rank: number): string {
-  return MEDALS[rank - 1] ?? `${rank} ·`;
+/** Steam's label alone, without the counts, for the digest's quiet line. */
+function steamReviewLabel(review: SteamReviewInfo | null | undefined): string {
+  if (!review || !isGoodReview(review) || !review.scoreDesc) return '';
+  return `${REVIEW_EMOJI[review.scoreDesc] ?? '⭐'} ${review.scoreDesc}`;
 }
 
 function steamRow(
@@ -611,44 +603,19 @@ function steamRow(
 ): SectionBuilder | TextDisplayBuilder {
   const title = steamDealTitle(item);
   const lines = [
-    `### ${rankBadge(rank)} ${linked(title, item.link)}`,
-    steamMoneyLine(steamPriceBits(item, apiPrice)),
+    `**${rank}. ${linked(title, item.link)}**`,
+    steamMoneyLine(steamPriceBits(item, apiPrice), false),
   ];
-  const blurb = rank === 1 && extras.blurb ? plainBlurb(item.description, 170) : '';
-  if (blurb) lines.push(`> ${blurb}`);
-  const tags = extras.tags ? tagLine(item.tags, 3) : '';
-  const meta = [steamReviewChip(review), tags, steamSaleEnds(item.expires)]
-    .filter(Boolean)
-    .join(' · ');
+  const meta = extras.meta
+    ? [steamReviewLabel(review), steamSaleEnds(item.expires)].filter(Boolean).join(' · ')
+    : '';
   if (meta) lines.push(`-# ${meta}`);
   return artSection(lines, httpImage(item.image), title, { label: 'Store', url: item.link });
 }
 
-/** What the whole shelf costs today against what it cost yesterday. */
-function steamShelfTotal(
-  items: SteamDealItem[],
-  prices: Map<string, string | null>,
-): { count: number; pay: number; was: number } | null {
-  let count = 0;
-  let pay = 0;
-  let was = 0;
-  for (const item of items) {
-    const bits = steamPriceBits(item, prices.get(item.id) ?? null);
-    const payCents = moneyToCents(bits.pay);
-    const wasCents = moneyToCents(bits.was);
-    if (payCents == null || wasCents == null || wasCents <= payCents) continue;
-    count += 1;
-    pay += payCents;
-    was += wasCents;
-  }
-  return count >= 2 ? { count, pay, was } : null;
-}
-
 interface SteamExtras {
   hero: boolean;
-  grab: boolean;
-  blurb: boolean;
-  tags: boolean;
+  meta: boolean;
 }
 
 function steamContainer(
@@ -658,16 +625,7 @@ function steamContainer(
   extras: SteamExtras,
 ): ContainerBuilder {
   const lead = top[0];
-  const container = new ContainerBuilder()
-    .setAccentColor(SITE_STEAM)
-    .addTextDisplayComponents(
-      textBlock([
-        `## 💸 [Steam Daily Deals](${STEAM_SPECIALS_URL})`,
-        top.length > 0
-          ? `-# ${pragueDay()} · the ${top.length} best discounts on Steam today`
-          : `-# ${pragueDay()}`,
-      ]),
-    );
+  const container = new ContainerBuilder().setAccentColor(SITE_STEAM);
 
   const hero = extras.hero ? httpImage(lead?.heroImage) : undefined;
   if (lead && hero) {
@@ -698,30 +656,21 @@ function steamContainer(
     ),
   );
 
-  const total = steamShelfTotal(top, prices);
   container
     .addSeparatorComponents(divider())
-    .addTextDisplayComponents(
-      textBlock([
-        total
-          ? `🧾 All ${total.count} together: **${euros(total.pay)}** instead of ~~${euros(total.was)}~~. That's **${euros(total.was - total.pay)}** that stays in your pocket.`
-          : '',
-        `-# 🕒 A fresh shelf every morning at 03:33 · ${STEAM_SHELF_MARKER}`,
-      ]),
+    .addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          textBlock([`-# 💸 Steam Daily Deals · ${pragueDay()} · ${STEAM_SHELF_MARKER}`]),
+        )
+        .setButtonAccessory(linkButton('All specials', STEAM_SPECIALS_URL)),
     );
-
-  const buttons = [linkButton('Browse all specials', STEAM_SPECIALS_URL, '💸')];
-  if (extras.grab && lead?.link && /^https?:\/\//i.test(lead.link)) {
-    buttons.push(linkButton(`Grab ${steamDealTitle(lead)}`, lead.link, '🛒'));
-  }
-  container.addActionRowComponents(linkRow(buttons));
   return container;
 }
 
 /**
- * Steam digest: a banner of the deal of the day, ten ranked store rows with
- * their art, prices, Steam's review label, tags, and a countdown to the end of
- * the sale, then what the whole shelf saves you.
+ * Steam digest: the deal of the day's banner, then ten numbered store rows
+ * with their art, price, Steam's review label, and when the sale ends.
  */
 export function buildSteamDealsDisplay(
   items: SteamDealItem[],
@@ -729,14 +678,11 @@ export function buildSteamDealsDisplay(
   reviews: Map<string, SteamReviewInfo | null> = new Map(),
 ): V2Display {
   const top = items.slice(0, STEAM_DIGEST_SIZE);
-  // Near Discord's caps the extras go first: the second button, the banner,
-  // the blurb, then the tags. Prices and ranks always stay.
+  // Near Discord's caps the banner goes first, then the quiet lines. Prices stay.
   const tries: SteamExtras[] = [
-    { hero: true, grab: true, blurb: true, tags: true },
-    { hero: true, grab: false, blurb: true, tags: true },
-    { hero: false, grab: false, blurb: true, tags: true },
-    { hero: false, grab: false, blurb: false, tags: true },
-    { hero: false, grab: false, blurb: false, tags: false },
+    { hero: true, meta: true },
+    { hero: false, meta: true },
+    { hero: false, meta: false },
   ];
   let container = steamContainer(top, prices, reviews, tries[0]!);
   for (const extras of tries.slice(1)) {
@@ -929,9 +875,9 @@ function headingTitles(blob: string): string[] {
   return [...blob.matchAll(/^###\s+[^[\n]*?\[([^\]]+)\]\(/gm)].map((m) => m[1]!.trim());
 }
 
-/** Ranked titles from a Steam digest's text, in order. */
+/** Numbered titles from a Steam digest's text, in order. */
 export function extractSteamDigestTitles(blob: string): string[] {
-  return headingTitles(blob);
+  return [...blob.matchAll(/^\*\*\d+\.\s+\[([^\]]+)\]\(/gm)].map((m) => m[1]!.trim());
 }
 
 /** Free and upcoming titles from an Epic card's text, in order. */
