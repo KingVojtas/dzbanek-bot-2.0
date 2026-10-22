@@ -3,6 +3,7 @@ import type { Command } from '../core/types';
 import { setup } from './admin/setup';
 import { buildHelpCommand } from './help';
 import { textRoom, voiceRoom } from './rooms';
+import { quiz } from './quiz';
 import { radio } from './radio';
 import { steam } from './steam';
 import { nowPlaying } from './music/nowplaying';
@@ -20,6 +21,7 @@ const commandList: Command[] = [
   voiceRoom,
   radio,
   steam,
+  quiz,
   play,
   queue,
   nowPlaying,

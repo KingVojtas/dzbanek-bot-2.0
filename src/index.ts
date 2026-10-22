@@ -9,7 +9,7 @@ import { DISCORD_TOKEN, config } from './config';
 import { createClient } from './core/client';
 import { logger, type Logger } from './core/logger';
 import type { Services } from './core/types';
-import { ensureGuildSettingsColumns, ensureSteamLinkTable } from './db/client';
+import { ensureGuildSettingsColumns, ensureQuizTables, ensureSteamLinkTable } from './db/client';
 import { migrateJsonStoresIfNeeded } from './db/migrate-json';
 import { EpicFreeGamesService } from './deals/epic/EpicFreeGamesService';
 import { GuildSettingsStore } from './deals/guild-settings';
@@ -23,6 +23,9 @@ import { KITCHEN_CHART_CRON } from './kitchen/chart';
 import { RADIO_NIGHT_CRON } from './kitchen/display';
 import { LorePresence } from './kitchen/presence';
 import { MusicManager } from './music/MusicManager';
+import { RadioCatchStore } from './kitchen/catches';
+import { QuizManager } from './quiz/QuizManager';
+import { PlayedTrackStore, QuizScoreStore } from './quiz/stores';
 import { RadioManager } from './radio/RadioManager';
 import { getStation } from './radio/station';
 
@@ -38,6 +41,7 @@ async function main(): Promise<void> {
 
   await ensureGuildSettingsColumns();
   await ensureSteamLinkTable();
+  await ensureQuizTables();
   await migrateJsonStoresIfNeeded();
 
   const guildSettings = new GuildSettingsStore();
@@ -49,6 +53,21 @@ async function main(): Promise<void> {
   music.setPreempt((guildId) => radio.stop(guildId));
   const kitchen = new KitchenBoard(client, music, radio, guildSettings, config, logger);
   const presence = new LorePresence(client, logger, config.timezone);
+  const played = new PlayedTrackStore();
+  const quiz = new QuizManager(
+    music,
+    radio,
+    played,
+    new RadioCatchStore(),
+    new QuizScoreStore(),
+    logger,
+  );
+  music.setOnTrackStart((guildId, track) => {
+    void played.record(guildId, track).catch((error) => {
+      logger.debug('Failed to remember a played track:', error);
+    });
+  });
+  kitchen.setBusy((guildId) => quiz.isActive(guildId));
   radio.setOnStation((guildId, station, channelId) => {
     void guildSettings
       .upsert(guildId, { lastRadioStation: station.id, lastRadioChannelId: channelId })
@@ -81,6 +100,7 @@ async function main(): Promise<void> {
     kitchen,
     steamLinks,
     wishlistRadar,
+    quiz,
   };
 
   const steamService = new SteamDealsService(client, seen, config, logger, guildSettings);
@@ -144,6 +164,7 @@ async function main(): Promise<void> {
     // Keep the saved radio channel so the next boot resumes the station.
     radio.stopAll();
     music.stopAll();
+    quiz.stopAll();
     void client
       .destroy()
       .catch(() => {})

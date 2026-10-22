@@ -70,6 +70,7 @@ export class GuildPlayer {
     private readonly idleTimeoutSec: number,
     private readonly onDestroy: () => void,
     private readonly onQueueIdle: ((guildId: string, channelId: string) => void) | null = null,
+    private readonly onTrackStart: ((track: Track) => void) | null = null,
   ) {
     this.player = createAudioPlayer();
     this.connection.subscribe(this.player);
@@ -479,6 +480,7 @@ export class GuildPlayer {
       this.currentResource = resource;
       this.player.play(resource);
       this.logger.info(`Audio player started: ${track.title} (${this.queue.length} still queued)`);
+      this.onTrackStart?.(track);
 
       void this.publishFreshNowPlaying(track).catch((err: unknown) =>
         this.logger.debug('publishFreshNowPlaying failed:', err),

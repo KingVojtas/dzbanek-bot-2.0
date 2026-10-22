@@ -96,6 +96,11 @@ async function playRadio(
     return;
   }
 
+  if (services.quiz.isActive(guildId)) {
+    await replyEphemeral(interaction, '🎧 A quiz is on. `/quiz stop` ends it.');
+    return;
+  }
+
   const station = getStation(interaction.options.getString('station', true));
   if (!station) {
     await replyEphemeral(interaction, '❌ Unknown radio station.');

@@ -39,6 +39,23 @@ import type { EpicFreeGame, SteamDealItem, Track } from '../src/core/types';
 import type { SteamReviewInfo } from '../src/deals/steam/SteamReviewApi';
 import { parseSteamProfileInput } from '../src/deals/steam/SteamWishlist';
 import {
+  answerId,
+  buildQuizLobbyDisplay,
+  buildQuizPodiumDisplay,
+  buildQuizRevealDisplay,
+  buildQuizRoundDisplay,
+  parseQuizButton,
+} from '../src/quiz/display';
+import {
+  buildChoices,
+  cleanTitle,
+  clipStart,
+  dedupeSongs,
+  roundPoints,
+  songFromCatch,
+  songFromTrack,
+} from '../src/quiz/songs';
+import {
   digestWishers,
   radarView,
   type WishlistHit,
@@ -894,6 +911,148 @@ checkEmbedCard(
     '1 game · nothing on sale right now',
     'Page 1 of 1',
   ]);
+}
+
+/* ---------- Kitchen Quiz ---------- */
+
+{
+  const expect = (name: string, got: unknown, want: unknown): void => {
+    if (JSON.stringify(got) === JSON.stringify(want)) ok(name, String(want));
+    else fail(name, `got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+  };
+  expect(
+    'quiz-clean-title',
+    cleanTitle('Queen – Bohemian Rhapsody (Official Video Remastered) [4K] | Queen Official'),
+    'Queen – Bohemian Rhapsody',
+  );
+  expect('quiz-clean-keeps-remix', cleanTitle('Song (Tiësto Remix)'), 'Song (Tiësto Remix)');
+  expect(
+    'quiz-song-split',
+    songFromTrack(
+      { title: 'Daft Punk - One More Time (Official Video)', url: 'u', durationSec: 320 },
+      { kind: 'play' },
+    ).label,
+    'Daft Punk — One More Time',
+  );
+  expect(
+    'quiz-song-uploader',
+    songFromTrack(
+      { title: 'Bohemian Rhapsody', url: 'u', uploader: 'Queen - Topic', durationSec: 359 },
+      { kind: 'play' },
+    ).label,
+    'Queen — Bohemian Rhapsody',
+  );
+  expect(
+    'quiz-points',
+    [roundPoints(0, 1), roundPoints(10_000, 1), roundPoints(20_000, 1), roundPoints(0, 3)],
+    [150, 125, 100, 175],
+  );
+  expect(
+    'quiz-clip-start',
+    [clipStart(214), clipStart(30), clipStart(0), clipStart(600)],
+    [75, 14, 45, 90],
+  );
+
+  const pool = dedupeSongs([
+    ...Array.from({ length: 8 }, (_, i) =>
+      songFromCatch({ artist: `Artist ${i % 3}`, title: `Song ${i}`, userId: '1' }),
+    ),
+    songFromCatch({ artist: 'Artist 0', title: 'Song 0', userId: '2' }),
+  ]);
+  expect('quiz-dedupe', pool.length, 8);
+  let seed = 7;
+  const rng = (): number => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+  let bad = '';
+  for (const answer of pool) {
+    const { labels, correct } = buildChoices(pool, answer, rng);
+    if (labels.length !== 4 || new Set(labels).size !== 4 || labels[correct] !== answer.label) {
+      bad = `${answer.label}: ${labels.join(' | ')} @${correct}`;
+    }
+  }
+  if (bad) fail('quiz-choices', bad);
+  else ok('quiz-choices', 'four different titles, the answer exactly once, at the right letter');
+
+  const parsed = parseQuizButton(answerId('abc123', 3, 2));
+  expect('quiz-button-id', parsed, { session: 'abc123', kind: 'answer', round: 3, choice: 2 });
+
+  const long = 'A Very Long Song Title That Keeps Going (Extended Club Mix) feat. Somebody Else';
+  const labels = [long, `${long} 2`, `${long} 3`, `${long} 4`].map(
+    (title) => songFromCatch({ artist: 'Somebody With A Long Name', title, userId: '1' }).label,
+  );
+  const players = Array.from({ length: 12 }, (_, i) => ({
+    userId: String(100 + i),
+    score: 1500 - i * 100,
+    correct: 10 - (i % 10),
+    bestMs: 1200 + i * 300,
+  }));
+  checkV2(
+    'quiz-lobby',
+    () =>
+      buildQuizLobbyDisplay({
+        session: 'abc123',
+        rounds: 10,
+        source: '23 kitchen songs',
+        starterId: '42',
+        voiceChannelId: '77',
+        startsAt: Date.now() + 20_000,
+      }),
+    ['🎧 Kitchen Quiz', '**10 rounds**', '<#77>', 'quiz:abc123:start'],
+  );
+  checkV2(
+    'quiz-round',
+    () =>
+      buildQuizRoundDisplay({
+        session: 'abc123',
+        round: 3,
+        rounds: 10,
+        labels,
+        closesAt: Date.now() + 20_000,
+        answered: 2,
+        top: players,
+      }),
+    ['Round 3/10', 'quiz:abc123:a:3:0', 'quiz:abc123:a:3:3', '2 answers in', '🥇 <@100>'],
+  );
+  const revealJson = checkV2(
+    'quiz-reveal',
+    () =>
+      buildQuizRevealDisplay({
+        session: 'abc123',
+        round: 3,
+        rounds: 10,
+        labels,
+        correct: 1,
+        song: {
+          ...pool[0]!,
+          url: 'https://www.youtube.com/watch?v=x',
+          thumbnail: 'https://i.ytimg.com/x.jpg',
+        },
+        winners: ['100', '101'],
+        fastest: { userId: '100', ms: 2400 },
+        top: players,
+        nextAt: Date.now() + 6_000,
+      }),
+    ['✅ B ·', '🍪 caught by <@1>', '⚡ Fastest: <@100> in 2.4 s', '🎯 <@100>, <@101> got it'],
+  );
+  const greens = (revealJson.match(/"style":3/g) ?? []).length;
+  if (greens !== 1) fail('quiz-reveal-green', `${greens} green buttons`);
+  else ok('quiz-reveal-green', 'only the right answer turns green');
+  checkV2(
+    'quiz-podium',
+    () =>
+      buildQuizPodiumDisplay({
+        session: 'abc123',
+        standings: players,
+        played: 10,
+        rounds: 10,
+        stopped: false,
+      }),
+    [
+      '🏁 Kitchen Quiz · final',
+      '🏆 <@100> takes it with **1,500**',
+      '10. <@109>',
+      'quiz:abc123:again',
+    ],
+  );
 }
 
 /* ---------- /help (Components V2) ---------- */

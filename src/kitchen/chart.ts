@@ -90,6 +90,8 @@ export function buildKitchenChartDisplay(view: {
   weekLabel: string;
   songs: ChartSongLine[];
   night?: ChartNight;
+  /** The week's Kitchen Quiz champion, by points over every game. */
+  quiz?: { name: string; score: number; games: number };
 }): KitchenDisplay {
   const files = new KitchenFiles();
   const container = new ContainerBuilder().setAccentColor(KITCHEN_COLOR);
@@ -135,6 +137,18 @@ export function buildKitchenChartDisplay(view: {
     container
       .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
       .addTextDisplayComponents(text(night));
+  }
+
+  if (view.quiz) {
+    const games = view.quiz.games === 1 ? '1 game' : `${view.quiz.games} games`;
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(
+        text([
+          '### 🎧 Kitchen Quiz',
+          `🏆 **${plain(view.quiz.name, 40)}** is the champion of the week · ${view.quiz.score.toLocaleString('en-US')} points over ${games}`,
+        ]),
+      );
   }
 
   container.addTextDisplayComponents(text(['-# 🍪 The Kitchen · see you next week']));

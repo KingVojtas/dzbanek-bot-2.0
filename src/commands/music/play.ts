@@ -30,6 +30,13 @@ export const play: Command = {
     ),
 
   async execute(interaction, services) {
+    if (interaction.guildId && services.quiz.isActive(interaction.guildId)) {
+      await interaction.reply({
+        embeds: [buildReplyEmbed('warn', '🎧 A quiz is on. `/quiz stop` ends it.')],
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
     const member = interaction.member;
     const voiceChannel = member instanceof GuildMember ? member.voice.channel : null;
     if (!voiceChannel) {

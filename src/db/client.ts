@@ -46,6 +46,33 @@ export async function ensureSteamLinkTable(): Promise<void> {
   );
 }
 
+/** Kitchen Quiz tables: the song pool and the scores. */
+export async function ensureQuizTables(): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    'CREATE TABLE IF NOT EXISTS "PlayedTrack" (' +
+      '"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, ' +
+      '"guildId" TEXT NOT NULL, "url" TEXT NOT NULL, "title" TEXT NOT NULL, ' +
+      '"uploader" TEXT, "thumbnail" TEXT, "durationSec" INTEGER NOT NULL DEFAULT 0, ' +
+      '"requestedById" TEXT, "playedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS "PlayedTrack_guildId_url_key" ON "PlayedTrack"("guildId", "url")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "PlayedTrack_guildId_playedAt_idx" ON "PlayedTrack"("guildId", "playedAt")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE TABLE IF NOT EXISTS "QuizScore" (' +
+      '"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, ' +
+      '"guildId" TEXT NOT NULL, "userId" TEXT NOT NULL, "score" INTEGER NOT NULL, ' +
+      '"correct" INTEGER NOT NULL, "rounds" INTEGER NOT NULL, ' +
+      '"playedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "QuizScore_guildId_playedAt_idx" ON "QuizScore"("guildId", "playedAt")',
+  );
+}
+
 if (process.env.NODE_ENV !== 'production') {
   global.prisma = prisma;
 }

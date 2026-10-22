@@ -85,6 +85,21 @@ On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for t
 
 `/radio night` (Manage Server) picks a voice channel and a fallback station. On Friday from **12:00 to 20:00 Europe/Prague** the Kitchen Board puts out Kiss / Rock / Beat vote buttons. One vote per person, and you can change your mind. At **20:00** the winner starts in that channel. A tie falls through the scheduled station, then the last station that played, then Beat. `/radio night-off` takes it off the calendar.
 
+### 🎧 Kitchen Quiz
+
+Name that tune, in voice, using the kitchen’s own music. `/quiz start` joins your voice channel and takes the speaker, as radio does. A lobby card counts down 20 seconds (or press **Start now**). Each round plays 15 seconds from the middle of a song, and the card offers four titles as buttons. Only people in the quiz’s voice channel can answer, once each per round.
+
+- **Points:** 100 for the right song, up to 50 more for speed (falling over the 20-second window), and 25 extra on every third right answer in a row.
+- **Reveal:** the right button turns green. The card shows the song’s art and artist, who brought the song to the kitchen (their `/play` or their 🍪 catch), the fastest right answer, and the top three. The round closes early once everyone in voice has answered.
+- **Podium:** 🥇🥈🥉 with scores, right answers, and each player’s fastest time, plus **Play again**. The Sunday postcard names the week’s quiz champion.
+
+The songs are every track the server `/play`ed (remembered from now on, newest 500) plus every radio catch. With `playlist:`, a YouTube or Spotify playlist or album is the pool instead. The quiz needs at least 4 songs. Clips are cut while the previous round plays, and an unplayable song is swapped for another. `/play` and `/radio play` wait until `/quiz stop` or the end of the game, and Radio Night skips its slot while a quiz holds the speaker.
+
+| Command                           | What it does                                                     |
+| --------------------------------- | ---------------------------------------------------------------- |
+| `/quiz start [rounds] [playlist]` | Start a quiz in your voice channel (5–20 rounds, 10 by default). |
+| `/quiz stop`                      | End it now and show the podium.                                  |
+
 ### 💸 Steam daily deals
 
 Every day at **03:33 Europe/Prague** Dzbanek reads Steam discounts from [game-deals.app](https://game-deals.app) and the current Steam specials list, then posts a fresh **10-game** digest in every server that has a Steam channel.

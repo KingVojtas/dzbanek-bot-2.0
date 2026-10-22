@@ -30,6 +30,7 @@ import type { SeenStore } from '../deals/seen-store';
 import { resolveGuildSendableChannel } from '../deals/targets';
 import type { GuildSettingsStore } from '../deals/guild-settings';
 import type { MusicManager } from '../music/MusicManager';
+import { QuizScoreStore } from '../quiz/stores';
 import type { RadioManager } from '../radio/RadioManager';
 import { getStation, type RadioStation, type StationId } from '../radio/station';
 import {
@@ -89,6 +90,8 @@ export class KitchenBoard {
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly votes = new RadioNightVoteStore();
   private readonly catches = new RadioCatchStore();
+  private readonly quizScores = new QuizScoreStore();
+  private busy: ((guildId: string) => boolean) | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -142,6 +145,11 @@ export class KitchenBoard {
       );
     }, TICK_MS);
     this.tickTimer.unref?.();
+  }
+
+  /** Radio Night waits out anything else that holds the speaker, such as a quiz. */
+  setBusy(fn: (guildId: string) => boolean): void {
+    this.busy = fn;
   }
 
   recordSteam(
@@ -269,7 +277,14 @@ export class KitchenBoard {
         }
       }
 
-      const display = buildKitchenChartDisplay({ weekLabel: week.label, songs, night });
+      const champion = await this.quizScores.champion(row.guildId, week.from, week.to);
+      const championMember = champion ? guild.members.cache.get(champion.userId) : undefined;
+      const quiz =
+        champion && championMember
+          ? { name: displayName(championMember), score: champion.score, games: champion.games }
+          : undefined;
+
+      const display = buildKitchenChartDisplay({ weekLabel: week.label, songs, night, quiz });
       try {
         await channel.send({
           components: display.components,
@@ -292,6 +307,10 @@ export class KitchenBoard {
   ): Promise<boolean> {
     const guild = await this.client.guilds.fetch(guildId).catch(() => null);
     if (!guild) return false;
+    if (this.busy?.(guildId)) {
+      this.logger.info(`Radio Night: a quiz holds the speaker in ${guild.name} — skipped.`);
+      return false;
+    }
     const raw =
       guild.channels.cache.get(voiceChannelId) ??
       (await guild.channels.fetch(voiceChannelId).catch(() => null));

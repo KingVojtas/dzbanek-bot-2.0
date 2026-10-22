@@ -13,6 +13,7 @@ import type { WishlistRadar } from '../deals/steam/WishlistRadar';
 import type { SteamLinkStore } from '../deals/steam/steam-links';
 import type { KitchenBoard } from '../kitchen/KitchenBoard';
 import type { MusicManager } from '../music/MusicManager';
+import type { QuizManager } from '../quiz/QuizManager';
 import type { RadioManager } from '../radio/RadioManager';
 
 /** Shared services injected into every command's `execute`. */
@@ -25,6 +26,7 @@ export interface Services {
   kitchen: KitchenBoard;
   steamLinks: SteamLinkStore;
   wishlistRadar: WishlistRadar;
+  quiz: QuizManager;
 }
 
 /** Loop modes for music queue. */

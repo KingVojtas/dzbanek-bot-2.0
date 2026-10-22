@@ -83,3 +83,32 @@ model SteamLink {
   steamId  String
   linkedAt DateTime @default(now())
 }
+
+/// A track that started playing, per server: the default song pool for Kitchen Quiz.
+model PlayedTrack {
+  id            Int      @id @default(autoincrement())
+  guildId       String
+  url           String
+  title         String
+  uploader      String?
+  thumbnail     String?
+  durationSec   Int      @default(0)
+  requestedById String?
+  playedAt      DateTime @default(now())
+
+  @@unique([guildId, url])
+  @@index([guildId, playedAt])
+}
+
+/// One player's result in one Kitchen Quiz game.
+model QuizScore {
+  id       Int      @id @default(autoincrement())
+  guildId  String
+  userId   String
+  score    Int
+  correct  Int
+  rounds   Int
+  playedAt DateTime @default(now())
+
+  @@index([guildId, playedAt])
+}

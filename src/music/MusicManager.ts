@@ -9,6 +9,7 @@ import type { VoiceBasedChannel } from 'discord.js';
 import { update as updateYoutubeDl } from 'youtube-dl-exec';
 import type { Config } from '../config';
 import type { Logger } from '../core/logger';
+import type { Track } from '../core/types';
 import { GuildPlayer } from './GuildPlayer';
 import { CompositeTrackSource } from './sources';
 import { ensureYtDlpCookies } from './ytdlp-cookies';
@@ -22,6 +23,7 @@ export class MusicManager {
   private readonly source = new CompositeTrackSource();
   private preemptRadio: ((guildId: string) => void) | null = null;
   private onQueueIdle: ((guildId: string, channelId: string) => void) | null = null;
+  private onTrackStart: ((guildId: string, track: Track) => void) | null = null;
 
   constructor(
     private readonly config: Config,
@@ -46,6 +48,11 @@ export class MusicManager {
   /** After the idle timeout on an empty queue, optionally start radio in that channel. */
   setIdleHandoff(fn: (guildId: string, channelId: string) => void): void {
     this.onQueueIdle = fn;
+  }
+
+  /** Every track that starts playing, e.g. for the Kitchen Quiz song pool. */
+  setOnTrackStart(fn: (guildId: string, track: Track) => void): void {
+    this.onTrackStart = fn;
   }
 
   get(guildId: string): GuildPlayer | undefined {
@@ -154,6 +161,7 @@ export class MusicManager {
       this.config.music.idleTimeoutSec,
       () => this.subscriptions.delete(guildId),
       (idleGuildId, idleChannelId) => this.onQueueIdle?.(idleGuildId, idleChannelId),
+      (track) => this.onTrackStart?.(guildId, track),
     );
     this.subscriptions.set(guildId, player);
     this.logger.info(`Voice ready in guild ${guildId} → #${channel.name} (${channel.id})`);

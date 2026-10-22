@@ -14,6 +14,7 @@ import { QUEUE_BUTTON_PREFIX, WISHLIST_BUTTON_PREFIX, buildQueueDisplay } from '
 import { buildReplyEmbed, type EmbedCard, type ReplyTone } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { wishlistCard } from '../commands/steam';
+import { QUIZ_BUTTON_PREFIX } from '../quiz/display';
 import { RadioCatchStore } from '../kitchen/catches';
 import { CATCH_PLAY_PREFIX, KITCHEN_BUTTON_SUFFIX, RADIO_VOTE_PREFIX } from '../kitchen/display';
 import { isStationId } from '../kitchen/votes';
@@ -89,6 +90,11 @@ async function handleButton(interaction: ButtonInteraction, services: Services):
     interaction.customId.startsWith(`${CATCH_PLAY_PREFIX}:`)
   ) {
     await handleCatchPlay(interaction, services);
+    return;
+  }
+
+  if (interaction.customId.startsWith(QUIZ_BUTTON_PREFIX)) {
+    await services.quiz.handleButton(interaction);
     return;
   }
 
