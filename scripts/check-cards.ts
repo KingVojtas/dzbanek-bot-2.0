@@ -25,6 +25,8 @@ import {
   looksLikeSteamDigest,
   selectEpicLineup,
   steamDealTitle,
+  steamMoneyLine,
+  steamPriceBits,
   v2TextLength,
   type V2Display,
 } from '../src/core/display';
@@ -511,7 +513,7 @@ if (!looksLikeKitchenBoard('**Quiet** · The Kitchen\n### Oven’s off\n-# Jar�
     '**10. [Game 10]',
     '`−90%` ~~59,99€~~ → **5,99€**',
     'Winner of over 175 Game of the Year Awards and recipient of over 250 perfect scores',
-    '-# Action, Adventure, Open World · 💎 Very Positive · ⏳ ends <t:',
+    '-# Action, Adventure, Open World · 💎 Very Positive\\n-# ⏳ ends <t:',
     '💸 Steam Daily Deals · ',
     STEAM_SHELF_MARKER,
     '"label":"All specials"',
@@ -557,6 +559,19 @@ if (!looksLikeKitchenBoard('**Quiet** · The Kitchen\n### Oven’s off\n-# Jar�
 
   const bare = items.map((item) => ({ ...item, image: undefined, heroImage: undefined }));
   checkV2('steam-no-art', () => buildSteamDealsDisplay(bare, prices, reviews), ['"label":"Store"']);
+}
+
+{
+  // A feed row that lags behind Steam: same price twice, with the feed's </s> left on.
+  const stale: SteamDealItem = {
+    ...steamItem(1),
+    salePrice: '€59,99',
+    originalPrice: '€59,99</s>',
+    discount: '-50%',
+  };
+  const line = steamMoneyLine(steamPriceBits(stale, null));
+  if (line !== '**€59,99**') fail('steam-stale-price', `shows ${line}`);
+  else ok('steam-stale-price', 'the same price twice shows once, with no chip or strike');
 }
 
 checkV2('steam-empty', () => buildSteamDealsDisplay([], new Map()), [

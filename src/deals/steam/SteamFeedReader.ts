@@ -74,10 +74,11 @@ function parseContent(content: string): {
     description = description.slice(0, 160).trim() + '…';
   }
 
+  // Prices stop at a tag or tilde, so `<s>€59,99</s>` yields `€59,99`, not `€59,99</s>`.
   const priceMatch =
     content.match(
-      /(?:<strong>\s*Price:\s*<\/strong>| \*\*Price:\s*\*\*)\s*(\S+)\s+(?:<s>|~~)?(\S+)(?:<\/s>|~~)?\s*\(([^)]+)\)/i,
-    ) || content.match(/\*\*Price:\s*\*\*\s*(\S+)\s+(\S+)\s+\(([^)]+)\)/);
+      /(?:<strong>\s*Price:\s*<\/strong>| \*\*Price:\s*\*\*)\s*([^\s<~]+)\s+(?:<s>|~~)?([^\s<~]+)(?:<\/s>|~~)?\s*\(([^)]+)\)/i,
+    ) || content.match(/\*\*Price:\s*\*\*\s*([^\s<~]+)\s+([^\s<~]+)\s+\(([^)]+)\)/);
 
   return {
     description,

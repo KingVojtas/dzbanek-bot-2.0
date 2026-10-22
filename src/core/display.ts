@@ -39,7 +39,7 @@ export const STEAM_DIGEST_SIZE = 10;
  * In the current Steam card's footer, and part of the digest fingerprint.
  * Change it when the layout changes: every server's card is replaced once.
  */
-export const STEAM_SHELF_MARKER = 'euro prices from Steam DE';
+export const STEAM_SHELF_MARKER = 'euro prices · Steam DE';
 
 /** In the current Epic card's footer. An older card without it is replaced once. */
 export const EPIC_SHELF_MARKER = 'Free to keep forever once claimed';
@@ -518,13 +518,21 @@ export interface SteamPriceBits {
 /** Discount, today's price, and the struck price, from the store answer or the feed row. */
 export function steamPriceBits(item: SteamDealItem, apiPrice: string | null): SteamPriceBits {
   const source = apiPrice ?? fallbackPriceLine(item);
-  const pay = source.match(/\*\*([^*]+)\*\*/)?.[1]?.trim() || item.salePrice?.trim() || '';
-  const was =
-    source.match(/~~([^~]+)~~/)?.[1]?.trim() ||
-    (item.salePrice ? (item.originalPrice?.trim() ?? '') : '');
+  const clean = (value: string | undefined): string => value?.replace(/<[^>]*>/g, '').trim() ?? '';
+  const pay = clean(source.match(/\*\*([^*]+)\*\*/)?.[1] || item.salePrice);
+  let was = clean(
+    source.match(/~~([^~]+)~~/)?.[1] || (item.salePrice ? item.originalPrice : undefined),
+  );
   const fromPrice = apiPrice?.match(/\((-?\d+)%\)\s*$/)?.[1];
   const n = parseInt(String(item.discount ?? fromPrice ?? '').replace(/\D/g, ''), 10);
-  return { percent: Number.isFinite(n) && n > 0 ? n : 0, pay, was };
+  let percent = Number.isFinite(n) && n > 0 ? n : 0;
+  // Same price twice is no sale: a feed row can lag behind Steam.
+  const wasCents = moneyToCents(was);
+  if (wasCents != null && wasCents === moneyToCents(pay)) {
+    was = '';
+    percent = 0;
+  }
+  return { percent, pay, was };
 }
 
 /** `−75%` chip, the struck price, today's price, and (with `save`) what stays in your pocket. */
@@ -621,14 +629,13 @@ function steamRow(
   ];
   const blurb = extras.blurb > 0 ? plainBlurb(item.description, extras.blurb) : '';
   if (blurb) lines.push(blurb);
-  const meta = [
-    extras.tags ? tagLine(item.tags, 3) : '',
-    steamReviewLabel(review),
-    steamSaleEnds(item.expires),
-  ]
+  const meta = [extras.tags ? tagLine(item.tags, 3) : '', steamReviewLabel(review)]
     .filter(Boolean)
     .join(' · ');
   if (meta) lines.push(`-# ${meta}`);
+  // Its own last line, so the sale end closes the row.
+  const ends = steamSaleEnds(item.expires);
+  if (ends) lines.push(`-# ${ends}`);
   return artSection(lines, httpImage(item.image), title, { label: 'Store', url: item.link });
 }
 

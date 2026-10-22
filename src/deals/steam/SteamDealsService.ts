@@ -23,7 +23,12 @@ import {
 } from './SteamBlockbuster';
 import { SteamFeedReader } from './SteamFeedReader';
 import { SteamSpecialsReader, attachSteamSaleEnds } from './SteamSpecialsReader';
-import { extractAppId, fetchSteamPrice, formatSteamPrice } from './SteamPriceApi';
+import {
+  extractAppId,
+  fetchSteamPrice,
+  formatSteamPrice,
+  type SteamPriceInfo,
+} from './SteamPriceApi';
 import { fetchSteamReview, type SteamReviewInfo } from './SteamReviewApi';
 import {
   compareSteamDeals,
@@ -35,6 +40,9 @@ import {
 
 /** Deepest discounts we ask Steam about before picking the 10-game card. */
 const STEAM_REVIEW_WINDOW = 40;
+
+/** Extra picks priced alongside the ten, to stand in for a sale that already ended. */
+const STEAM_SPARE_PICKS = 6;
 
 function steamDigestScope(guildId: string): string {
   return `steam-digest:${guildId}`;
@@ -115,22 +123,27 @@ export class SteamDealsService {
 
     const profiles = new Map<string, SteamStoreProfile | null>();
     await attachStoreProfiles(shelf, profiles);
+    // The feeds lag behind Steam. A game whose store page shows no discount is off the shelf.
+    const offSale = (item: SteamDealItem): boolean =>
+      profiles.get(extractAppId(item.link) ?? '')?.discountPercent === 0;
 
-    const ranked = [...shelf].sort((a, b) => {
-      const tier = Number(Boolean(b.blockbuster)) - Number(Boolean(a.blockbuster));
-      if (tier !== 0) return tier;
-      return compareSteamDeals(
-        a,
-        b,
-        (item) => reviewCounts.get(extractAppId(item.link) ?? '') ?? 0,
-      );
-    });
+    const ranked = shelf
+      .filter((item) => !offSale(item))
+      .sort((a, b) => {
+        const tier = Number(Boolean(b.blockbuster)) - Number(Boolean(a.blockbuster));
+        if (tier !== 0) return tier;
+        return compareSteamDeals(
+          a,
+          b,
+          (item) => reviewCounts.get(extractAppId(item.link) ?? '') ?? 0,
+        );
+      });
     const candidates = ranked.slice(0, STEAM_REVIEW_WINDOW);
     const seen = new Set(candidates.map((item) => item.id));
     for (const item of feedItems) {
       const appId = extractAppId(item.link);
       const kept = pool.find((entry) => extractAppId(entry.link) === appId) ?? item;
-      if (!kept.id || seen.has(kept.id)) continue;
+      if (!kept.id || seen.has(kept.id) || offSale(kept)) continue;
       if (shelf !== pool && isSteamFloorPrice(kept)) continue;
       candidates.push(kept);
       seen.add(kept.id);
@@ -140,7 +153,15 @@ export class SteamDealsService {
     );
 
     const reviewMap = await this.fetchReviews(candidates);
-    const top = selectSteamDigest(candidates, reviewMap, STEAM_DIGEST_SIZE);
+    const picks = selectSteamDigest(candidates, reviewMap, STEAM_DIGEST_SIZE + STEAM_SPARE_PICKS);
+    const priceInfo = await this.fetchPrices(picks);
+    const live = picks.filter((item) => priceInfo.get(item.id)?.discountPercent !== 0);
+    if (live.length < picks.length) {
+      this.logger.info(
+        `Steam: ${picks.length - live.length} pick(s) are no longer on sale at Steam — left out.`,
+      );
+    }
+    const top = live.slice(0, STEAM_DIGEST_SIZE);
     if (top.length === 0) {
       this.logger.info('Steam: nothing to put in the digest — sending nothing.');
       return;
@@ -155,8 +176,13 @@ export class SteamDealsService {
     const fingerprint = steamDigestFingerprint(top);
     const blockbusters = top.filter((item) => item.blockbuster).length;
     this.logger.info(`Steam: ${blockbusters} blockbuster(s) in this ${top.length}-game digest.`);
-    const [prices] = await Promise.all([
-      this.fetchPrices(top),
+    const prices = new Map(
+      top.map((item) => {
+        const info = priceInfo.get(item.id);
+        return [item.id, info ? formatSteamPrice(info) : null] as const;
+      }),
+    );
+    await Promise.all([
       attachSteamArtwork(top),
       attachSteamShelfMeta(top, profiles),
       attachSteamSaleEnds(top),
@@ -238,12 +264,12 @@ export class SteamDealsService {
     return new Map(entries);
   }
 
-  private async fetchPrices(items: SteamDealItem[]): Promise<Map<string, string | null>> {
+  /** Steam DE's live price for each game; null when Steam did not answer. */
+  private async fetchPrices(items: SteamDealItem[]): Promise<Map<string, SteamPriceInfo | null>> {
     const entries = await mapPool(items, 6, async (item) => {
       const appId = extractAppId(item.link);
       if (!appId) return [item.id, null] as const;
-      const info = await fetchSteamPrice(appId);
-      return [item.id, info ? formatSteamPrice(info) : null] as const;
+      return [item.id, await fetchSteamPrice(appId)] as const;
     });
     return new Map(entries);
   }
