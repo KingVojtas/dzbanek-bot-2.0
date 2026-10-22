@@ -276,7 +276,7 @@ function steamItem(n: number): SteamDealItem {
     description:
       n === 1
         ? 'Winner of over 175 Game of the Year Awards and recipient of over 250 perfect scores, an epic tale of honor and loyalty at the dawn of the modern age.'
-        : undefined,
+        : 'A sprawling story of rival crews, stolen maps, and one last heist across a frozen coastline, told over forty hours of play.',
   };
 }
 
@@ -510,18 +510,26 @@ if (!looksLikeKitchenBoard('**Quiet** · The Kitchen\n### Oven’s off\n-# Jar�
     '**1. [Game 1](https://store.steampowered.com/app/1001/Game_1/)**',
     '**10. [Game 10]',
     '`−90%` ~~59,99€~~ → **5,99€**',
-    '-# 💎 Very Positive · ⏳ ends <t:',
-    'capsule_616x353.jpg',
+    'Winner of over 175 Game of the Year Awards and recipient of over 250 perfect scores',
+    '-# Action, Adventure, Open World · 💎 Very Positive · ⏳ ends <t:',
     '💸 Steam Daily Deals · ',
     STEAM_SHELF_MARKER,
     '"label":"All specials"',
   ]);
   if (json.includes('Mixed')) fail('steam-chip', 'a Mixed game was labelled Mixed');
   else ok('steam-chip', 'only well-reviewed games wear a review label');
-  const clutter = ['## ', '### ', 'you save', '% of ', 'Open World', '> Winner', 'All 10 together'];
+  const clutter = [
+    '## ',
+    '### ',
+    'you save',
+    '% of ',
+    'Story Rich',
+    'capsule_616x353',
+    'All 10 together',
+  ];
   const left = clutter.filter((bit) => json.includes(bit));
   if (left.length > 0) fail('steam-clean', `still shows ${left.join(' | ')}`);
-  else ok('steam-clean', 'no header, blurb, tags, savings, or shelf total');
+  else ok('steam-clean', 'no header, banner, fourth tag, savings, or shelf total');
 
   const text = v2MessageText(build());
   const titles = extractSteamDigestTitles(text);

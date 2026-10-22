@@ -148,32 +148,6 @@ export async function attachSteamArtwork(items: SteamDealItem[]): Promise<void> 
   });
 }
 
-/**
- * Wide store art for the top deal's banner: the big capsule, then the header.
- * Read the search capsule before `attachSteamArtwork` swaps in portrait art.
- */
-export async function attachSteamHero(item: SteamDealItem | undefined): Promise<void> {
-  if (!item) return;
-  const appId = extractAppId(item.link);
-  const live = liveStoreImage(item.image);
-  const cache = new Map<string, Probe>();
-  const wide = await firstHit(
-    [
-      appId ? classicArt(appId, 'capsule_616x353.jpg') : undefined,
-      siblingArt(live, 'capsule_616x353.jpg'),
-      appId ? classicArt(appId, 'header.jpg') : undefined,
-      siblingArt(live, 'header.jpg'),
-    ],
-    cache,
-  );
-  if (wide) {
-    item.heroImage = wide;
-    return;
-  }
-  const official = appId ? await officialHeader(appId) : undefined;
-  if (official && (await classify(official, cache)) === 'hit') item.heroImage = official;
-}
-
 async function mapPool<T>(
   items: T[],
   concurrency: number,

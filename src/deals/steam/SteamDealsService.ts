@@ -15,7 +15,7 @@ import type { KitchenBoard } from '../../kitchen/KitchenBoard';
 import type { GuildSettingsStore } from '../guild-settings';
 import type { SeenStore } from '../seen-store';
 import { resolveDealTargets, type DealTarget } from '../targets';
-import { attachSteamArtwork, attachSteamHero } from './SteamArtwork';
+import { attachSteamArtwork } from './SteamArtwork';
 import {
   attachSteamShelfMeta,
   attachStoreProfiles,
@@ -155,10 +155,8 @@ export class SteamDealsService {
     const fingerprint = steamDigestFingerprint(top);
     const blockbusters = top.filter((item) => item.blockbuster).length;
     this.logger.info(`Steam: ${blockbusters} blockbuster(s) in this ${top.length}-game digest.`);
-    // The banner reads the search capsule before the artwork pass swaps in portrait art.
     const [prices] = await Promise.all([
       this.fetchPrices(top),
-      attachSteamHero(top[0]),
       attachSteamArtwork(top),
       attachSteamShelfMeta(top, profiles),
       attachSteamSaleEnds(top),

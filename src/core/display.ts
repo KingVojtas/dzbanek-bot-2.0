@@ -594,6 +594,16 @@ function steamReviewLabel(review: SteamReviewInfo | null | undefined): string {
   return `${REVIEW_EMOJI[review.scoreDesc] ?? '⭐'} ${review.scoreDesc}`;
 }
 
+/** "Action · Shooter · Open World" → "Action, Shooter, Open World". */
+function tagLine(tags: string | undefined, limit: number): string {
+  return (tags ?? '')
+    .split('·')
+    .map((tag) => tag.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .slice(0, limit)
+    .join(', ');
+}
+
 function steamRow(
   rank: number,
   item: SteamDealItem,
@@ -606,16 +616,23 @@ function steamRow(
     `**${rank}. ${linked(title, item.link)}**`,
     steamMoneyLine(steamPriceBits(item, apiPrice), false),
   ];
-  const meta = extras.meta
-    ? [steamReviewLabel(review), steamSaleEnds(item.expires)].filter(Boolean).join(' · ')
-    : '';
+  const blurb = extras.blurb > 0 ? plainBlurb(item.description, extras.blurb) : '';
+  if (blurb) lines.push(blurb);
+  const meta = [
+    extras.tags ? tagLine(item.tags, 3) : '',
+    steamReviewLabel(review),
+    steamSaleEnds(item.expires),
+  ]
+    .filter(Boolean)
+    .join(' · ');
   if (meta) lines.push(`-# ${meta}`);
   return artSection(lines, httpImage(item.image), title, { label: 'Store', url: item.link });
 }
 
 interface SteamExtras {
-  hero: boolean;
-  meta: boolean;
+  /** Longest blurb in characters; 0 leaves it out. */
+  blurb: number;
+  tags: boolean;
 }
 
 function steamContainer(
@@ -624,25 +641,7 @@ function steamContainer(
   reviews: Map<string, SteamReviewInfo | null>,
   extras: SteamExtras,
 ): ContainerBuilder {
-  const lead = top[0];
   const container = new ContainerBuilder().setAccentColor(SITE_STEAM);
-
-  const hero = extras.hero ? httpImage(lead?.heroImage) : undefined;
-  if (lead && hero) {
-    const bits = steamPriceBits(lead, prices.get(lead.id) ?? null);
-    container.addMediaGalleryComponents(
-      new MediaGalleryBuilder().addItems(
-        new MediaGalleryItemBuilder()
-          .setURL(hero)
-          .setDescription(
-            [`Deal of the day: ${steamDealTitle(lead)}`, bits.percent ? `−${bits.percent}%` : '']
-              .filter(Boolean)
-              .join(' · ')
-              .slice(0, 1024),
-          ),
-      ),
-    );
-  }
 
   if (top.length === 0) {
     container.addTextDisplayComponents(
@@ -669,8 +668,8 @@ function steamContainer(
 }
 
 /**
- * Steam digest: the deal of the day's banner, then ten numbered store rows
- * with their art, price, Steam's review label, and when the sale ends.
+ * Steam digest: ten numbered store rows, each with its art, price, a short
+ * description, the game's style, Steam's review label, and when the sale ends.
  */
 export function buildSteamDealsDisplay(
   items: SteamDealItem[],
@@ -678,11 +677,12 @@ export function buildSteamDealsDisplay(
   reviews: Map<string, SteamReviewInfo | null> = new Map(),
 ): V2Display {
   const top = items.slice(0, STEAM_DIGEST_SIZE);
-  // Near Discord's caps the banner goes first, then the quiet lines. Prices stay.
+  // Near Discord's text cap the blurbs shorten first, then go, then the tags. Prices stay.
   const tries: SteamExtras[] = [
-    { hero: true, meta: true },
-    { hero: false, meta: true },
-    { hero: false, meta: false },
+    { blurb: 120, tags: true },
+    { blurb: 90, tags: true },
+    { blurb: 0, tags: true },
+    { blurb: 0, tags: false },
   ];
   let container = steamContainer(top, prices, reviews, tries[0]!);
   for (const extras of tries.slice(1)) {
