@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { PassThrough, Readable } from 'node:stream';
+import { Transform, type PassThrough, type Readable } from 'node:stream';
 import youtubeDl from 'youtube-dl-exec';
 import type { Track, TrackSource } from '../../core/types';
 import { bufferStream } from '../buffer-stream';
@@ -85,6 +85,21 @@ function streamFlags(): Record<string, unknown> {
     remoteComponents: 'ejs:github',
     extractorArgs: 'youtube:player_client=android_vr,tv_simply,mweb,web,web_embedded',
   };
+}
+
+/** yt-dlp's own `ERROR:` line (e.g. YouTube's bot check) rather than "exit code 1". */
+function ytDlpError(stderr: string, fallback: string): Error {
+  const line = stderr
+    .split(/\r?\n/)
+    .reverse()
+    .find((l) => l.startsWith('ERROR:'));
+  return new Error(line ? line.replace(/^ERROR:\s*/, '') : fallback);
+}
+
+interface SpawnedStream {
+  audio: Readable;
+  /** Resolves on the first audio bytes; rejects with yt-dlp's error if none come. */
+  ready: Promise<void>;
 }
 
 function pickThumbnail(info: YtDlpJson): string | undefined {
@@ -188,7 +203,7 @@ export class YouTubeSource implements TrackSource {
   private readonly resolved = new Map<string, { at: number; entries: YtDlpJson[] }>();
   private readonly warmed = new Map<
     string,
-    { stream: PassThrough; timer: ReturnType<typeof setTimeout> }
+    { stream: PassThrough; ready: Promise<void>; timer: ReturnType<typeof setTimeout> }
   >();
 
   async resolve(input: string, requestedBy: string): Promise<Track[]> {
@@ -242,12 +257,13 @@ export class YouTubeSource implements TrackSource {
   warm(url: string): void {
     const id = youTubeVideoId(url);
     if (!id || this.warmed.has(id)) return;
-    let stream: PassThrough;
+    let spawned: SpawnedStream;
     try {
-      stream = bufferStream(this.spawnStream(url));
+      spawned = this.spawnStream(url);
     } catch {
       return;
     }
+    const stream = bufferStream(spawned.audio);
     const timer = setTimeout(() => {
       if (this.warmed.get(id)?.stream !== stream) return;
       this.warmed.delete(id);
@@ -257,7 +273,7 @@ export class YouTubeSource implements TrackSource {
     stream.once('close', () => {
       if (this.warmed.get(id)?.stream === stream) this.warmed.delete(id);
     });
-    this.warmed.set(id, { stream, timer });
+    this.warmed.set(id, { stream, ready: spawned.ready, timer });
   }
 
   async stream(track: Track): Promise<Readable> {
@@ -266,9 +282,14 @@ export class YouTubeSource implements TrackSource {
     if (id && warm) {
       this.warmed.delete(id);
       clearTimeout(warm.timer);
-      if (!warm.stream.destroyed) return warm.stream;
+      if (!warm.stream.destroyed) {
+        await warm.ready;
+        return warm.stream;
+      }
     }
-    return this.spawnStream(track.url);
+    const fresh = this.spawnStream(track.url);
+    await fresh.ready;
+    return fresh.audio;
   }
 
   private async cached(key: string, load: () => Promise<YtDlpJson[]>): Promise<YtDlpJson[]> {
@@ -288,7 +309,11 @@ export class YouTubeSource implements TrackSource {
     return entries;
   }
 
-  private spawnStream(url: string): Readable {
+  /**
+   * yt-dlp's audio on a stream. When YouTube refuses (bot check), stdout just
+   * ends empty, so `ready` waits for real bytes and otherwise carries the error.
+   */
+  private spawnStream(url: string): SpawnedStream {
     const subprocess = youtubeDl.exec(
       url,
       {
@@ -309,26 +334,53 @@ export class YouTubeSource implements TrackSource {
     // Drain stderr so a full pipe cannot stall yt-dlp.
     subprocess.stderr?.resume();
 
-    // youtube-dl-exec's ChildProcess is also a Promise that rejects on non-zero
-    // exit — swallow that so it becomes a stream error instead of a crash.
-    void Promise.resolve(subprocess).catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!stdout.destroyed) {
-        stdout.destroy(err instanceof Error ? err : new Error(message));
-      }
+    let started = (): void => {};
+    let failed = (_error: Error): void => {};
+    const ready = new Promise<void>((resolve, reject) => {
+      started = resolve;
+      failed = reject;
     });
+    // A warm stream nobody claims has nobody awaiting it.
+    ready.catch(() => {});
 
+    // Passes audio through untouched; the first chunk marks the stream as live.
+    const audio = new Transform({
+      transform(chunk: Buffer, _encoding, done) {
+        started();
+        done(null, chunk);
+      },
+    });
+    stdout.pipe(audio);
+
+    // youtube-dl-exec's ChildProcess is also a Promise that rejects on non-zero
+    // exit — swallow that so it becomes a stream error instead of a crash. Its
+    // error carries yt-dlp's stderr as a string.
+    Promise.resolve(subprocess).then(
+      () => failed(new Error('yt-dlp produced no audio.')),
+      (err: unknown) => {
+        const stderr = (err as { stderr?: unknown }).stderr;
+        const error = ytDlpError(
+          typeof stderr === 'string' ? stderr : '',
+          err instanceof Error ? err.message : String(err),
+        );
+        failed(error);
+        if (!audio.destroyed) audio.destroy(error);
+      },
+    );
+
+    // Destroying the audio (skip, shuffle) must also end yt-dlp.
     const kill = () => {
       try {
         subprocess.kill();
       } catch {
         /* already dead */
       }
+      if (!stdout.destroyed) stdout.destroy();
     };
-    stdout.once('close', kill);
-    stdout.once('error', kill);
+    audio.once('close', kill);
+    audio.once('error', kill);
 
-    return stdout;
+    return { audio, ready };
   }
 }
 

@@ -46,8 +46,8 @@ export function youtubeBotCheckHint(errMsg: string): string | null {
   ) {
     return (
       '❌ YouTube blocked this request (bot check / age gate).\n' +
-      'On a home PC this usually works. If it keeps failing, export Netscape cookies ' +
-      'from a logged-in browser and set `YTDLP_COOKIES_BASE64` in `.env`.'
+      'YouTube now wants a signed-in session: export Netscape cookies from a ' +
+      'logged-in browser and set `YTDLP_COOKIES_BASE64` in the server’s `.env`.'
     );
   }
   return null;
