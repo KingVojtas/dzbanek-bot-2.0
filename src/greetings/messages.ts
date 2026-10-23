@@ -7,7 +7,7 @@ const GOODBYE_COLOR = 0x6e5846;
 
 export interface GreetingPerson {
   name: string;
-  /** Welcome pings them. Leave cards omit this. */
+  /** `<@id>`, shown in both cards. The ping itself is sent in the message text. */
   mention?: string;
   avatarUrl?: string | null;
   createdTimestamp?: number | null;
@@ -53,7 +53,8 @@ export function buildGoodbyeEmbed(person: GreetingPerson, place: GreetingPlace):
     .setAuthor(author(place))
     .setTitle(`${name} left the kitchen`.slice(0, 256))
     .setDescription(
-      `👋 Hasta la vista, baby! 🕶️🍪\nWe’ll keep a cookie warm in case they come back.`,
+      `👋 Hasta la vista, ${person.mention ?? name}! 🕶️🍪\n` +
+        `We’ll keep a cookie warm in case they come back.`,
     )
     .addFields(
       stats(

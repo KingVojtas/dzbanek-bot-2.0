@@ -41,6 +41,7 @@ async function sendWelcome(member: GuildMember, services: Services): Promise<voi
   );
   if (!channel) return;
   await channel.send({
+    ...ping(member.id),
     embeds: [buildWelcomeEmbed(welcomePerson(member), greetingPlace(member))],
   });
 }
@@ -66,10 +67,12 @@ async function sendGoodbye(
     user?.username ||
     'Someone';
   await channel.send({
+    ...ping(member.id),
     embeds: [
       buildGoodbyeEmbed(
         {
           name,
+          mention: `<@${member.id}>`,
           avatarUrl: user?.displayAvatarURL({ size: 256 }),
           createdTimestamp: user?.createdTimestamp,
           joinedTimestamp: member.joinedTimestamp,
@@ -78,6 +81,11 @@ async function sendGoodbye(
       ),
     ],
   });
+}
+
+/** Tags inside an embed never ping, so the tag rides in the message text. */
+function ping(userId: string): { content: string; allowedMentions: { users: string[] } } {
+  return { content: `<@${userId}>`, allowedMentions: { users: [userId] } };
 }
 
 function welcomePerson(member: GuildMember): GreetingPerson {
