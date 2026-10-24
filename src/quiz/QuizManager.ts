@@ -6,7 +6,7 @@ import {
   type SendableChannels,
   type VoiceBasedChannel,
 } from 'discord.js';
-import type { V2Display } from '../core/display';
+import type { V2Display } from '../core/display/v2';
 import { buildReplyEmbed, type ReplyTone } from '../core/embeds';
 import type { Logger } from '../core/logger';
 import type { RadioCatchStore } from '../kitchen/catches';

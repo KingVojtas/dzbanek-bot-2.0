@@ -3,12 +3,14 @@ import type { Config } from '../../config';
 import {
   EPIC_SHELF_MARKER,
   buildEpicFreeGamesDisplay,
-  collectMessageTextContent,
   epicGameTitle,
+  selectEpicLineup,
+} from '../../core/display/epic';
+import {
+  collectMessageTextContent,
   extractEpicTitles,
   looksLikeEpicDigest,
-  selectEpicLineup,
-} from '../../core/display';
+} from '../../core/display/digest-detect';
 import type { Logger } from '../../core/logger';
 import type { EpicFreeGame } from '../../core/types';
 import type { KitchenBoard } from '../../kitchen/KitchenBoard';

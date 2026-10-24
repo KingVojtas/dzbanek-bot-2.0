@@ -10,7 +10,7 @@ import {
   ThumbnailBuilder,
   type MessageActionRowComponentBuilder,
 } from 'discord.js';
-import type { V2Display } from '../core/display';
+import type { V2Display } from '../core/display/v2';
 import type { QuizSong } from './songs';
 
 export const QUIZ_COLOR = 0x9b6bff;

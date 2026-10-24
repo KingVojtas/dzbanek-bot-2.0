@@ -1,4 +1,4 @@
-import { STEAM_SHELF_MARKER } from '../../core/display';
+import { STEAM_SHELF_MARKER } from '../../core/display/steam';
 import type { SteamDealItem } from '../../core/types';
 import { extractAppId, parseDiscountPercent } from './SteamPriceApi';
 import { isGoodReview, type SteamReviewInfo } from './SteamReviewApi';

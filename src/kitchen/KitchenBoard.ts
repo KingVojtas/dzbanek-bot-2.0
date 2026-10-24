@@ -14,16 +14,15 @@ import {
 import type { Config } from '../config';
 import type { Logger } from '../core/logger';
 import type { EpicFreeGame, SteamDealItem } from '../core/types';
+import { collectMessageTextContent } from '../core/display/digest-detect';
+import { discordTime, linkText } from '../core/display/text';
+import { epicWorth } from '../core/display/epic';
 import {
-  collectMessageTextContent,
-  discordTime,
-  epicWorth,
-  linkText,
   steamMoneyLine,
   steamPriceBits,
   steamReviewChip,
   steamSaleEnds,
-} from '../core/display';
+} from '../core/display/steam';
 import { upcomingQueue } from '../core/embeds';
 import { isUnknownMessage } from '../core/discord-errors';
 import type { SteamReviewInfo } from '../deals/steam/SteamReviewApi';

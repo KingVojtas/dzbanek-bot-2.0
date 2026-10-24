@@ -1,4 +1,4 @@
-import { STEAM_DIGEST_SIZE } from '../../core/display';
+import { STEAM_DIGEST_SIZE } from '../../core/display/steam';
 import type { SteamDealItem } from '../../core/types';
 import { extractAppId } from './SteamPriceApi';
 import { isSteamFloorPrice, uniqueSteamApps } from './select-digest';

@@ -4,11 +4,13 @@ import {
   STEAM_DIGEST_SIZE,
   STEAM_SHELF_MARKER,
   buildSteamDealsDisplay,
+  steamDealTitle,
+} from '../../core/display/steam';
+import {
   collectMessageTextContent,
   extractSteamDigestTitles,
   looksLikeSteamDigest,
-  steamDealTitle,
-} from '../../core/display';
+} from '../../core/display/digest-detect';
 import type { Logger } from '../../core/logger';
 import type { SteamDealItem } from '../../core/types';
 import type { KitchenBoard } from '../../kitchen/KitchenBoard';

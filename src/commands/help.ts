@@ -10,7 +10,7 @@ import {
   type APIApplicationCommandOption,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from 'discord.js';
-import type { V2Display } from '../core/display';
+import type { V2Display } from '../core/display/v2';
 import type { Command } from '../core/types';
 
 type CommandJSON = RESTPostAPIChatInputApplicationCommandsJSONBody;

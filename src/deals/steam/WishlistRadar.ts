@@ -6,7 +6,7 @@ import {
   type WishlistRadarView,
   type WishlistShelfEntry,
   type WishlistShelfKind,
-} from '../../core/display';
+} from '../../core/display/wishlist';
 import type { Logger } from '../../core/logger';
 import type { SteamDealItem } from '../../core/types';
 import type { SeenStore } from '../seen-store';

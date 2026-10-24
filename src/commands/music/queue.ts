@@ -1,5 +1,5 @@
 import { SlashCommandBuilder } from 'discord.js';
-import { buildQueueDisplay } from '../../core/display';
+import { buildQueueDisplay } from '../../core/display/music';
 import type { Command } from '../../core/types';
 import { replyEphemeral } from './_util';
 

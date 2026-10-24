@@ -11,12 +11,12 @@ import {
   STEAM_DIGEST_SIZE,
   STEAM_SHELF_MARKER,
   buildSteamDealsDisplay,
+} from '../src/core/display/steam';
+import {
   collectMessageTextContent,
-  countV2Components,
   extractSteamDigestTitles,
-  fitsV2,
-  v2TextLength,
-} from '../src/core/display';
+} from '../src/core/display/digest-detect';
+import { countV2Components, fitsV2, v2TextLength } from '../src/core/display/v2';
 import type { SteamDealItem } from '../src/core/types';
 import { SteamFeedReader } from '../src/deals/steam/SteamFeedReader';
 import { SteamSpecialsReader, parseSteamSearchHtml } from '../src/deals/steam/SteamSpecialsReader';

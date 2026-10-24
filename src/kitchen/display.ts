@@ -17,7 +17,8 @@ import {
   type MessageActionRowComponentBuilder,
 } from 'discord.js';
 import { formatDuration } from '../core/embeds';
-import { linkText, type V2Display } from '../core/display';
+import { linkText } from '../core/display/text';
+import type { V2Display } from '../core/display/v2';
 import { STATION_LIST, type StationId } from '../radio/station';
 import { voteLeader, type VoteCounts } from './vote-tally';
 

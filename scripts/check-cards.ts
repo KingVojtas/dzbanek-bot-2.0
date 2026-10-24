@@ -10,31 +10,38 @@ import { commandList } from '../src/commands';
 import { buildHelpDisplay } from '../src/commands/help';
 import {
   EPIC_SHELF_MARKER,
-  RADAR_MARKER,
-  STEAM_SHELF_MARKER,
-  V2_COMPONENT_MAX,
-  V2_TEXT_MAX,
   buildEpicFreeGamesDisplay,
-  buildNowPlayingDisplay,
-  buildQueueDisplay,
-  buildSteamDealsDisplay,
+  epicGameTitle,
+  selectEpicLineup,
+} from '../src/core/display/epic';
+import {
+  RADAR_MARKER,
   buildWishlistDisplay,
   buildWishlistRadarDisplay,
-  collectMessageTextContent,
-  epicGameTitle,
-  extractEpicTitles,
-  extractSteamDigestTitles,
-  looksLikeEpicDigest,
-  looksLikeSteamDigest,
-  selectEpicLineup,
+  type WishlistShelfEntry,
+} from '../src/core/display/wishlist';
+import {
+  STEAM_SHELF_MARKER,
+  buildSteamDealsDisplay,
   steamDealTitle,
   steamMoneyLine,
   steamPriceBits,
   steamSaleEnds,
+} from '../src/core/display/steam';
+import {
+  V2_COMPONENT_MAX,
+  V2_TEXT_MAX,
   v2TextLength,
   type V2Display,
-  type WishlistShelfEntry,
-} from '../src/core/display';
+} from '../src/core/display/v2';
+import { buildNowPlayingDisplay, buildQueueDisplay } from '../src/core/display/music';
+import {
+  collectMessageTextContent,
+  extractEpicTitles,
+  extractSteamDigestTitles,
+  looksLikeEpicDigest,
+  looksLikeSteamDigest,
+} from '../src/core/display/digest-detect';
 import { buildSiteEmbed, type EmbedCard } from '../src/core/embeds';
 import type { EpicFreeGame, SteamDealItem, Track } from '../src/core/types';
 import type { SteamReviewInfo } from '../src/deals/steam/SteamReviewApi';

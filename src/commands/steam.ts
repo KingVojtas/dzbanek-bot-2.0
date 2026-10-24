@@ -1,5 +1,6 @@
 import { MessageFlags, SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
-import { buildWishlistDisplay, type V2Display } from '../core/display';
+import { buildWishlistDisplay } from '../core/display/wishlist';
+import type { V2Display } from '../core/display/v2';
 import { buildReplyEmbed, type ReplyTone } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { fetchWishlist, resolveSteamId } from '../deals/steam/SteamWishlist';

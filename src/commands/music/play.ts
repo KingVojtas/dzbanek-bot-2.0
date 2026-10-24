@@ -5,7 +5,7 @@ import {
   type ChatInputCommandInteraction,
   type VoiceBasedChannel,
 } from 'discord.js';
-import { buildQueuedTrackDisplay } from '../../core/display';
+import { buildQueuedTrackDisplay } from '../../core/display/music';
 import { buildReplyEmbed, formatDuration } from '../../core/embeds';
 import type { GuildPlayer } from '../../music/GuildPlayer';
 import { isSpotifyAlbumUrl, isSpotifyPlaylistUrl } from '../../music/sources';

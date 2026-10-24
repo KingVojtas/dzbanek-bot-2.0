@@ -12,7 +12,7 @@ import {
   type VoiceConnection,
 } from '@discordjs/voice';
 import type { Message, SendableChannels, VoiceBasedChannel } from 'discord.js';
-import type { V2Display } from '../core/display';
+import type { V2Display } from '../core/display/v2';
 import type { Logger } from '../core/logger';
 import type { CompositeTrackSource } from '../music/sources';
 import { prepareClip, type QuizClip } from './clip';

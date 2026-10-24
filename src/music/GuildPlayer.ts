@@ -11,7 +11,7 @@ import type { Readable } from 'node:stream';
 import type { Message, SendableChannels } from 'discord.js';
 import { bufferStream } from './buffer-stream';
 import { isUnknownMessage } from '../core/discord-errors';
-import { buildNowPlayingDisplay } from '../core/display';
+import { buildNowPlayingDisplay } from '../core/display/music';
 import { upcomingQueue, type EmbedCard } from '../core/embeds';
 import type { Logger } from '../core/logger';
 import type { LoopMode, Track, TrackSource } from '../core/types';
