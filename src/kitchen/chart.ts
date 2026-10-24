@@ -12,7 +12,7 @@ import {
   KITCHEN_COLOR,
   KITCHEN_HERO_FILE,
   KitchenFiles,
-  VOTE_EMOJI,
+  VOTE_NAME_WIDTH,
   tallyBar,
   type KitchenDisplay,
 } from './display';
@@ -128,7 +128,7 @@ export function buildKitchenChartDisplay(view: {
     const total = STATION_LIST.reduce((sum, station) => sum + counts[station.id], 0);
     const night = ['### 🌙 Radio Night'];
     for (const station of STATION_LIST) {
-      const label = `${VOTE_EMOJI[station.id]} ${station.choiceName.padEnd(10)}`;
+      const label = `${station.emoji} ${station.voteName.padEnd(VOTE_NAME_WIDTH)}`;
       night.push(`\`${label} ${tallyBar(counts[station.id], total)}\` **${counts[station.id]}**`);
     }
     if (view.night.winnerName) {

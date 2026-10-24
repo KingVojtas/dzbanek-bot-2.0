@@ -19,7 +19,7 @@ import {
 import { formatDuration } from '../core/embeds';
 import { linkText } from '../core/display/text';
 import type { V2Display } from '../core/display/v2';
-import { STATION_LIST, type StationId } from '../radio/station';
+import { STATION_LIST } from '../radio/station';
 import { voteLeader, type VoteCounts } from './vote-tally';
 
 export const KITCHEN_COLOR = 0xc4783a;
@@ -125,8 +125,8 @@ export interface KitchenDisplay extends V2Display {
 /** Bump when the layout changes so every board redraws once. */
 const BOARD_LAYOUT = 'cards-voice';
 
-const VOTE_LABELS: Record<StationId, string> = { kiss: 'Kiss', rock: 'Rock', beat: 'Beat' };
-export const VOTE_EMOJI: Record<StationId, string> = { kiss: '💋', rock: '🎸', beat: '🥁' };
+/** Pads the tally labels so the bars line up. */
+export const VOTE_NAME_WIDTH = Math.max(...STATION_LIST.map((station) => station.voteName.length));
 
 /** The kitchen photos ride along as attachments. A missing file just leaves the art out. */
 export class KitchenFiles {
@@ -424,7 +424,7 @@ function voteLines(vote: NonNullable<KitchenBoardView['radioVote']>): string[] {
   const lines = [`### 🌙 Radio Night · voting closes ${closes}`];
   for (const station of STATION_LIST) {
     const n = vote.counts[station.id];
-    const label = `${VOTE_EMOJI[station.id]} ${VOTE_LABELS[station.id].padEnd(4)}`;
+    const label = `${station.emoji} ${station.voteName.padEnd(VOTE_NAME_WIDTH)}`;
     lines.push(
       `\`${label} ${tallyBar(n, vote.total)}\` **${n}**${station.id === leader ? ' 👑' : ''}`,
     );
@@ -434,18 +434,20 @@ function voteLines(vote: NonNullable<KitchenBoardView['radioVote']>): string[] {
   return lines;
 }
 
-function voteButtons(counts: VoteCounts): ActionRowBuilder<MessageActionRowComponentBuilder> {
+/** One button per station, five to a row (Discord's cap). */
+function voteButtons(counts: VoteCounts): ActionRowBuilder<MessageActionRowComponentBuilder>[] {
   const leader = voteLeader(counts);
-  return row(
-    ...STATION_LIST.map((station) =>
-      button(
-        `${RADIO_VOTE_PREFIX}${station.id}`,
-        `${VOTE_LABELS[station.id]} · ${counts[station.id]}`,
-        VOTE_EMOJI[station.id],
-        station.id === leader ? ButtonStyle.Success : ButtonStyle.Secondary,
-      ),
+  const buttons = STATION_LIST.map((station) =>
+    button(
+      `${RADIO_VOTE_PREFIX}${station.id}`,
+      `${station.voteName} · ${counts[station.id]}`,
+      station.emoji,
+      station.id === leader ? ButtonStyle.Success : ButtonStyle.Secondary,
     ),
   );
+  const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
+  for (let i = 0; i < buttons.length; i += 5) rows.push(row(...buttons.slice(i, i + 5)));
+  return rows;
 }
 
 function roomStatus(view: KitchenBoardView): string[] {
@@ -503,7 +505,7 @@ function roomCard(view: KitchenBoardView, files: KitchenFiles): ContainerBuilder
   if (view.radioVote) {
     if (filled) container.addSeparatorComponents(divider());
     container.addTextDisplayComponents(textBlock(voteLines(view.radioVote)));
-    container.addActionRowComponents(voteButtons(view.radioVote.counts));
+    container.addActionRowComponents(...voteButtons(view.radioVote.counts));
   }
   return container;
 }

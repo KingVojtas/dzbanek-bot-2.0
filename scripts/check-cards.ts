@@ -453,7 +453,11 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
           url: 'https://store.epicgames.com/en-US/p/cocoon',
         },
         radioNight: { stationName: 'Kiss Radio', channelName: 'kitchen' },
-        radioVote: { counts: { kiss: 2, rock: 5, beat: 1 }, total: 8, closesAt: 1_900_000_000 },
+        radioVote: {
+          counts: { kiss: 2, rock: 5, beat: 1, frekvence1: 3, heart: 1, capital: 0, paradise: 4 },
+          total: 16,
+          closesAt: 1_900_000_000,
+        },
         latestCatch: {
           userId: '9',
           title: 'Caught Song',
@@ -492,6 +496,9 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
       'attachment://kitchen-thumb.jpg',
       'kitchen:vote:rock',
       'Rock · 5',
+      'kitchen:vote:paradise',
+      'Paradise · 4',
+      'kitchen:vote:frekvence1',
       'kitchen:catch-play',
       'radio:catch',
       'cover.jpg',
@@ -508,7 +515,10 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
   const tie = JSON.stringify(
     buildKitchenBoardDisplay({
       ...quietView(),
-      radioVote: { counts: { kiss: 2, rock: 2, beat: 0 }, total: 4 },
+      radioVote: {
+        counts: { kiss: 2, rock: 2, beat: 0, frekvence1: 0, heart: 0, capital: 0, paradise: 0 },
+        total: 4,
+      },
     }).components.map((c) => c.toJSON()),
   );
   if (tie.includes('👑')) fail('kitchen-tie', 'a tied vote crowned a leader');
@@ -526,7 +536,10 @@ if (!looksLikeKitchenBoard('**Quiet** · The Kitchen\n### Oven’s off\n-# Jar�
       { title: 'Song', artist: 'Artist', names: ['Vojta', 'Anna'] },
       { title: 'Other', artist: 'Band', names: ['Petr'] },
     ],
-    night: { counts: { kiss: 1, rock: 4, beat: 2 }, winnerName: 'Rock Radio' },
+    night: {
+      counts: { kiss: 1, rock: 4, beat: 2, frekvence1: 0, heart: 3, capital: 1, paradise: 0 },
+      winnerName: 'Rock Radio',
+    },
   });
   checkV2('kitchen-postcard', () => postcard, [
     '📬 The week in the kitchen',

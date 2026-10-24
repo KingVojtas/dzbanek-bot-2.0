@@ -22,7 +22,7 @@ export function formatTrackLine(track: NowPlayingTrack): string {
 
 /**
  * Station now-playing, independent of the voice FFmpeg process.
- * Prefers the radia.cz JSON API, then a short ICY StreamTitle read.
+ * Prefers the station's own feed (radia.cz JSON or Triton), then a short ICY StreamTitle read.
  */
 export async function fetchNowPlaying(
   station: RadioStation,
@@ -40,9 +40,60 @@ export async function fetchNowPlaying(
     }
   }
 
-  const icy = await fetchIcyTitle(station.streamUrl, logger);
-  if (!icy || isGenericTitle(icy, station)) return null;
-  return splitIcyTitle(icy);
+  if (station.tritonMount) {
+    const fromTriton = await fetchTritonNow(station.tritonMount, logger);
+    if (fromTriton && !isGenericTitle(fromTriton.title, station)) return fromTriton;
+  }
+
+  const icy = await fetchIcyMeta(station.streamUrl, logger);
+  if (!icy || isGenericTitle(icy.title, station)) return null;
+  const track = splitIcyTitle(icy.title);
+  const cover = icyCover(icy.streamUrl);
+  return cover ? { ...track, coverUrl: cover } : track;
+}
+
+/** Triton's latest track on `mount`, or null when the feed is empty or stale. */
+async function fetchTritonNow(mount: string, logger: Logger): Promise<NowPlayingTrack | null> {
+  const url =
+    'https://np.tritondigital.com/public/nowplaying' +
+    `?mountName=${encodeURIComponent(mount)}&numberToFetch=1&eventType=track`;
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'dzbanek-bot/2.0' },
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    return parseTritonNow(await res.text());
+  } catch (error) {
+    logger.debug(`Triton now-playing failed (${mount}):`, error);
+    return null;
+  }
+}
+
+/** Reads Triton's `<nowplaying-info>` XML. Stale after 20 minutes, like radia.cz. */
+export function parseTritonNow(xml: string, now = Date.now()): NowPlayingTrack | null {
+  // Newest first: only the first record matters.
+  const info = /<nowplaying-info\b[^>]*>([\s\S]*?)<\/nowplaying-info>/.exec(xml)?.[1];
+  if (!info) return null;
+  const props = new Map<string, string>();
+  for (const m of info.matchAll(
+    /<property name="([^"]+)">(?:<!\[CDATA\[([\s\S]*?)\]\]>|([^<]*))<\/property>/g,
+  )) {
+    props.set(m[1]!, decodeHtml(m[2] ?? m[3] ?? ''));
+  }
+  const title = str(props.get('cue_title'));
+  if (!title) return null;
+  const startMs = Number(props.get('cue_time_start'));
+  if (Number.isFinite(startMs) && startMs > 0 && now - startMs > 20 * 60_000) return null;
+  return { artist: str(props.get('track_artist_name')), title };
+}
+
+/** Radio Paradise puts the album cover in StreamUrl. Only an image URL counts. */
+export function icyCover(streamUrl: string | null): string | undefined {
+  if (!streamUrl || !/^https?:\/\/\S+\.(jpe?g|png|webp)(\?\S*)?$/i.test(streamUrl)) {
+    return undefined;
+  }
+  return streamUrl.replace(/^http:\/\//i, 'https://');
 }
 
 interface RadiaSong {
@@ -121,7 +172,10 @@ async function fetchRadiaNow(url: string, logger: Logger): Promise<RadiaSong | n
   }
 }
 
-async function fetchIcyTitle(streamUrl: string, logger: Logger): Promise<string | null> {
+async function fetchIcyMeta(
+  streamUrl: string,
+  logger: Logger,
+): Promise<{ title: string; streamUrl: string | null } | null> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), ICY_TIMEOUT_MS);
   try {
@@ -147,15 +201,21 @@ async function fetchIcyTitle(streamUrl: string, logger: Logger): Promise<string 
     if (metaint <= 0 || buf.length <= metaint) return null;
     const metaLen = buf[metaint]! * 16;
     const meta = decodeIcyBytes(buf.subarray(metaint + 1, metaint + 1 + metaLen));
-    const match = /StreamTitle='([^']*)'/.exec(meta);
-    const title = (match?.[1] ?? '').trim();
-    return title || null;
+    return parseIcyMeta(meta);
   } catch (error) {
     logger.debug(`ICY now-playing failed (${streamUrl}):`, error);
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** StreamTitle and StreamUrl from one ICY metadata block. Null without a title. */
+export function parseIcyMeta(meta: string): { title: string; streamUrl: string | null } | null {
+  const title = (/StreamTitle='(.*?)';/.exec(meta)?.[1] ?? '').trim();
+  if (!title) return null;
+  const streamUrl = (/StreamUrl='(.*?)';/.exec(meta)?.[1] ?? '').trim();
+  return { title, streamUrl: streamUrl || null };
 }
 
 /** UTF-8 StreamTitle, as Icecast 2.4 sends it. Invalid UTF-8 is windows-1250. */

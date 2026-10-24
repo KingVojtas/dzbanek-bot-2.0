@@ -1,6 +1,6 @@
 # 🍪 Dzbanek-bot 2.0
 
-A TypeScript Discord bot (discord.js v14) for the kitchen. It plays YouTube and Spotify in voice, streams Czech live radio, posts Steam deals and Epic free games, and keeps a cookie warm for anyone who walks in.
+A TypeScript Discord bot (discord.js v14) for the kitchen. It plays YouTube and Spotify in voice, streams live radio from Prague and London, posts Steam deals and Epic free games, and keeps a cookie warm for anyone who walks in.
 
 Music and radio share one voice slot per server. Starting one takes the speaker from the other.
 
@@ -41,24 +41,31 @@ When the queue goes quiet, Dzbanek waits **120 seconds** (configurable). If peop
 
 ### 📻 Live radio
 
-`/radio play` joins **your** voice channel and streams a Czech Icecast station. The card wears the station logo and brand color. It names the song and artist on air, shows the album cover when the station sends one, the voice channel, and when the song came on. Metadata is checked about every **20 seconds**, and the **same message** is edited when the song changes.
+`/radio play` joins **your** voice channel and streams one of seven live stations: four Czech, two from London, and Radio Paradise from California. The card wears the station logo and brand color. It names the song and artist on air, shows the album cover when the station sends one, the voice channel, and when the song came on. Metadata is checked about every **20 seconds**, and the **same message** is edited when the song changes.
 
-| Choice  | Station    | Stream                                      |
-| ------- | ---------- | ------------------------------------------- |
-| 💋 Kiss | Kiss Radio | `https://icecast4.play.cz/kiss128.mp3`      |
-| 🎸 Rock | Rock Radio | `http://ice.abradio.cz/rockradio128.mp3`    |
-| 🥁 Beat | Radio Beat | `https://icecast3.play.cz/radiobeat128.mp3` |
+| Choice            | Station        | Stream                                            |
+| ----------------- | -------------- | ------------------------------------------------- |
+| 💋 Kiss           | Kiss Radio     | `https://icecast4.play.cz/kiss128.mp3`            |
+| 🎸 Rock Radio     | Rock Radio     | `http://ice.abradio.cz/rockradio128.mp3`          |
+| 🥁 Radio Beat     | Radio Beat     | `https://icecast3.play.cz/radiobeat128.mp3`       |
+| 1️⃣ Frekvence 1    | Frekvence 1    | `https://ice.actve.net/fm-frekvence1-128`         |
+| ❤️ Heart London   | Heart London   | `https://media-ssl.musicradio.com/HeartLondonMP3` |
+| 🎤 Capital London | Capital London | `https://media-ssl.musicradio.com/CapitalMP3`     |
+| 🌴 Radio Paradise | Radio Paradise | `https://stream.radioparadise.com/mp3-128`        |
 
 Now-playing sources stay off the FFmpeg voice stream:
 
 - **Kiss / Rock Radio** — [radia.cz](https://radia.cz) `songs/now.json`, then Icecast ICY `StreamTitle`
 - **Radio Beat** — Beat’s own `?do=broadcast-update` (“Právě v éteru”), then radia.cz while the listing is still fresh, then ICY
+- **Frekvence 1** — Triton Digital’s public now-playing feed (mount `FREKVENCE1`). Its stream sends no ICY title.
+- **Radio Paradise** — ICY `StreamTitle`, and the album cover from ICY `StreamUrl`
+- **Heart / Capital London** — ICY `StreamTitle`. Global often sends it blank, so these cards may show only the station, and Catch waits.
 
 Beat often sends only a station tag over Icecast. During shows such as **Hard & Heavy**, the site publishes the program name. That is what the card shows. 🍪 Catch will smile and refuse it: a show is not a song.
 
 | Command                 | What it does                                             |
 | ----------------------- | -------------------------------------------------------- |
-| `/radio play <station>` | Join your channel and start Kiss, Rock Radio, or Beat.   |
+| `/radio play <station>` | Join your channel and start one of the seven stations.   |
 | `/radio stop`           | Stop the stream, leave voice, and delete the radio card. |
 | `/radio night`          | Schedule Friday 20:00 Radio Night in a voice channel.    |
 | `/radio night-off`      | Cancel scheduled Radio Night.                            |
@@ -75,7 +82,7 @@ A restart puts that station back on if idle-radio is still on and people are sti
 
 - **The stereo**, in the color of what’s playing. Radio shows a 🔴 LIVE badge with the station’s slogan, the song and artist, the album cover (or the station logo), and who’s listening, with **🍪 Catch**, **⏹️ Stop**, and **🌐 Website**. Music shows the video art as a banner, the length, who asked for it, and how many are up next, with **Pause / Resume**, **Skip**, **Queue**, and **Stop** right on the board. When nothing is on, the kitchen photo hangs there instead.
 - **The Pantry**, in amber. The Steam deal of the day with its cover, `−75%` chip, struck price, what you save, Steam’s review label, and a countdown to the end of the sale, plus how many more wait in the Steam channel. Under it, this week’s Epic freebie with its countdown, or the next one when nothing is free.
-- **The room**, when there’s news: the latest catch with its cover and a **▶️ Play it** button, today’s cookies, and Radio Night. Friday from **12:00 to 20:00** the vote sits here, with tally bars, a 👑 for the leader, a live countdown to 20:00, and 💋 / 🎸 / 🥁 buttons that show the count.
+- **The room**, when there’s news: the latest catch with its cover and a **▶️ Play it** button, today’s cookies, and Radio Night. Friday from **12:00 to 20:00** the vote sits here, with tally bars, a 👑 for the leader, a live countdown to 20:00, and a button for each station (💋 🎸 🥁 1️⃣ ❤️ 🎤 🌴) that shows the count.
 
 Discord presence is the well. Each hour in Europe/Prague the three lines play once, twenty minutes each, in a new order: Purifying the source, Analyzing bacteria levels, Pouring fresh drops.
 
@@ -83,7 +90,7 @@ On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for t
 
 ### 🌙 Radio Night
 
-`/radio night` (Manage Server) picks a voice channel and a fallback station. On Friday from **12:00 to 20:00 Europe/Prague** the Kitchen Board puts out Kiss / Rock / Beat vote buttons. One vote per person, and you can change your mind. At **20:00** the winner starts in that channel. A tie falls through the scheduled station, then the last station that played, then Beat. `/radio night-off` takes it off the calendar.
+`/radio night` (Manage Server) picks a voice channel and a fallback station. On Friday from **12:00 to 20:00 Europe/Prague** the Kitchen Board puts out a vote button for each station, five to a row. One vote per person, and you can change your mind. At **20:00** the winner starts in that channel. A tie falls through the scheduled station, then the last station that played, then Beat. `/radio night-off` takes it off the calendar.
 
 ### 🎧 Kitchen Quiz
 

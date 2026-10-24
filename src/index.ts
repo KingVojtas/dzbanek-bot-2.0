@@ -191,7 +191,7 @@ process.on('unhandledRejection', (reason) => {
 
 /** The bot profile's About Me. Discord caps it at 400 characters. */
 const ABOUT_ME =
-  '🍪 Dzbanek — the kitchen’s stereo. Plays YouTube & Spotify, streams Kiss, Rock Radio & Beat live, ' +
+  '🍪 Dzbanek — the kitchen’s stereo. Plays YouTube & Spotify, streams Czech and London radio live, ' +
   'posts Steam deals every morning and Epic freebies when they drop, and keeps a cookie warm for ' +
   'whoever walks in.\n\nType /help to see what’s cooking.';
 

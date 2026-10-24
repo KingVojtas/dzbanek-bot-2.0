@@ -298,7 +298,7 @@ export class KitchenBoard {
     guildId: string,
     voiceChannelId: string,
     station: RadioStation,
-    counts: { kiss: number; rock: number; beat: number } | null = null,
+    counts: VoteCounts | null = null,
   ): Promise<boolean> {
     const guild = await this.client.guilds.fetch(guildId).catch(() => null);
     if (!guild) return false;
