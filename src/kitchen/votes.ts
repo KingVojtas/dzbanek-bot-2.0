@@ -1,15 +1,6 @@
 import { prisma } from '../db/client';
-import { STATION_LIST, type StationId } from '../radio/station';
-
-export type VoteCounts = Record<StationId, number>;
-
-function emptyCounts(): VoteCounts {
-  return { kiss: 0, rock: 0, beat: 0 };
-}
-
-export function isStationId(value: string): value is StationId {
-  return STATION_LIST.some((station) => station.id === value);
-}
+import type { StationId } from '../radio/station';
+import { emptyCounts, isStationId, pickWinner, type VoteCounts } from './vote-tally';
 
 export class RadioNightVoteStore {
   async cast(
@@ -38,16 +29,6 @@ export class RadioNightVoteStore {
   }
 
   async winner(guildId: string, weekKey: string, tieBreak: StationId): Promise<StationId> {
-    const tallies = await this.counts(guildId, weekKey);
-    const ranked = STATION_LIST.slice().sort((a, b) => {
-      const diff = tallies[b.id] - tallies[a.id];
-      if (diff !== 0) return diff;
-      if (a.id === tieBreak) return -1;
-      if (b.id === tieBreak) return 1;
-      return 0;
-    });
-    const top = ranked[0];
-    if (!top || tallies[top.id] === 0) return tieBreak;
-    return top.id;
+    return pickWinner(await this.counts(guildId, weekKey), tieBreak);
   }
 }

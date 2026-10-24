@@ -57,7 +57,8 @@ import {
   radioNightWeekKey,
   zonedDateTimeToUtc,
 } from './time';
-import { RadioNightVoteStore, isStationId, type VoteCounts } from './votes';
+import { isStationId, type VoteCounts } from './vote-tally';
+import { RadioNightVoteStore } from './votes';
 
 const TICK_MS = 20_000;
 const DEBOUNCE_MS = 1_200;

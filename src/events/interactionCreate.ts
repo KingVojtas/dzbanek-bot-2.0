@@ -17,7 +17,7 @@ import { wishlistCard } from '../commands/steam';
 import { QUIZ_BUTTON_PREFIX } from '../quiz/display';
 import { RadioCatchStore } from '../kitchen/catches';
 import { CATCH_PLAY_PREFIX, KITCHEN_BUTTON_SUFFIX, RADIO_VOTE_PREFIX } from '../kitchen/display';
-import { isStationId } from '../kitchen/votes';
+import { isStationId } from '../kitchen/vote-tally';
 import type { GuildPlayer } from '../music/GuildPlayer';
 import { playSearch } from '../music/play-search';
 import { catchBlockReason } from '../radio/now-playing';

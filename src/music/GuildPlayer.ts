@@ -15,8 +15,8 @@ import { buildNowPlayingDisplay } from '../core/display';
 import { upcomingQueue, type EmbedCard } from '../core/embeds';
 import type { Logger } from '../core/logger';
 import type { LoopMode, Track, TrackSource } from '../core/types';
+import { afterTrackEnds, pushHistory, takeNext } from './queue-rules';
 
-const HISTORY_MAX = 25;
 const VOLUME_MIN = 0.25;
 const VOLUME_MAX = 1.5;
 const VOLUME_STEP = 0.25;
@@ -385,10 +385,17 @@ export class GuildPlayer {
     if (this.queuePumpRunning) return;
     if (this.player.state.status !== AudioPlayerStatus.Idle) return;
 
-    const playedMs = this.currentResource?.playbackDuration ?? 0;
     const finished = this.current;
+    const next = afterTrackEnds({
+      finished,
+      playedMs: this.currentResource?.playbackDuration ?? 0,
+      skipRequested: this.skipRequested,
+      goingBack: this.goingBack,
+      loopMode: this.loopMode,
+      retriedUrl: this.retriedUrl,
+    });
 
-    if (finished && playedMs < 800 && !this.skipRequested && this.retriedUrl !== finished.url) {
+    if (finished && next === 'retry') {
       this.retriedUrl = finished.url;
       this.invalidatePrefetch();
       this.currentResource = null;
@@ -401,14 +408,14 @@ export class GuildPlayer {
       return;
     }
 
-    if (finished && playedMs < 800 && !this.skipRequested) {
+    if (finished && next === 'give-up') {
       // Second instant end in a row: the stream is broken, so move on instead of looping.
       this.lastError = `"${finished.title}" ended immediately twice.`;
       this.logger.warn(`Track "${finished.title}" ended immediately again — skipping it.`);
       this.retriedUrl = null;
       this.current = null;
       this.currentResource = null;
-      this.pushHistory(finished);
+      pushHistory(this.history, finished);
       void this.processQueue();
       return;
     }
@@ -417,13 +424,8 @@ export class GuildPlayer {
     this.current = null;
     this.currentResource = null;
 
-    if (finished && !this.goingBack) {
-      if (this.loopMode === 'track' && !this.skipRequested) {
-        this.queue.unshift(finished);
-      } else {
-        this.pushHistory(finished);
-      }
-    }
+    if (finished && next === 'requeue') this.queue.unshift(finished);
+    else if (finished && next === 'history') pushHistory(this.history, finished);
     this.skipRequested = false;
     this.goingBack = false;
 
@@ -437,16 +439,10 @@ export class GuildPlayer {
 
     try {
       while (!this.destroyed) {
-        let next = this.queue.shift();
+        const next = takeNext(this.queue, this.loopMode, this.queueSnapshot);
         if (!next) {
-          if (this.loopMode === 'queue' && this.queueSnapshot.length > 0) {
-            this.queue.push(...this.queueSnapshot);
-            next = this.queue.shift();
-          }
-          if (!next) {
-            this.startIdleTimer();
-            return;
-          }
+          this.startIdleTimer();
+          return;
         }
 
         const playing = await this.playTrack(next);
@@ -495,13 +491,6 @@ export class GuildPlayer {
       this.logger.error(`Failed to play "${track.title}":`, error);
       this.logger.warn(`Skipping unplayable track "${track.title}" — continuing queue`);
       return false;
-    }
-  }
-
-  private pushHistory(track: Track): void {
-    this.history.push(track);
-    if (this.history.length > HISTORY_MAX) {
-      this.history.splice(0, this.history.length - HISTORY_MAX);
     }
   }
 

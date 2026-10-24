@@ -167,7 +167,7 @@ export function decodeIcyBytes(bytes: Buffer): string {
   }
 }
 
-function splitIcyTitle(raw: string): NowPlayingTrack {
+export function splitIcyTitle(raw: string): NowPlayingTrack {
   const parts = raw.split(/\s+-\s+/);
   if (parts.length >= 2) {
     const artist = parts[0]!.trim();
@@ -212,7 +212,7 @@ function isStationCredit(raw: string, station: RadioStation): boolean {
   return false;
 }
 
-function isGenericTitle(raw: string, station: RadioStation): boolean {
+export function isGenericTitle(raw: string, station: RadioStation): boolean {
   const n = normalize(raw);
   if (!n) return true;
   const stationName = normalize(station.name);

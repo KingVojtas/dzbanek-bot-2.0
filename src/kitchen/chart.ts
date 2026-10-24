@@ -16,7 +16,7 @@ import {
   tallyBar,
   type KitchenDisplay,
 } from './display';
-import type { VoteCounts } from './votes';
+import type { VoteCounts } from './vote-tally';
 
 export const KITCHEN_CHART_CRON = '0 18 * * 0';
 

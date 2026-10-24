@@ -19,7 +19,7 @@ import {
 import { formatDuration } from '../core/embeds';
 import { linkText, type V2Display } from '../core/display';
 import { STATION_LIST, type StationId } from '../radio/station';
-import type { VoteCounts } from './votes';
+import { voteLeader, type VoteCounts } from './vote-tally';
 
 export const KITCHEN_COLOR = 0xc4783a;
 export const RADIO_NIGHT_CRON = '0 20 * * 5';
@@ -415,19 +415,6 @@ export function tallyBar(n: number, total: number): string {
   const width = 10;
   const filled = total > 0 ? Math.round((n / total) * width) : 0;
   return '▰'.repeat(filled) + '▱'.repeat(width - filled);
-}
-
-function voteLeader(counts: VoteCounts): StationId | null {
-  let best: StationId | null = null;
-  for (const station of STATION_LIST) {
-    const n = counts[station.id];
-    if (n > 0 && (best === null || n > counts[best])) best = station.id;
-  }
-  // A tie has no leader yet.
-  if (best && STATION_LIST.some((s) => s.id !== best && counts[s.id] === counts[best!])) {
-    return null;
-  }
-  return best;
 }
 
 function voteLines(vote: NonNullable<KitchenBoardView['radioVote']>): string[] {
