@@ -45,7 +45,7 @@ function extractAppImage(link: string): string | undefined {
   return `https://cdn.akamai.steamstatic.com/steam/apps/${match[1]}/library_600x900.jpg`;
 }
 
-function parseContent(content: string): {
+export function parseContent(content: string): {
   description?: string;
   salePrice?: string;
   originalPrice?: string;
@@ -94,10 +94,22 @@ function parseContent(content: string): {
   };
 }
 
+// The feed is HTML, so a field like "Card &amp; Board Game" arrives escaped.
 function extractField(content: string, name: string): string | undefined {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   let match = content.match(new RegExp(`<strong>\\s*${escaped}:\\s*</strong>\\s*([^<\\n]+)`, 'i'));
-  if (match?.[1]) return match[1].trim();
-  match = content.match(new RegExp(`\\*\\*${escaped}:\\s*\\*\\*\\s*([^\\n*]+)`));
-  return match?.[1]?.trim() || undefined;
+  if (!match?.[1]) match = content.match(new RegExp(`\\*\\*${escaped}:\\s*\\*\\*\\s*([^\\n*]+)`));
+  return match?.[1] ? decodeEntities(match[1]).trim() || undefined : undefined;
+}
+
+function decodeEntities(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&');
 }

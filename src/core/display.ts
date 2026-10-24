@@ -579,14 +579,21 @@ const SALE_MONTHS = [
   'Dec',
 ];
 
-/** A live countdown when Steam gave the hour, the day otherwise. Empty once it has passed. */
+/** Closer than this, a countdown would read "ends 2 hours ago" before the next digest replaces the post. */
+const SALE_COUNTDOWN_MIN_MS = 26 * 3_600_000;
+
+/**
+ * A live countdown when Steam gave the hour, the day otherwise. Empty once it has passed.
+ * A sale ending within a day shows its date and time instead, which stays true after it passes.
+ */
 export function steamSaleEnds(value: string | undefined): string {
   const text = value?.replace(/\s+/g, ' ').trim() ?? '';
   if (!text) return '';
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) {
     const ms = Date.parse(text);
     if (!Number.isFinite(ms) || ms <= Date.now()) return '';
-    return `⏳ ends <t:${Math.floor(ms / 1000)}:R>`;
+    const style = ms - Date.now() < SALE_COUNTDOWN_MIN_MS ? 'f' : 'R';
+    return `⏳ ends <t:${Math.floor(ms / 1000)}:${style}>`;
   }
   const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!iso) return `⏳ ends ${text.replace(/^(ends|until)\s+/i, '')}`;

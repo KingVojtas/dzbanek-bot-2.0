@@ -30,6 +30,7 @@ import {
   steamDealTitle,
   steamMoneyLine,
   steamPriceBits,
+  steamSaleEnds,
   v2TextLength,
   type V2Display,
   type WishlistShelfEntry,
@@ -37,6 +38,7 @@ import {
 import { buildSiteEmbed, type EmbedCard } from '../src/core/embeds';
 import type { EpicFreeGame, SteamDealItem, Track } from '../src/core/types';
 import type { SteamReviewInfo } from '../src/deals/steam/SteamReviewApi';
+import { parseContent } from '../src/deals/steam/SteamFeedReader';
 import { parseSteamProfileInput } from '../src/deals/steam/SteamWishlist';
 import {
   answerId,
@@ -1078,6 +1080,21 @@ checkEmbedCard(
   if (!play.includes('`query`') || !play.includes('`play_next`')) {
     fail('help-play-options', '/help command:play does not list its options');
   } else ok('help-play-options', '/help command:play lists query and play_next');
+}
+
+{
+  const genres = parseContent(
+    '<p><strong>Genres:</strong> Card &amp; Board Game, Strategy</p>',
+  ).genres;
+  if (genres !== 'Card & Board Game, Strategy') fail('feed-entities', `genres read as "${genres}"`);
+  else ok('feed-entities', 'feed fields are unescaped');
+
+  // A daily post lives a day, so a sale ending sooner shows its time, not a countdown that goes "ago".
+  const soon = steamSaleEnds(new Date(Date.now() + 3 * 3_600_000).toISOString());
+  const later = steamSaleEnds(new Date(Date.now() + 3 * 86_400_000).toISOString());
+  if (!soon.endsWith(':f>') || !later.endsWith(':R>')) {
+    fail('sale-ends', `soon "${soon}", later "${later}"`);
+  } else ok('sale-ends', 'time within a day, countdown after');
 }
 
 if (failed > 0) {
