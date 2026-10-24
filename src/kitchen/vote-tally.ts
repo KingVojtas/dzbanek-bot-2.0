@@ -7,6 +7,18 @@ export function emptyCounts(): VoteCounts {
   return Object.fromEntries(STATION_LIST.map((station) => [station.id, 0])) as VoteCounts;
 }
 
+/** Every vote, across the whole catalog. */
+export function voteTotal(counts: VoteCounts): number {
+  return STATION_LIST.reduce((sum, station) => sum + counts[station.id], 0);
+}
+
+/** "Rock 4 · F1 1 · Paradise 4": stations with votes, in catalog order. Empty with no votes. */
+export function voteTally(counts: VoteCounts): string {
+  return STATION_LIST.filter((station) => counts[station.id] > 0)
+    .map((station) => `${station.voteName} ${counts[station.id]}`)
+    .join(' · ');
+}
+
 export function isStationId(value: string): value is StationId {
   return STATION_LIST.some((station) => station.id === value);
 }

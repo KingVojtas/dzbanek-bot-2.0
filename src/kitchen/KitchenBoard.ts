@@ -56,7 +56,7 @@ import {
   radioNightWeekKey,
   zonedDateTimeToUtc,
 } from './time';
-import { isStationId, type VoteCounts } from './vote-tally';
+import { isStationId, voteTally, voteTotal, type VoteCounts } from './vote-tally';
 import { RadioNightVoteStore } from './votes';
 
 const TICK_MS = 20_000;
@@ -213,7 +213,7 @@ export class KitchenBoard {
         continue;
       }
       const counts = await this.votes.counts(row.guildId, weekKey);
-      const total = counts.kiss + counts.rock + counts.beat;
+      const total = voteTotal(counts);
       await this.guildSettings.upsert(row.guildId, {
         radioNightStation: station.id,
         lastRadioStation: station.id,
@@ -264,7 +264,7 @@ export class KitchenBoard {
       let night: { counts: VoteCounts; winnerName?: string } | undefined;
       if (row.radioNightEnabled) {
         const counts = await this.votes.counts(row.guildId, week.fridayKey);
-        const total = counts.kiss + counts.rock + counts.beat;
+        const total = voteTotal(counts);
         if (total > 0) {
           const playedId = await radioNightPlayedStation(row.guildId, week.fridayKey);
           const winner = playedId ? getStation(playedId) : undefined;
@@ -341,10 +341,7 @@ export class KitchenBoard {
         settings.kitchenChannelId,
         guildId,
       );
-      const tally =
-        counts && counts.kiss + counts.rock + counts.beat > 0
-          ? ` Vote: Kiss ${counts.kiss} · Rock ${counts.rock} · Beat ${counts.beat}.`
-          : '';
+      const tally = counts && voteTotal(counts) > 0 ? ` Vote: ${voteTally(counts)}.` : '';
       await text
         ?.send({
           content: `🍪 **Radio Night** — **${station.name}** is live in **#${channel.name}**. Hop in.${tally}`,
@@ -492,7 +489,7 @@ export class KitchenBoard {
       const closes = zonedDateTimeToUtc(this.config.timezone, weekKey, RADIO_VOTE_END_HOUR, 0);
       radioVote = {
         counts,
-        total: counts.kiss + counts.rock + counts.beat,
+        total: voteTotal(counts),
         closesAt: Math.floor(closes.getTime() / 1000),
       };
     }

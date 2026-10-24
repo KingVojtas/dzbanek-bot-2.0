@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { emptyCounts, isStationId, pickWinner, voteLeader } from '../src/kitchen/vote-tally';
+import {
+  emptyCounts,
+  isStationId,
+  pickWinner,
+  voteLeader,
+  voteTally,
+  voteTotal,
+} from '../src/kitchen/vote-tally';
 import { STATION_LIST } from '../src/radio/station';
 
 function counts(values: Partial<ReturnType<typeof emptyCounts>>) {
@@ -12,6 +19,27 @@ describe('emptyCounts', () => {
     const empty = emptyCounts();
     assert.deepEqual(Object.keys(empty).sort(), STATION_LIST.map((s) => s.id).sort());
     assert.ok(Object.values(empty).every((n) => n === 0));
+  });
+});
+
+describe('voteTotal', () => {
+  it('counts every station, not only the first three', () => {
+    assert.equal(voteTotal(counts({ frekvence1: 1, heart: 2, capital: 3, paradise: 4 })), 10);
+    assert.equal(voteTotal(counts({ kiss: 1, paradise: 1 })), 2);
+    assert.equal(voteTotal(emptyCounts()), 0);
+  });
+});
+
+describe('voteTally', () => {
+  it('lists stations with votes, in catalog order', () => {
+    assert.equal(
+      voteTally(counts({ paradise: 4, rock: 1, frekvence1: 2 })),
+      'Rock 1 · F1 2 · Paradise 4',
+    );
+  });
+
+  it('is empty with no votes', () => {
+    assert.equal(voteTally(emptyCounts()), '');
   });
 });
 
