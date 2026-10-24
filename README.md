@@ -1,6 +1,6 @@
 # 🍪 Dzbanek-bot 2.0
 
-A TypeScript Discord bot (discord.js v14) for the kitchen. It plays YouTube and Spotify in voice, streams live radio from Prague and London, posts Steam deals and Epic free games, and keeps a cookie warm for anyone who walks in.
+A TypeScript Discord bot (discord.js v14) for the kitchen. It plays YouTube and Spotify in voice, streams live radio from Prague, London, and California, posts Steam deals and Epic free games, and keeps a cookie warm for anyone who walks in.
 
 Music and radio share one voice slot per server. Starting one takes the speaker from the other.
 
