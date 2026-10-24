@@ -35,6 +35,9 @@ if (ffmpegPath && !process.env.FFMPEG_PATH) {
   process.env.FFMPEG_PATH = ffmpegPath;
 }
 
+/** Daily yt-dlp update, after the 03:33 Steam run. */
+const YTDLP_UPDATE_CRON = '15 4 * * *';
+
 async function main(): Promise<void> {
   const client = createClient();
   const commands = buildCommandCollection();
@@ -152,6 +155,11 @@ async function main(): Promise<void> {
     });
     logger.info(
       `Kitchen chart: cron "${KITCHEN_CHART_CRON}" (${config.timezone}), next ${chartJob.nextRun()?.toISOString() ?? '?'}.`,
+    );
+
+    const ytDlpJob = new Cron(YTDLP_UPDATE_CRON, cronOpts, () => void music.updateYtDlp());
+    logger.info(
+      `yt-dlp update: cron "${YTDLP_UPDATE_CRON}" (${config.timezone}), next ${ytDlpJob.nextRun()?.toISOString() ?? '?'}.`,
     );
     logger.info(`Multi-server ready: in ${client.guilds.cache.size} guild(s).`);
   });

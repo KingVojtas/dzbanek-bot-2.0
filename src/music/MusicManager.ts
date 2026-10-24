@@ -30,10 +30,20 @@ export class MusicManager {
     private readonly logger: Logger,
   ) {
     ensureYtDlpCookies(this.logger);
+    void this.updateYtDlp();
+  }
 
-    void updateYoutubeDl()
-      .then(() => this.logger.debug('yt-dlp self-update check complete.'))
-      .catch((err: unknown) => this.logger.debug('yt-dlp update check (non-fatal):', err));
+  /**
+   * YouTube breaks yt-dlp often, and the bot runs for weeks between deploys,
+   * so this runs at startup and again every day. Safe while a song streams.
+   */
+  async updateYtDlp(): Promise<void> {
+    try {
+      await updateYoutubeDl();
+      this.logger.info('yt-dlp update check complete.');
+    } catch (error) {
+      this.logger.warn('yt-dlp update failed; songs keep using the current version:', error);
+    }
   }
 
   get trackSource(): CompositeTrackSource {

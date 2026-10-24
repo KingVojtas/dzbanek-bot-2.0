@@ -341,13 +341,13 @@ data/bot.db                Runtime SQLite (git-ignored)
 
 ## 🔧 If something smells off
 
-| What happened                            | What to try                                                                                                                                     |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Song won't play / "Could not load track" | Update yt-dlp: delete `node_modules/youtube-dl-exec` and reinstall. Set `YTDLP_COOKIES_BASE64` if YouTube asks you to prove you’re human.       |
-| No audio                                 | Confirm `ffmpeg-static` came in with `npm install`, and that the bot has Connect + Speak.                                                       |
-| Slash commands missing                   | Run `npm run deploy`. The two kitchen servers update immediately. Other servers can take about an hour. Restart Discord if the picker is stale. |
-| `/radio` is missing the station option   | Deploy again after pulling. Type `/radio`, then pick **play** and a station.                                                                    |
-| Radio Beat shows a show name             | During a program, Beat publishes the show. The card follows “Právě v éteru”. Catch waits for a real song.                                       |
-| Steam / Epic stayed quiet                | Check `/setup status` and the bot’s permissions. An unchanged lineup stays in the pot.                                                          |
-| Welcome / goodbye stayed quiet           | Enable **Server Members Intent**, then `/setup welcome` and `/setup goodbye`.                                                                   |
-| An old card is stuck                     | Grant **Manage Messages** so Dzbanek can clear the previous one.                                                                                |
+| What happened                            | What to try                                                                                                                                                                                           |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Song won't play / "Could not load track" | yt-dlp updates itself at startup and daily at 04:15. If it is still stuck, delete `node_modules/youtube-dl-exec` and reinstall. Set `YTDLP_COOKIES_BASE64` if YouTube asks you to prove you’re human. |
+| No audio                                 | Confirm `ffmpeg-static` came in with `npm install`, and that the bot has Connect + Speak.                                                                                                             |
+| Slash commands missing                   | Run `npm run deploy`. The two kitchen servers update immediately. Other servers can take about an hour. Restart Discord if the picker is stale.                                                       |
+| `/radio` is missing the station option   | Deploy again after pulling. Type `/radio`, then pick **play** and a station.                                                                                                                          |
+| Radio Beat shows a show name             | During a program, Beat publishes the show. The card follows “Právě v éteru”. Catch waits for a real song.                                                                                             |
+| Steam / Epic stayed quiet                | Check `/setup status` and the bot’s permissions. An unchanged lineup stays in the pot.                                                                                                                |
+| Welcome / goodbye stayed quiet           | Enable **Server Members Intent**, then `/setup welcome` and `/setup goodbye`.                                                                                                                         |
+| An old card is stuck                     | Grant **Manage Messages** so Dzbanek can clear the previous one.                                                                                                                                      |
