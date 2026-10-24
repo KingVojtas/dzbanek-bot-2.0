@@ -63,6 +63,24 @@ export interface KitchenListener {
   name: string;
 }
 
+export interface KitchenVoiceMember {
+  name: string;
+  muted?: boolean;
+  deafened?: boolean;
+  streaming?: boolean;
+  video?: boolean;
+}
+
+export interface KitchenVoiceRoom {
+  name: string;
+  members: KitchenVoiceMember[];
+  /** The bot is in this one. */
+  withBot?: boolean;
+  afk?: boolean;
+  /** Unix seconds when the first person sat down, when the bot saw it happen. */
+  since?: number;
+}
+
 export interface KitchenDealTeaser {
   /** The small line above the title. */
   kicker: string;
@@ -79,6 +97,8 @@ export interface KitchenBoardView {
   stereo: KitchenStereo;
   listeners: KitchenListener[];
   voiceChannelName?: string;
+  /** Every voice channel with people in it that the board's readers can see. */
+  voiceRooms: KitchenVoiceRoom[];
   steam?: KitchenDealTeaser;
   epic?: KitchenDealTeaser;
   joinsToday: number;
@@ -102,7 +122,7 @@ export interface KitchenDisplay extends V2Display {
 }
 
 /** Bump when the layout changes so every board redraws once. */
-const BOARD_LAYOUT = 'cards-deluxe';
+const BOARD_LAYOUT = 'cards-voice';
 
 const VOTE_LABELS: Record<StationId, string> = { kiss: 'Kiss', rock: 'Rock', beat: 'Beat' };
 export const VOTE_EMOJI: Record<StationId, string> = { kiss: '💋', rock: '🎸', beat: '🥁' };
@@ -202,13 +222,8 @@ function listenerLines(view: KitchenBoardView): string[] {
   const bits = [`🎧 **${plain(view.voiceChannelName, 60)}** · ${who}`];
   const queued = view.stereo.kind === 'music' ? (view.stereo.queueLength ?? 0) : 0;
   if (queued > 0) bits.push(`📜 ${queued} up next`);
-  const lines = [bits.join(' · ')];
-  if (n > 0) {
-    const shown = view.listeners.slice(0, 8).map((member) => plain(member.name, 32));
-    const extra = n - shown.length;
-    lines.push(`-# ${shown.join(' · ')}${extra > 0 ? ` · +${extra}` : ''}`);
-  }
-  return lines;
+  // The names are on the In voice card.
+  return [bits.join(' · ')];
 }
 
 function quietStereo(files: KitchenFiles): ContainerBuilder {
@@ -296,6 +311,62 @@ function musicStereo(view: KitchenBoardView): ContainerBuilder {
       ),
     );
   return container;
+}
+
+/* ---------- In voice ---------- */
+
+const VOICE_ROOMS_MAX = 8;
+const VOICE_NAMES_MAX = 12;
+
+function people(n: number): string {
+  return n === 1 ? '1 person' : `${n} people`;
+}
+
+function memberChip(member: KitchenVoiceMember): string {
+  const icons = [
+    member.streaming ? '🔴' : '',
+    member.video ? '📹' : '',
+    member.deafened ? '🔕' : member.muted ? '🔇' : '',
+  ].join('');
+  const name = plain(member.name, 32);
+  return icons ? `${name} ${icons}` : name;
+}
+
+function voiceLegend(rooms: KitchenVoiceRoom[]): string {
+  const everyone = rooms.flatMap((room) => room.members);
+  return [
+    everyone.some((m) => m.streaming) ? '🔴 streaming' : '',
+    everyone.some((m) => m.video) ? '📹 camera' : '',
+    everyone.some((m) => m.muted && !m.deafened) ? '🔇 muted' : '',
+    everyone.some((m) => m.deafened) ? '🔕 deafened' : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** Who is in which call right now. Always on the board, even when the bot is not in voice. */
+function voiceCard(view: KitchenBoardView): ContainerBuilder {
+  const rooms = view.voiceRooms;
+  const total = rooms.reduce((sum, room) => sum + room.members.length, 0);
+  const lines = [total === 0 ? '### 🔊 In voice' : `### 🔊 In voice · ${people(total)}`];
+  if (total === 0) {
+    lines.push('-# Nobody’s in a call right now. Hop in, the kettle’s warm.');
+  }
+  for (const room of rooms.slice(0, VOICE_ROOMS_MAX)) {
+    const icon = room.withBot ? '🎧' : room.afk ? '💤' : '🔊';
+    const started = room.since ? ` · started <t:${room.since}:R>` : '';
+    lines.push(`${icon} **${plain(room.name, 60)}** · ${people(room.members.length)}${started}`);
+    const shown = room.members.slice(0, VOICE_NAMES_MAX).map(memberChip);
+    const extra = room.members.length - shown.length;
+    lines.push(`${shown.join(' · ')}${extra > 0 ? ` · +${extra}` : ''}`);
+  }
+  const hidden = rooms.length - VOICE_ROOMS_MAX;
+  if (hidden > 0) lines.push(`-# +${hidden} more ${hidden === 1 ? 'call' : 'calls'}`);
+  const legend = voiceLegend(rooms);
+  if (legend) lines.push(`-# ${legend}`);
+  return new ContainerBuilder()
+    .setAccentColor(KITCHEN_COLOR)
+    .addTextDisplayComponents(textBlock(lines));
 }
 
 /* ---------- The pantry ---------- */
@@ -450,9 +521,9 @@ function roomCard(view: KitchenBoardView, files: KitchenFiles): ContainerBuilder
 }
 
 /**
- * The living Kitchen Board, three cards in one message: the stereo with its
- * controls, the pantry with the top Steam deal and the Epic freebie, and the
- * room with the latest catch, today's cookies, and Radio Night.
+ * The living Kitchen Board, four cards in one message: the stereo with its
+ * controls, who is in voice, the pantry with the top Steam deal and the Epic
+ * freebie, and the room with the latest catch, today's cookies, and Radio Night.
  */
 export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay {
   const files = new KitchenFiles();
@@ -462,7 +533,7 @@ export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay
       : view.stereo.kind === 'music'
         ? musicStereo(view)
         : quietStereo(files);
-  const components = [stereo, pantryCard(view)];
+  const components = [stereo, voiceCard(view), pantryCard(view)];
   const room = roomCard(view, files);
   if (room) components.push(room);
   return { components, flags: MessageFlags.IsComponentsV2, files: files.list() };

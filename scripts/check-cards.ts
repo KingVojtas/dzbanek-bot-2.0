@@ -252,6 +252,7 @@ function quietView(): KitchenBoardView {
       color: 0xc4783a,
     },
     listeners: [],
+    voiceRooms: [],
     joinsToday: 0,
   };
 }
@@ -271,6 +272,7 @@ function rockView(): KitchenBoardView {
     },
     listeners: [{ id: '1', name: 'Vojta' }],
     voiceChannelName: 'kitchen',
+    voiceRooms: [{ name: 'kitchen', withBot: true, members: [{ name: 'Vojta' }] }],
     joinsToday: 1,
   };
 }
@@ -326,6 +328,8 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
     'the shelf is clear',
     'nothing free this week',
     'attachment://kitchen-hero.jpg',
+    '### 🔊 In voice',
+    'Nobody’s in a call right now',
   ]);
   if (quiet.includes('radio:catch') || quiet.includes('kitchen:catch-play')) {
     fail('kitchen-quiet-buttons', 'quiet board grew radio buttons');
@@ -348,6 +352,8 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
     '## Hard & Heavy',
     '**Rock Radio**',
     '🎧 **kitchen** · 1 listening',
+    '### 🔊 In voice · 1 person',
+    '🎧 **kitchen** · 1 person',
     'radio:stop',
     'radio:catch',
     'Website',
@@ -406,6 +412,25 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
         ...rockView(),
         joinsToday: 3,
         listeners: Array.from({ length: 9 }, (_, i) => ({ id: String(i), name: `Person ${i}` })),
+        voiceRooms: [
+          {
+            name: 'kitchen',
+            withBot: true,
+            since: 1_900_000_000,
+            members: Array.from({ length: 15 }, (_, i) => ({
+              name: `Long Display Name ${i}`,
+              muted: i === 1,
+              deafened: i === 2,
+              streaming: i === 3,
+              video: i === 3,
+            })),
+          },
+          { name: 'AFK', afk: true, members: [{ name: 'Sleepy' }] },
+          ...Array.from({ length: 8 }, (_, i) => ({
+            name: `Room ${i}`,
+            members: [{ name: `Guest ${i}` }],
+          })),
+        ],
         steam: {
           kicker: '💸 STEAM DEAL OF THE DAY',
           title: 'Hades',
@@ -441,7 +466,15 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
       }),
     [
       '9 listening',
-      '· +1',
+      '### 🔊 In voice · 24 people',
+      '🎧 **kitchen** · 15 people · started <t:1900000000:R>',
+      'Display Name 1 🔇',
+      'Display Name 2 🔕',
+      'Display Name 3 🔴📹',
+      '· +3',
+      '💤 **AFK** · 1 person',
+      '+2 more calls',
+      '🔴 streaming · 📹 camera · 🔇 muted · 🔕 deafened',
       '### [Hades](https://store.steampowered.com/app/1145360)',
       '+9 more in <#123>',
       'Cocoon',

@@ -9,6 +9,7 @@ import {
   type Message,
   type SendableChannels,
   type VoiceBasedChannel,
+  type VoiceState,
 } from 'discord.js';
 import type { Config } from '../config';
 import type { Logger } from '../core/logger';
@@ -46,6 +47,7 @@ import {
   looksLikeKitchenBoard,
   type KitchenBoardView,
   type KitchenDealTeaser,
+  type KitchenVoiceRoom,
 } from './display';
 import { RadioCatchStore } from './catches';
 import {
@@ -91,6 +93,8 @@ export class KitchenBoard {
   private readonly votes = new RadioNightVoteStore();
   private readonly catches = new RadioCatchStore();
   private readonly quizScores = new QuizScoreStore();
+  /** Voice channel id → when its first person sat down. Unknown for calls older than the bot. */
+  private readonly callStarted = new Map<string, number>();
   private busy: ((guildId: string) => boolean) | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -122,20 +126,11 @@ export class KitchenBoard {
   }
 
   attach(): void {
+    // The In voice card shows every call, so any join, leave, move, mute, or
+    // stream redraws it. The view key skips edits for changes it does not show.
     this.client.on(Events.VoiceStateUpdate, (oldState, newState) => {
-      const guildId = newState.guild.id;
-      // The board lists who is in the bot's channel. A mute or a move anywhere
-      // else changes nothing on it.
-      const botChannelId =
-        this.radio.channelId(guildId) ??
-        this.music.get(guildId)?.connection.joinConfig.channelId ??
-        null;
-      const isBot = newState.id === this.client.user?.id;
-      const touchesBot =
-        botChannelId !== null &&
-        (oldState.channelId === botChannelId || newState.channelId === botChannelId);
-      if (!isBot && !touchesBot) return;
-      this.refresh(guildId);
+      this.noteCallStart(oldState, newState);
+      this.refresh(newState.guild.id);
     });
 
     if (this.tickTimer) return;
@@ -393,6 +388,7 @@ export class KitchenBoard {
       settings.kitchenJoinDate,
       settings.kitchenJoinCount,
       settings,
+      seenWith(channel),
     );
     const key = kitchenViewKey(view);
     const display = buildKitchenBoardDisplay(view);
@@ -470,6 +466,7 @@ export class KitchenBoard {
       radioNightChannelId: string | null;
       radioNightStation: string | null;
     },
+    canShow: (voice: VoiceBasedChannel) => boolean,
   ): Promise<KitchenBoardView> {
     const today = calendarDate(this.config.timezone);
     const joinsToday = joinDate === today ? joinCount : 0;
@@ -507,6 +504,7 @@ export class KitchenBoard {
       stereo,
       listeners: voice.listeners,
       voiceChannelName: voice.name,
+      voiceRooms: this.voiceRooms(guild, canShow),
       steam: steamTeaser(steamSnap),
       epic: epicTeaser(epicSnap),
       joinsToday,
@@ -593,6 +591,75 @@ export class KitchenBoard {
       .map((member) => ({ id: member.id, name: displayName(member) }));
     return { name: channel.name, listeners };
   }
+
+  /** Every call the board's readers could see, the bot's first, then the busiest. */
+  private voiceRooms(
+    guild: Guild,
+    canShow: (voice: VoiceBasedChannel) => boolean,
+  ): KitchenVoiceRoom[] {
+    const botChannelId = guild.members.me?.voice.channelId ?? null;
+    const rooms: { room: KitchenVoiceRoom; position: number }[] = [];
+    for (const channel of guild.channels.cache.values()) {
+      if (!channel.isVoiceBased() || !canShow(channel)) continue;
+      const members = [...channel.members.values()]
+        .filter((member) => !member.user.bot)
+        .map((member) => ({
+          name: displayName(member),
+          muted: member.voice.mute ?? false,
+          deafened: member.voice.deaf ?? false,
+          streaming: member.voice.streaming ?? false,
+          video: member.voice.selfVideo ?? false,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (members.length === 0) continue;
+      const started = this.callStarted.get(channel.id);
+      rooms.push({
+        position: channel.rawPosition,
+        room: {
+          name: channel.name,
+          members,
+          withBot: channel.id === botChannelId,
+          afk: channel.id === guild.afkChannelId,
+          since: started ? Math.floor(started / 1000) : undefined,
+        },
+      });
+    }
+    return rooms
+      .sort(
+        (a, b) =>
+          Number(b.room.withBot) - Number(a.room.withBot) ||
+          b.room.members.length - a.room.members.length ||
+          a.position - b.position,
+      )
+      .map(({ room }) => room);
+  }
+
+  /** A call starts when its first person joins and ends when its last one leaves. */
+  private noteCallStart(oldState: VoiceState, newState: VoiceState): void {
+    if (oldState.channelId === newState.channelId) return;
+    if ((newState.member ?? oldState.member)?.user.bot) return;
+    const left = oldState.channel;
+    if (left && humansIn(left) === 0) this.callStarted.delete(left.id);
+    const joined = newState.channel;
+    if (joined && humansIn(joined) === 1) this.callStarted.set(joined.id, Date.now());
+  }
+}
+
+function humansIn(channel: VoiceBasedChannel): number {
+  return channel.members.filter((member) => !member.user.bot).size;
+}
+
+/**
+ * A call goes on the board only when every role that can read the board can
+ * also see its channel, so private calls stay private.
+ */
+function seenWith(board: SendableChannels): (voice: VoiceBasedChannel) => boolean {
+  if (board.isDMBased()) return () => false;
+  const readers = [...board.guild.roles.cache.values()].filter((role) =>
+    board.permissionsFor(role).has(PermissionFlagsBits.ViewChannel),
+  );
+  return (voice) =>
+    readers.every((role) => voice.permissionsFor(role).has(PermissionFlagsBits.ViewChannel));
 }
 
 function pickStationId(value: string | null | undefined): StationId | null {
