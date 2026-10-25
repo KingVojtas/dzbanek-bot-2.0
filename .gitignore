@@ -14,3 +14,6 @@ data/*
 /dzbanek-grok-skill.zip
 /update-dzbanek/
 .claude/skills/update-dzbanek/
+
+# YouTube cookies shipped with /update-dzbanek uploads — a signed-in session, never commit
+secrets/

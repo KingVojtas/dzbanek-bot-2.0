@@ -3,7 +3,9 @@ import { Transform, type PassThrough, type Readable } from 'node:stream';
 import youtubeDl from 'youtube-dl-exec';
 import type { Track, TrackSource } from '../../core/types';
 import { bufferStream } from '../buffer-stream';
-import { ytDlpCookieFlags } from '../ytdlp-cookies';
+import { logger } from '../../core/logger';
+import { isBotCheck, ytDlpCookieFlags } from '../ytdlp-cookies';
+import { findSoundCloudStandIn } from './soundcloud';
 
 const YTDLP_CACHE = join(process.cwd(), 'data', 'yt-dlp-cache');
 
@@ -276,7 +278,26 @@ export class YouTubeSource implements TrackSource {
     this.warmed.set(id, { stream, ready: spawned.ready, timer });
   }
 
+  /**
+   * YouTube's audio, or the same song from SoundCloud when YouTube demands a
+   * sign-in (bot check). Without a close SoundCloud match, YouTube's error stands.
+   */
   async stream(track: Track): Promise<Readable> {
+    try {
+      return await this.streamYouTube(track);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!isBotCheck(msg)) throw error;
+      const standIn = await findSoundCloudStandIn(track).catch(() => null);
+      if (!standIn) throw error;
+      logger.warn(`YouTube bot check on "${track.title}" — playing ${standIn} instead.`);
+      const fallback = this.spawnStream(standIn);
+      await fallback.ready;
+      return fallback.audio;
+    }
+  }
+
+  private async streamYouTube(track: Track): Promise<Readable> {
     const id = youTubeVideoId(track.url);
     const warm = id ? this.warmed.get(id) : undefined;
     if (id && warm) {

@@ -255,6 +255,10 @@ If yt-dlp meets an age gate or a bot check, export Netscape `cookies.txt` from a
 YTDLP_COOKIES_BASE64=...
 ```
 
+Or save the file as `secrets/yt-cookies.txt`. The folder is gitignored, and `/update-dzbanek` ships it with each upload, so the server's `.env` stays untouched. The env var wins when both are set. Export from a private window and close it right after, or YouTube rotates the session and the cookies die early.
+
+While YouTube blocks a song, the bot looks for the same song on SoundCloud and plays it from there. A match needs the song name in its title and about the same length. Previews and remixes don't count.
+
 ---
 
 ## ⚙️ Configuration
