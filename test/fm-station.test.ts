@@ -27,21 +27,32 @@ const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 /** A show with fake Discord, Deezer, and YouTube, and a clock that moves one song at a time. */
 function show(opts: {
   pool: FmSong[];
-  related?: { id: number; name: string }[];
+  related?: { id: number; name: string }[] | ((seedId: number) => { id: number; name: string }[]);
+  tops?: { title: string; artist: string; durationSec: number }[];
   searchOne?: (query: string) => Promise<unknown>;
+  artistId?: (key: string) => number | undefined;
 }) {
+  const calls = { deezer: 0, youtube: 0 };
   const genres: GenreIndex = {
     genreOf: (key) => key.split('|')[0] as GenreId,
-    artistId: () => 1,
+    artistId: opts.artistId ?? (() => 1),
     ready: () => true,
     enqueue() {},
   };
   const catalog: FmCatalog = {
     searchTrack: async () => ({ ok: true, value: null }),
     albumGenres: async () => ({ ok: true, value: [] }),
-    relatedArtists: async () => opts.related ?? [],
-    topTracks: async () => [{ title: 'Brand New', artist: 'Stranger', durationSec: 200 }],
-    artistCountry: async () => ({ ok: true, value: null }),
+    relatedArtists: async (seedId) => {
+      calls.deezer += 1;
+      if (typeof opts.related === 'function') return opts.related(seedId);
+      return opts.related ?? [];
+    },
+    topTracks: async () => {
+      calls.deezer += 1;
+      return opts.tops ?? [{ title: 'Brand New', artist: 'Stranger', durationSec: 200 }];
+    },
+    artistCountry: async () => ({ ok: true, value: { country: null, tags: [] } }),
+    lookupArea: async () => ({ ok: true, value: { country: null, parents: [] } }),
   };
   let clock = START;
   const members = [{ id: 'u1', displayName: 'Vojta' }];
@@ -53,7 +64,14 @@ function show(opts: {
       } as never,
       listeners: () => members as never,
       pool: async () => opts.pool,
-      source: { youtube: { searchOne: opts.searchOne ?? (async () => null) } } as never,
+      source: {
+        youtube: {
+          searchOne: async (query: string) => {
+            calls.youtube += 1;
+            return (opts.searchOne ?? (async () => null))(query);
+          },
+        },
+      } as never,
       writer: { ready: false } as never,
       voice: { speak: async () => null } as never,
       language: 'en',
@@ -69,6 +87,7 @@ function show(opts: {
     () => {},
   );
   return {
+    calls,
     /** Play `count` songs; stops early when the station has nothing. */
     async play(count: number): Promise<{ title: string; vibe: string | null }[]> {
       const played: { title: string; vibe: string | null }[] = [];
@@ -122,5 +141,21 @@ describe('FmStation genre blocks', () => {
       if (song.vibe === 'Czech rap') assert.match(song.title, /cz-rap/);
       if (song.vibe === 'rock') assert.match(song.title, /rock/);
     }
+  });
+
+  it('stops looking after 4 YouTube searches and 8 Deezer calls, and still plays the kitchen', async () => {
+    const radio = show({
+      pool: Array.from({ length: 12 }, (_, n) => kitchenSong('cz-rap', n)),
+      artistId: (key) => 100 + Number(key.split('|')[1]),
+      related: (seedId) => [{ id: seedId + 1000, name: `Stranger ${seedId}` }],
+      tops: [{ title: 'Fresh Cut', artist: 'Outside', durationSec: 180 }],
+      searchOne: async () => null,
+    });
+    const played = await radio.play(1);
+    const first = played[0];
+    assert.ok(first);
+    assert.match(first.title, /cz-rap/);
+    assert.equal(radio.calls.youtube, 4);
+    assert.equal(radio.calls.deezer, 8);
   });
 });

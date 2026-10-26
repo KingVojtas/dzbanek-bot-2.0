@@ -55,6 +55,10 @@ import {
 const STALE_MS = 20 * 60_000;
 /** Tries to top up a set whose songs would not load. */
 const FILL_TRIES = 4;
+/** Related-artist and top-track calls one set may spend on Deezer. */
+const DISCOVER_DEEZER_CALLS = 8;
+/** YouTube searches one set may spend looking for a new find. */
+const DISCOVER_YOUTUBE_CALLS = 4;
 /** What Claude hears of this show: its last vibes and songs. */
 const VIBES_SHOWN = 6;
 const PLAYED_SHOWN = 30;
@@ -461,7 +465,10 @@ export class FmStation implements PlayerStation {
     return tracks;
   }
 
-  /** Related artists the kitchen has not played, then one of their top tracks from YouTube. */
+  /**
+   * Related artists the kitchen has not played, then one top track from YouTube.
+   * One set may ask Deezer 8 times and YouTube 4 times, then it plays what it already has.
+   */
   private async discover(
     pool: FmSong[],
     genre: GenreId,
@@ -483,17 +490,26 @@ export class FmStation implements PlayerStation {
     );
     const found: Track[] = [];
     const usedArtists = new Set<number>();
+    let deezerCalls = 0;
+    let youtubeCalls = 0;
+    const room = (): boolean =>
+      found.length < allowance &&
+      deezerCalls < DISCOVER_DEEZER_CALLS &&
+      youtubeCalls < DISCOVER_YOUTUBE_CALLS;
     for (const seedId of seeds) {
-      if (found.length >= allowance) break;
+      if (!room()) break;
+      deezerCalls += 1;
       const related = await catalog.relatedArtists(seedId);
       for (const artist of related) {
-        if (found.length >= allowance) break;
+        if (!room()) break;
         if (usedArtists.has(artist.id) || kitchenArtists.has(artistKey(artist.name))) continue;
         usedArtists.add(artist.id);
+        deezerCalls += 1;
         const tops = await catalog.topTracks(artist.id);
         const pick = pickDiscoverTrack(tops, blocked, Math.random);
         if (!pick) continue;
         const query = `${pick.artist} - ${pick.title}`;
+        youtubeCalls += 1;
         // A search that throws (a bot check, a timeout) is no match, not the end of the set.
         const hit = await this.deps.source.youtube
           .searchOne(query, NEW_FIND)
