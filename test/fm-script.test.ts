@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   MAX_SONG_SEC,
+  MIN_SONG_SEC,
   SET_MAX,
   cleanLine,
   isSameSong,
@@ -114,6 +115,21 @@ describe('pickSong', () => {
 
   it('plays a catch whose length is not known yet', () => {
     assert.equal(pickSong([{ key: 'caught', durationSec: 0 }], [])?.key, 'caught');
+  });
+
+  it('leaves out adverts shorter than a minute', () => {
+    const pool = [
+      { key: 'ad', durationSec: MIN_SONG_SEC - 1 },
+      { key: 'song', durationSec: MIN_SONG_SEC },
+      { key: 'caught', durationSec: 0 },
+    ];
+    const seen = new Set<string>();
+    for (let i = 0; i < 40; i += 1) {
+      const pick = pickSong(pool, []);
+      assert.ok(pick);
+      seen.add(pick.key);
+    }
+    assert.deepEqual([...seen].sort(), ['caught', 'song']);
   });
 
   it('answers null for an empty pool', () => {

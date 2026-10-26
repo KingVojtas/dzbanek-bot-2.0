@@ -17,7 +17,7 @@ export const FM_MIN_SONGS = 3;
 
 /**
  * Kitchen FM: the server's own station. It plays the kitchen's songs (every
- * /play and every 🍪 catch) in genre blocks of about an hour, with a few new
+ * /play and every 🍪 catch) in genre blocks of about ten songs, with a few new
  * finds and a DJ between the sets. /play requests still go first. No API key.
  */
 export class KitchenFm {
@@ -109,7 +109,7 @@ export class KitchenFm {
         voice: this.voice,
         language: this.config.dj.language,
         discover: this.config.dj.discover,
-        blockMinutes: this.config.dj.blockMinutes,
+        blockSets: this.config.dj.blockSets,
         genres: this.genres,
         catalog: this.catalog,
         timezone: this.config.timezone,

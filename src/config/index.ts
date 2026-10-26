@@ -38,8 +38,8 @@ export interface Config {
     model: string;
     /** New finds per set, from related artists, 0 to 3. */
     discover: number;
-    /** Minutes one genre stays on, 20 to 180. */
-    blockMinutes: number;
+    /** Sets in a genre block after the opener, from 1 to 4. The first block is one set. */
+    blockSets: number;
   };
   embedColor: number;
 }
@@ -132,10 +132,10 @@ function loadConfig(): Config {
         typeof dj.discover === 'number' && Number.isFinite(dj.discover)
           ? Math.min(3, Math.max(0, Math.round(dj.discover)))
           : 2,
-      blockMinutes:
-        typeof dj.blockMinutes === 'number' && Number.isFinite(dj.blockMinutes)
-          ? Math.min(180, Math.max(20, Math.round(dj.blockMinutes)))
-          : 60,
+      blockSets:
+        typeof dj.blockSets === 'number' && Number.isFinite(dj.blockSets)
+          ? Math.min(4, Math.max(1, Math.round(dj.blockSets)))
+          : 2,
     },
     embedColor: parseColor(raw.embedColor),
   };

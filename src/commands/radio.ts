@@ -257,7 +257,7 @@ async function playKitchenFm(
           'success',
           `🎙️ **Kitchen FM** is on air in <#${voiceChannel.id}>: ${songs} kitchen songs` +
             (services.fm.findsNew ? ', plus a few new finds' : '') +
-            '. About an hour of one genre, then the next, with a DJ between the sets.\n' +
+            '. Ten songs of one genre, then the next. The opener is five, with a DJ between the sets.\n' +
             '-# `/play` requests go first. ⏭️ Skip cuts the DJ short. `/radio stop` ends the show.',
         ),
       ],

@@ -18,17 +18,18 @@ import {
   type LineSlots,
   type Moment,
 } from './lines';
-import type { DjVoice } from './voice';
+import { pcmLoudness, type DjVoice } from './voice';
 import type { DjWriter } from './writer';
 import {
   CRATE_SIZE,
-  MAX_SONG_SEC,
+  REPEAT_GAP,
   SET_MAX,
   SET_MIN,
   isSameSong,
   pickSong,
   relativeDay,
   sampleCrate,
+  songFits,
   templateOpener,
   themeName,
   themedSet,
@@ -39,7 +40,6 @@ import {
   type Theme,
 } from './script';
 import {
-  blockOverruns,
   blockProfile,
   findAllowance,
   genreSongs,
@@ -47,7 +47,6 @@ import {
   nextGenre,
   pickDiscoverTrack,
   seedArtistIds,
-  setSeconds,
   tasteProfile,
 } from './taste';
 
@@ -55,10 +54,14 @@ import {
 const STALE_MS = 20 * 60_000;
 /** Tries to top up a set whose songs would not load. */
 const FILL_TRIES = 4;
+/** The show's first line is synthesized cold, so the player may wait this long. */
+const OPENER_WAIT_MS = 25_000;
 /** Related-artist and top-track calls one set may spend on Deezer. */
 const DISCOVER_DEEZER_CALLS = 8;
 /** YouTube searches one set may spend looking for a new find. */
 const DISCOVER_YOUTUBE_CALLS = 4;
+/** Fewer kitchen songs than this: one set of them, then sets of new finds. */
+const SMALL_KITCHEN = 10;
 /** What Claude hears of this show: its last vibes and songs. */
 const VIBES_SHOWN = 6;
 const PLAYED_SHOWN = 30;
@@ -86,8 +89,8 @@ export interface FmStationDeps {
   language: DjLanguage;
   /** New finds a set may hold, songs the kitchen never played. */
   discover: number;
-  /** Minutes one genre stays on, already clamped to 20–180. */
-  blockMinutes?: number;
+  /** Sets in a genre block after the opening set. The first block of a show is one set. */
+  blockSets?: number;
   /** Genre cache. Blocks start once it knows enough of this server's songs. */
   genres?: GenreIndex;
   /** Deezer, for new finds inside a genre block. */
@@ -108,6 +111,8 @@ interface FmSet {
   /** The next of `tracks` to hand out. */
   next: number;
   plannedAt: number;
+  /** The show's first set. Its clip is synthesized before anything is playing. */
+  opener?: boolean;
 }
 
 type SetBase = { hour: number; minute: number; set: number; newcomers: string[] };
@@ -132,8 +137,8 @@ export class FmStation implements PlayerStation {
   /** Who was listening when the current set started. */
   private heard = new Set<string>();
   private ended = false;
-  /** The genre block on air, and when its first set was planned. */
-  private block: { genre: GenreId; startedAt: number } | null = null;
+  /** The genre block on air: how many sets it should hold, and how many are planned. */
+  private block: { genre: GenreId; sets: number; limit: number } | null = null;
   private readonly blockHistory: GenreId[] = [];
   /** Line indexes already said this show, so a line is not repeated while others remain. */
   private readonly usedLines = new Map<Moment, Set<number>>();
@@ -197,14 +202,21 @@ export class FmStation implements PlayerStation {
     if (!pending) {
       pending = this.deps.voice
         .speak(set.line)
-        .then((audio) => ({ text: set.line, audio }))
+        .then((pcm) => ({ text: set.line, pcm }))
         .catch((error: unknown) => {
           this.deps.logger.warn('Kitchen FM intro failed:', error);
-          return { text: set.line, audio: null };
+          return { text: set.line, pcm: null };
         });
       this.intros.set(set, pending);
     }
     return pending;
+  }
+
+  /** The opener may wait longer. Every later intro uses the player's usual wait. */
+  introWaitMs(track: Track): number | undefined {
+    const set = this.setOf.get(track);
+    if (set?.opener && set.tracks[0] === track) return OPENER_WAIT_MS;
+    return undefined;
   }
 
   vibeOf(track: Track): string | null {
@@ -235,7 +247,7 @@ export class FmStation implements PlayerStation {
       this.deps.logger.info(`Kitchen FM in ${this.deps.guild.name}: nobody is listening.`);
       return null;
     }
-    const pool = (await this.deps.pool()).filter((song) => song.durationSec <= MAX_SONG_SEC);
+    const pool = (await this.deps.pool()).filter((song) => songFits(song.durationSec));
     const clock = zonedParts(this.deps.timezone);
     const number = this.vibes.length + 1;
     const base: SetBase = {
@@ -251,11 +263,21 @@ export class FmStation implements PlayerStation {
     };
     const time = `${clock.weekday} ${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}`;
 
-    // A genre set that fails (a search that threw, a catalog hiccup) falls back; the show goes on.
-    const blockSet = await this.planBlocks(pool, base, listeners).catch((error: unknown) => {
-      this.deps.logger.warn('Kitchen FM could not plan a genre set:', error);
-      return null;
-    });
+    // A small kitchen gets one set of its own songs; after that, new finds from similar artists.
+    // A set that fails (a search that threw, a catalog hiccup) falls back; the show goes on.
+    const findSet =
+      number > 1 && pool.length < SMALL_KITCHEN
+        ? await this.planFinds(pool, base, listeners).catch((error: unknown) => {
+            this.deps.logger.warn('Kitchen FM could not plan a set of new finds:', error);
+            return null;
+          })
+        : null;
+    const blockSet =
+      findSet ??
+      (await this.planBlocks(pool, base, listeners).catch((error: unknown) => {
+        this.deps.logger.warn('Kitchen FM could not plan a genre set:', error);
+        return null;
+      }));
     const set =
       blockSet ??
       (await this.planWithClaude(pool, base, time, listeners)) ??
@@ -272,7 +294,25 @@ export class FmStation implements PlayerStation {
       `Kitchen FM in ${this.deps.guild.name}: set ${number}, "${set.vibe}", ` +
         `${set.tracks.length} songs${finds ? ` (${finds} new)` : ''}: "${set.line}"`,
     );
+    set.opener = number === 1;
+    this.cueVoice(set);
     return set;
+  }
+
+  /** Start the clip as soon as the set exists, and say how it came out. */
+  private cueVoice(set: FmSet): void {
+    const first = set.tracks[0];
+    if (!first) return;
+    void this.intro(first).then((intro) => {
+      if (!intro?.pcm?.length) {
+        this.deps.logger.info('Kitchen FM voice: text only');
+        return;
+      }
+      // s16le, 48 kHz, stereo.
+      const seconds = intro.pcm.length / (48_000 * 2 * 2);
+      const db = Math.round(pcmLoudness(intro.pcm));
+      this.deps.logger.info(`Kitchen FM voice: ${seconds.toFixed(1)} s, ${db} dBFS`);
+    });
   }
 
   private async planWithClaude(
@@ -330,20 +370,54 @@ export class FmStation implements PlayerStation {
     base: SetBase,
     listeners: GuildMember[],
   ): Promise<FmSet | null> {
-    const picked = themedSet(pool, this.recent, {
-      listeners: new Map(listeners.map((member) => [member.id, member.displayName])),
-      last: this.lastTheme,
-    });
-    if (!picked) return null;
-    const loaded = await Promise.all(picked.songs.map((song) => this.loadSong(song)));
+    const listenerMap = new Map(listeners.map((member) => [member.id, member.displayName]));
+    const gap = new Set(this.recent.slice(-REPEAT_GAP));
+    const fresh = pool.filter((song) => !gap.has(song.key));
+    const picked =
+      fresh.length > 0
+        ? themedSet(fresh, [], { listeners: listenerMap, last: this.lastTheme })
+        : null;
+    // A small kitchen opens with all of its own songs; finds only fill the gap.
+    const allowance =
+      pool.length < SMALL_KITCHEN
+        ? Math.min(this.findBudget(fresh.length), Math.max(0, SET_MAX - fresh.length))
+        : this.findBudget(fresh.length);
+    const chosen = (picked?.songs ?? []).slice(
+      0,
+      kitchenSlots(picked?.songs.length ?? 0, allowance),
+    );
+    const loaded = await Promise.all(chosen.map((song) => this.loadSong(song)));
     const tracks = loaded.filter((track): track is Track => track !== null);
-    await this.fill(tracks, pool);
-    if (tracks.length === 0) return null;
-    this.lastTheme = picked.theme.kind;
-    const vibe = themeName(picked.theme, this.deps.language);
+
+    const index = this.deps.genres;
+    if (allowance > 0 && this.deps.catalog && index) {
+      const listenerIds = new Set(listeners.map((member) => member.id));
+      const discovered = await this.discover(pool, null, allowance, listenerIds, index);
+      for (const track of discovered) {
+        if (tracks.length >= SET_MAX) break;
+        if (!tracks.some((other) => other.url === track.url)) tracks.push(track);
+      }
+    }
+    await this.fill(tracks, fresh);
+    if (tracks.length === 0) {
+      const again = themedSet(pool, this.recent, { listeners: listenerMap, last: this.lastTheme });
+      if (again) {
+        const extra = await Promise.all(
+          again.songs.slice(0, SET_MAX).map((song) => this.loadSong(song)),
+        );
+        for (const track of extra) {
+          if (!track || tracks.length >= SET_MAX) continue;
+          if (!tracks.some((other) => other.url === track.url)) tracks.push(track);
+        }
+      }
+    }
+    if (tracks.length === 0 || !tracks[0]) return null;
+    const theme = picked?.theme ?? { kind: 'mix' as const };
+    this.lastTheme = theme.kind;
+    const vibe = themeName(theme, this.deps.language);
     return {
       vibe,
-      line: this.speak(base, vibe, tracks[0]!, false),
+      line: this.speak(base, vibe, tracks[0], false),
       tracks,
       next: 0,
       plannedAt: this.now(),
@@ -352,8 +426,8 @@ export class FmStation implements PlayerStation {
 
   /**
    * One set inside a genre block, once enough songs have a genre. The first
-   * block of a show is the server's favourite. A set that would run long past
-   * the hour, or a genre out of unplayed songs, starts the next genre instead.
+   * block of a show is the server's favourite, and it is one set. Later blocks
+   * run for `blockSets` sets. A genre out of unplayed songs starts the next one.
    * Only genres with `BLOCK_MIN_FRESH` unplayed songs get a block.
    */
   private async planBlocks(
@@ -373,31 +447,33 @@ export class FmStation implements PlayerStation {
       this.recent,
       genreOf,
     );
-    const blockMs = (this.deps.blockMinutes ?? 60) * 60_000;
 
     let genre = this.block?.genre ?? null;
     let fresh = false;
+    const due = this.block !== null && this.block.sets >= this.block.limit;
     if (!genre) {
       genre = nextGenre(profile, [], Math.random);
       fresh = true;
+    } else if (due) {
+      const next = nextGenre(profile, this.blockHistory, Math.random);
+      if (next && next !== genre) {
+        genre = next;
+        fresh = true;
+      }
     }
     if (!genre) return null;
 
     let picked = genreSongs(pool, this.recent, genre, genreOf);
     let finds = this.findBudget(picked.length);
     const runOut = picked.length < SET_MIN;
-    if (
-      this.block &&
-      !fresh &&
-      (runOut || blockOverruns(now, this.block.startedAt, blockMs, this.estimate(picked, finds)))
-    ) {
+    if (this.block && !fresh && runOut) {
       const next = nextGenre(profile, this.blockHistory, Math.random);
       if (next && next !== genre) {
         genre = next;
         fresh = true;
         picked = genreSongs(pool, this.recent, genre, genreOf);
         finds = this.findBudget(picked.length);
-      } else if (runOut) {
+      } else {
         // No genre has enough unplayed songs for a block: the station's own sets take over.
         this.block = null;
         return null;
@@ -408,13 +484,15 @@ export class FmStation implements PlayerStation {
     const tracks = await this.loadGenreSet(picked, pool, genre, finds, listenerIds, index);
     if (tracks.length === 0 || !tracks[0]) return null;
     if (fresh) {
-      this.block = { genre, startedAt: now };
+      const limit = this.setsPerBlock(this.blockHistory.length === 0);
+      this.block = { genre, sets: 0, limit };
       this.blockHistory.push(genre);
-      const minutes = this.deps.blockMinutes ?? 60;
+      const noun = limit === 1 ? 'set' : 'sets';
       this.deps.logger.info(
-        `Kitchen FM in ${this.deps.guild.name}: ${genreName(genre, this.deps.language)} for about ${minutes} minutes.`,
+        `Kitchen FM in ${this.deps.guild.name}: ${genreName(genre, this.deps.language)} for ${limit} ${noun}.`,
       );
     }
+    if (this.block) this.block.sets += 1;
     const vibe = genreName(genre, this.deps.language);
     return {
       vibe,
@@ -425,18 +503,43 @@ export class FmStation implements PlayerStation {
     };
   }
 
+  /**
+   * A whole set of new finds from artists related to the kitchen's, for a
+   * kitchen too small to fill sets of its own. Null when nothing was found,
+   * so the kitchen's songs play instead of silence.
+   */
+  private async planFinds(
+    pool: FmSong[],
+    base: SetBase,
+    listeners: GuildMember[],
+  ): Promise<FmSet | null> {
+    const index = this.deps.genres;
+    if (!this.deps.catalog || !index || this.deps.discover <= 0) return null;
+    const listenerIds = new Set(listeners.map((member) => member.id));
+    const tracks = await this.discover(pool, null, SET_MAX, listenerIds, index);
+    if (tracks.length === 0 || !tracks[0]) return null;
+    const vibe = this.deps.language === 'cs' ? 'podobní interpreti' : 'similar artists';
+    return {
+      vibe,
+      line: this.speak(base, vibe, tracks[0], false),
+      tracks,
+      next: 0,
+      plannedAt: this.now(),
+    };
+  }
+
+  /** The opening block is one set. Later blocks use `blockSets`, clamped to 1–4. */
+  private setsPerBlock(first: boolean): number {
+    if (first) return 1;
+    const sets = this.deps.blockSets ?? 2;
+    if (!Number.isFinite(sets)) return 2;
+    return Math.min(4, Math.max(1, Math.round(sets)));
+  }
+
   /** Finds per set: none without Deezer, otherwise more when the genre is thin. */
   private findBudget(freshKitchen: number): number {
     if (!this.deps.catalog) return 0;
     return findAllowance(this.deps.discover, freshKitchen);
-  }
-
-  private estimate(picked: readonly FmSong[], finds: number): number {
-    const kept = picked.slice(0, kitchenSlots(picked.length, finds));
-    return setSeconds(
-      kept.map((song) => song.durationSec),
-      finds,
-    );
   }
 
   /** Kitchen songs of the genre, then Deezer finds, topped up if the set is still short. */
@@ -471,7 +574,7 @@ export class FmStation implements PlayerStation {
    */
   private async discover(
     pool: FmSong[],
-    genre: GenreId,
+    genre: GenreId | null,
     allowance: number,
     listenerIds: ReadonlySet<string>,
     index: GenreIndex,
@@ -483,23 +586,27 @@ export class FmStation implements PlayerStation {
       ...pool.map((song) => ({ artist: song.artist, title: song.title })),
       ...this.played.map(splitPlayed),
     ];
-    const ofGenre = pool.filter((song) => index.genreOf(song.key) === genre);
+    // A genre block seeds from that genre. A themed set seeds from the whole kitchen.
+    const seeded = genre === null ? pool : pool.filter((song) => index.genreOf(song.key) === genre);
     const seeds = seedArtistIds(
-      ofGenre.map((song) => ({ from: song.from, deezerArtistId: index.artistId(song.key) })),
+      seeded.map((song) => ({ from: song.from, deezerArtistId: index.artistId(song.key) })),
       listenerIds,
     );
     const found: Track[] = [];
     const usedArtists = new Set<number>();
     let deezerCalls = 0;
     let youtubeCalls = 0;
+    // A set of finds only (more than 3) may look further. A few seeds may each give more than one.
+    const deezerCap = allowance > 3 ? allowance * 2 + 4 : DISCOVER_DEEZER_CALLS;
+    const youtubeCap = allowance > 3 ? allowance + 2 : DISCOVER_YOUTUBE_CALLS;
+    const perSeed = Math.max(1, Math.ceil(allowance / Math.max(1, seeds.length)));
     const room = (): boolean =>
-      found.length < allowance &&
-      deezerCalls < DISCOVER_DEEZER_CALLS &&
-      youtubeCalls < DISCOVER_YOUTUBE_CALLS;
+      found.length < allowance && deezerCalls < deezerCap && youtubeCalls < youtubeCap;
     for (const seedId of seeds) {
       if (!room()) break;
       deezerCalls += 1;
       const related = await catalog.relatedArtists(seedId);
+      let fromSeed = 0;
       for (const artist of related) {
         if (!room()) break;
         if (usedArtists.has(artist.id) || kitchenArtists.has(artistKey(artist.name))) continue;
@@ -517,7 +624,7 @@ export class FmStation implements PlayerStation {
             this.deps.logger.warn(`Kitchen FM: YouTube search failed for "${query}":`, error);
             return null;
           });
-        if (!hit || hit.durationSec > MAX_SONG_SEC || !isSameSong(pick, hit)) {
+        if (!hit || !songFits(hit.durationSec) || !isSameSong(pick, hit)) {
           this.deps.logger.info(`Kitchen FM: no YouTube match for the new find "${query}".`);
           continue;
         }
@@ -526,7 +633,8 @@ export class FmStation implements PlayerStation {
         this.about.set(hit, { artist: pick.artist, title: pick.title, by: null, how: 'new' });
         blocked.push({ artist: pick.artist, title: pick.title });
         found.push(hit);
-        break;
+        fromSeed += 1;
+        if (fromSeed >= perSeed) break;
       }
     }
     return found;
@@ -597,7 +705,7 @@ export class FmStation implements PlayerStation {
 
     const query = song.artist ? `${song.artist} - ${song.title}` : song.title;
     const hit = await this.deps.source.youtube.searchOne(query, NEW_FIND);
-    if (!hit || hit.durationSec > MAX_SONG_SEC || !isSameSong(song, hit)) {
+    if (!hit || !songFits(hit.durationSec) || !isSameSong(song, hit)) {
       this.deps.logger.info(`Kitchen FM: no YouTube match for the new find "${query}".`);
       return null;
     }
@@ -606,11 +714,13 @@ export class FmStation implements PlayerStation {
     return hit;
   }
 
-  /** Top a short set up with random kitchen songs. */
+  /** Top a short set up toward five songs. Stops rather than repeat a song from the last few. */
   private async fill(tracks: Track[], pool: FmSong[]): Promise<void> {
-    for (let tries = 0; tracks.length < SET_MIN && tries < FILL_TRIES; tries += 1) {
-      const song = pickSong(pool, this.recent);
-      if (!song) return;
+    for (let tries = 0; tracks.length < SET_MAX && tries < FILL_TRIES; tries += 1) {
+      const blocked = new Set(this.recent.slice(-REPEAT_GAP));
+      const open = pool.filter((song) => !blocked.has(song.key));
+      const song = open.length > 0 ? pickSong(open, this.recent) : null;
+      if (!song || blocked.has(song.key)) return;
       const track = await this.loadSong(song);
       if (track && !tracks.some((other) => other.url === track.url)) tracks.push(track);
     }
@@ -649,7 +759,7 @@ export class FmStation implements PlayerStation {
         this.deps.logger.warn(`Kitchen FM could not look up "${song.label}":`, error);
         return null;
       });
-    if (!hit || hit.durationSec > MAX_SONG_SEC) return null;
+    if (!hit || !songFits(hit.durationSec)) return null;
     hit.requestedById = userId;
     hit.stationPick = true;
     hit.thumbnail ??= song.thumbnail;

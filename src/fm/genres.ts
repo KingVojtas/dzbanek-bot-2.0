@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { dirname } from 'node:path';
 import { catchKeys } from '../radio/now-playing';
 
-/** One shelf Kitchen FM can play for about an hour. */
+/** One shelf Kitchen FM can play for a block of songs. */
 export const GENRES = [
   { id: 'cz-rap', en: 'Czech rap', cs: 'český rap' },
   { id: 'rap', en: 'rap', cs: 'rap' },

@@ -6,7 +6,7 @@ import type { DjLanguage } from './script';
 
 /** When the DJ says a line, and the blanks that line has to carry. */
 export const LINE_MOMENTS = {
-  showOpen: { min: 40, words: 40, needs: ['server', 'genre', 'song'] },
+  showOpen: { min: 40, words: 20, needs: ['server', 'genre', 'song'] },
   blockOpen: { min: 40, words: 40, needs: ['genre', 'song'] },
   setOpen: { min: 40, words: 25, needs: ['song'] },
   welcome: { min: 15, words: 40, needs: ['names'] },

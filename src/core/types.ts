@@ -72,8 +72,8 @@ export interface Track {
 /** What the DJ says before a set: the words, and the clip when the voice worked. */
 export interface StationIntro {
   text: string;
-  /** WebM/Opus. Null plays no clip; the words still show on the card. */
-  audio: Buffer | null;
+  /** PCM s16le, 48 kHz, stereo. Null plays no clip; the words still show on the card. */
+  pcm: Buffer | null;
 }
 
 /**
@@ -89,6 +89,11 @@ export interface PlayerStation {
   starting(track: Track): void;
   /** What the DJ says before `track`, if anything. Asked early to prepare it, then again to play it. */
   intro(track: Track): Promise<StationIntro | null>;
+  /**
+   * How long the player may wait for this intro. The show's first line is
+   * synthesized cold and may take longer. Omitted means the usual wait.
+   */
+  introWaitMs?(track: Track): number | undefined;
   /** The vibe of the set `track` belongs to, for the card. */
   vibeOf(track: Track): string | null;
   /** The player left voice, or the station was switched off. */

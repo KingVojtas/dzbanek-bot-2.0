@@ -33,7 +33,7 @@
     "voice": "en-US-AndrewMultilingualNeural",
     "model": "claude-opus-5-5",
     "discover": 2,
-    "blockMinutes": 60
+    "blockSets": 2
   },
   "embedColor": "#5865F2"
 }

@@ -6,13 +6,17 @@ export type DjLanguage = 'en' | 'cs';
 
 /** Longer than this is a mix or a podcast, not a song for the station. */
 export const MAX_SONG_SEC = 12 * 60;
+/** Shorter than this is an advert, an intro, or a skit. Unknown length (0) stays. */
+export const MIN_SONG_SEC = 60;
 /** The DJ talks once, before a set; then this many songs play back to back. */
 export const SET_MIN = 3;
 export const SET_MAX = 5;
 /** A set the station puts together itself, when Claude is not there to plan one. */
-export const THEMED_SET_SIZE = 4;
+export const THEMED_SET_SIZE = 5;
 /** Kitchen songs Claude chooses a set from. */
 export const CRATE_SIZE = 40;
+/** A kitchen song should not return inside this many plays while others are waiting. */
+export const REPEAT_GAP = 10;
 /** A pick skips the last this-many songs, or most of a smaller pool. */
 const RECENT_CAP = 50;
 /** The DJ's line stays short: it is read aloud between songs. */
@@ -110,6 +114,12 @@ export interface OpenerFacts {
   first: OpenerSong;
 }
 
+/** A song the station may play. Unknown length stays; adverts and long mixes do not. */
+export function songFits(durationSec: number): boolean {
+  if (durationSec > MAX_SONG_SEC) return false;
+  return durationSec <= 0 || durationSec >= MIN_SONG_SEC;
+}
+
 function shuffle<T>(items: T[], rng: () => number): T[] {
   const copy = [...items];
   for (let i = copy.length - 1; i > 0; i -= 1) {
@@ -133,7 +143,7 @@ export function pickSong<T extends Pick<FmSong, 'key' | 'durationSec'>>(
   recent: readonly string[],
   rng: () => number = Math.random,
 ): T | null {
-  const playable = pool.filter((song) => song.durationSec <= MAX_SONG_SEC);
+  const playable = pool.filter((song) => songFits(song.durationSec));
   const memory = recentMemory(recent, playable.length, 1);
   const fresh = playable.filter((song) => !memory.has(song.key));
   const last = recent[recent.length - 1];
@@ -152,7 +162,7 @@ export function sampleCrate<T extends Pick<FmSong, 'key' | 'durationSec'>>(
   size = CRATE_SIZE,
   rng: () => number = Math.random,
 ): T[] {
-  const playable = pool.filter((song) => song.durationSec <= MAX_SONG_SEC);
+  const playable = pool.filter((song) => songFits(song.durationSec));
   const memory = recentMemory(recent, playable.length, SET_MAX);
   const fresh = shuffle(
     playable.filter((song) => !memory.has(song.key)),
@@ -182,7 +192,7 @@ export function themedSet<T extends FmSong>(
 ): { theme: Theme; songs: T[] } | null {
   const rng = opts.rng ?? Math.random;
   const now = (opts.now ?? new Date()).getTime();
-  const playable = pool.filter((song) => song.durationSec <= MAX_SONG_SEC);
+  const playable = pool.filter((song) => songFits(song.durationSec));
   const memory = recentMemory(recent, playable.length, THEMED_SET_SIZE);
   const fresh = shuffle(
     playable.filter((song) => !memory.has(song.key)),
@@ -231,7 +241,7 @@ export function relativeDay(at: Date, now: Date = new Date()): string {
 /** The DJ's brief. It stays the same for every set; the facts change. */
 export const SET_SYSTEM = [
   'You are the DJ of Kitchen FM, a radio station that lives in a Discord server, in the',
-  "style of Spotify's AI DJ. The music plays in sets of 3 to 5 songs that share a vibe, and",
+  "style of Spotify's AI DJ. The music plays in sets of about 5 songs that share a vibe, and",
   'you talk only when a new set starts. A text-to-speech voice reads your words to the people',
   'in the voice channel, right before the set’s first song.',
   '',
@@ -239,7 +249,7 @@ export const SET_SYSTEM = [
   '- Choose a vibe that suits the time of day, the weekday, and who is listening, and that',
   '  differs from the earlier sets of this show. Name it in 2 to 5 words, lower case, like',
   '  "late night slow burners" or "friday warm-up".',
-  '- Choose 3 to 5 songs that fit the vibe, in an order that flows. Take songs from the crate,',
+  '- Choose about 5 songs that fit the vibe, in an order that flows. Take songs from the crate,',
   '  the kitchen’s own songs, by their number. Where the facts allow new finds, you may add',
   '  songs the kitchen never played: real released songs you are sure of, close to the',
   '  kitchen’s taste, with artist and title exactly as released. Use `crate: null` for those.',

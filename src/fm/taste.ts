@@ -1,13 +1,8 @@
 import type { GenreId } from './genres';
-import { MAX_SONG_SEC, SET_MAX, SET_MIN, isSameSong, sampleCrate, type FmSong } from './script';
+import { SET_MAX, isSameSong, sampleCrate, songFits, type FmSong } from './script';
 
 /** A play from 30 days ago weighs half of one from today. */
 export const TASTE_HALF_LIFE_MS = 30 * 86_400_000;
-/** A set may finish this far past the block and still belong to it. */
-export const BLOCK_GRACE_MS = 10 * 60_000;
-/** Stand-in length for a catch whose duration we do not know yet, and for a find. */
-const GUESS_SONG_SEC = 180;
-const GUESS_FIND_SEC = 240;
 
 /**
  * How much the server wants each genre. A catch weighs half a play, and a song
@@ -22,7 +17,7 @@ export function tasteProfile(
   const weights = new Map<GenreId, number>();
   for (const song of pool) {
     const genre = genreOf(song);
-    if (!genre || genre === 'other' || song.durationSec > MAX_SONG_SEC) continue;
+    if (!genre || genre === 'other' || !songFits(song.durationSec)) continue;
     const age = Math.max(0, opts.now - song.at.getTime());
     let weight = 0.5 ** (age / TASTE_HALF_LIFE_MS);
     if (song.from.kind === 'catch') weight *= 0.5;
@@ -82,7 +77,7 @@ export const BLOCK_MIN_FRESH = 6;
 
 /**
  * The profile without genres too thin for a block: fewer than `min` kitchen
- * songs that have not played recently. One metal song is not a metal hour.
+ * songs that have not played recently. One metal song is not a metal block.
  */
 export function blockProfile<T extends FmSong>(
   profile: ReadonlyMap<GenreId, number>,
@@ -95,42 +90,26 @@ export function blockProfile<T extends FmSong>(
   const fresh = new Map<GenreId, number>();
   for (const song of pool) {
     const genre = genreOf(song);
-    if (!genre || played.has(song.key) || song.durationSec > MAX_SONG_SEC) continue;
+    if (!genre || played.has(song.key) || !songFits(song.durationSec)) continue;
     fresh.set(genre, (fresh.get(genre) ?? 0) + 1);
   }
   return new Map([...profile].filter(([genre]) => (fresh.get(genre) ?? 0) >= min));
 }
 
 /**
- * How many new finds this set may hold. More when the genre has fewer than
- * three fresh kitchen songs, so the set can still fill. Never more than 3.
+ * How many new finds this set may hold. More when the kitchen has fewer than
+ * five fresh songs, so the set can still fill. Never more than 3.
  */
 export function findAllowance(discover: number, freshKitchen: number): number {
   const base = Math.min(3, Math.max(0, Math.round(Number.isFinite(discover) ? discover : 0)));
-  if (freshKitchen >= SET_MIN) return base;
-  return Math.min(3, Math.max(base, SET_MIN - Math.max(0, freshKitchen)));
+  if (freshKitchen >= SET_MAX) return base;
+  return Math.min(3, Math.max(base, SET_MAX - Math.max(0, freshKitchen)));
 }
 
 /** How many kitchen songs to keep so the finds still fit in a set of five. */
 export function kitchenSlots(songCount: number, finds: number): number {
   const room = SET_MAX - Math.max(0, finds);
   return Math.min(Math.max(0, songCount), Math.max(0, room));
-}
-
-/** Rough seconds a planned set will take, for the block clock. */
-export function setSeconds(durations: readonly number[], finds: number): number {
-  const kitchen = durations.reduce((sum, sec) => sum + (sec > 0 ? sec : GUESS_SONG_SEC), 0);
-  return kitchen + Math.max(0, finds) * GUESS_FIND_SEC;
-}
-
-/** True when the set would finish more than about ten minutes after the block. */
-export function blockOverruns(
-  now: number,
-  startedAt: number,
-  blockMs: number,
-  setSec: number,
-): boolean {
-  return now + setSec * 1000 > startedAt + blockMs + BLOCK_GRACE_MS;
 }
 
 /**
@@ -165,7 +144,7 @@ export function pickDiscoverTrack<T extends { artist: string; title: string; dur
   rng: () => number = Math.random,
 ): T | null {
   const choices = tops.filter((track) => {
-    if (track.durationSec <= 0 || track.durationSec > MAX_SONG_SEC) return false;
+    if (track.durationSec <= 0 || !songFits(track.durationSec)) return false;
     return !blocked.some((song) =>
       isSameSong(
         { artist: track.artist, title: track.title },

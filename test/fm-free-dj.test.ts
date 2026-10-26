@@ -47,7 +47,6 @@ import {
 } from '../src/fm/lines';
 import type { FmSong } from '../src/fm/script';
 import {
-  blockOverruns,
   blockProfile,
   findAllowance,
   genreSongs,
@@ -56,7 +55,6 @@ import {
   pickDiscoverTrack,
   seedArtistIds,
   tasteProfile,
-  BLOCK_GRACE_MS,
 } from '../src/fm/taste';
 
 const NOW = Date.parse('2026-10-26T16:00:00Z');
@@ -308,20 +306,13 @@ describe('genre sets', () => {
     assert.deepEqual([...blockProfile(profile, pool, ['r1', 'r2'], genreOf).keys()], []);
   });
 
-  it('allows more finds when the shelf has fewer than three fresh songs', () => {
+  it('allows more finds when the shelf has fewer than five fresh songs', () => {
     assert.equal(findAllowance(2, 5), 2);
-    assert.equal(findAllowance(2, 1), 2);
+    assert.equal(findAllowance(2, 1), 3);
     assert.equal(findAllowance(0, 0), 3);
-    assert.equal(findAllowance(0, 4), 0);
+    assert.equal(findAllowance(0, 4), 1);
     assert.equal(kitchenSlots(5, 2), 3);
     assert.equal(kitchenSlots(1, 2), 1);
-  });
-
-  it('starts the next block when a set would run more than about ten minutes past the hour', () => {
-    const blockMs = 60 * 60_000;
-    assert.equal(blockOverruns(50 * 60_000, 0, blockMs, 5 * 60), false);
-    assert.equal(blockOverruns(66 * 60_000, 0, blockMs, 5 * 60), true);
-    assert.equal(BLOCK_GRACE_MS, 10 * 60_000);
   });
 
   it('asks for listeners’ artists before the rest', () => {
@@ -431,6 +422,16 @@ describe('line book', () => {
       assert.match(said ?? '', /Numb/);
     });
   }
+
+  it('does not promise an hour', () => {
+    for (const line of Object.values(readLineFile('en').lines).flat()) {
+      assert.equal(/\bhours?\b/i.test(line), false, line);
+      assert.equal(/60 minutes/i.test(line), false, line);
+    }
+    for (const line of Object.values(readLineFile('cs').lines).flat()) {
+      assert.equal(/hodin/i.test(line), false, line);
+    }
+  });
 });
 
 describe('catalog parsers', () => {

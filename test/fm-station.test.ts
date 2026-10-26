@@ -29,8 +29,10 @@ function show(opts: {
   pool: FmSong[];
   related?: { id: number; name: string }[] | ((seedId: number) => { id: number; name: string }[]);
   tops?: { title: string; artist: string; durationSec: number }[];
+  topsFor?: (artistId: number) => { title: string; artist: string; durationSec: number }[];
   searchOne?: (query: string) => Promise<unknown>;
   artistId?: (key: string) => number | undefined;
+  blockSets?: number;
 }) {
   const calls = { deezer: 0, youtube: 0 };
   const genres: GenreIndex = {
@@ -47,8 +49,9 @@ function show(opts: {
       if (typeof opts.related === 'function') return opts.related(seedId);
       return opts.related ?? [];
     },
-    topTracks: async () => {
+    topTracks: async (artistId: number) => {
       calls.deezer += 1;
+      if (opts.topsFor) return opts.topsFor(artistId);
       return opts.tops ?? [{ title: 'Brand New', artist: 'Stranger', durationSec: 200 }];
     },
     artistCountry: async () => ({ ok: true, value: { country: null, tags: [] } }),
@@ -76,7 +79,7 @@ function show(opts: {
       voice: { speak: async () => null } as never,
       language: 'en',
       discover: 2,
-      blockMinutes: 20,
+      blockSets: opts.blockSets ?? 2,
       genres,
       catalog,
       lines: null,
@@ -157,5 +160,75 @@ describe('FmStation genre blocks', () => {
     assert.match(first.title, /cz-rap/);
     assert.equal(radio.calls.youtube, 4);
     assert.equal(radio.calls.deezer, 8);
+  });
+
+  it('opens with one set, then plays the next genre for blockSets sets', async () => {
+    const radio = show({
+      pool: [
+        ...Array.from({ length: 12 }, (_, n) => kitchenSong('cz-rap', n)),
+        ...Array.from({ length: 12 }, (_, n) => kitchenSong('rock', n)),
+      ],
+      blockSets: 2,
+      searchOne: async () => null,
+    });
+    const played = await radio.play(15);
+    const vibe = played.map((song) => song.vibe?.replace(/ · new find$/, '') ?? '');
+    assert.deepEqual(vibe.slice(0, 5), Array(5).fill('Czech rap'));
+    assert.deepEqual(vibe.slice(5, 15), Array(10).fill('rock'));
+  });
+
+  it('plays 20 songs from a 4-song kitchen without repeating one inside any 10', async () => {
+    const radio = show({
+      pool: [1, 2, 3, 4].map((n) => kitchenSong('pop', n)),
+      artistId: (key) => 1000 + Number(key.split('|')[1]),
+      related: (seedId) =>
+        Array.from({ length: 8 }, (_, i) => ({
+          id: seedId * 20 + i + 1,
+          name: `Rel ${seedId}-${i}`,
+        })),
+      topsFor: (artistId) => [
+        { title: `Find ${artistId}`, artist: `Artist ${artistId}`, durationSec: 180 },
+      ],
+      searchOne: async (query) => ({
+        title: query,
+        url: `https://youtu.be/${encodeURIComponent(query)}`,
+        durationSec: 200,
+        uploader: query.split(' - ')[0] ?? '',
+        requestedBy: 'Kitchen FM',
+      }),
+    });
+    const played = await radio.play(20);
+    assert.equal(played.length, 20);
+    for (let i = 0; i <= played.length - 10; i += 1) {
+      const window = played.slice(i, i + 10).map((song) => song.title);
+      assert.equal(new Set(window).size, window.length, window.join(' | '));
+    }
+  });
+
+  it('plays a small kitchen once, then only new finds from similar artists', async () => {
+    const radio = show({
+      pool: [1, 2, 3, 4].map((n) => kitchenSong('pop', n)),
+      artistId: (key) => 1000 + Number(key.split('|')[1]),
+      related: (seedId) =>
+        Array.from({ length: 8 }, (_, i) => ({
+          id: seedId * 20 + i + 1,
+          name: `Rel ${seedId}-${i}`,
+        })),
+      topsFor: (artistId) => [
+        { title: `Find ${artistId}`, artist: `Artist ${artistId}`, durationSec: 180 },
+      ],
+      searchOne: async (query) => ({
+        title: query,
+        url: `https://youtu.be/${encodeURIComponent(query)}`,
+        durationSec: 200,
+        uploader: query.split(' - ')[0] ?? '',
+        requestedBy: 'Kitchen FM',
+      }),
+    });
+    const played = await radio.play(15);
+    assert.equal(played.length, 15);
+    const kitchen = (song: { title: string }) => song.title.includes('pop song');
+    assert.equal(played.slice(0, 5).filter(kitchen).length, 4);
+    assert.deepEqual(played.slice(5).filter(kitchen), []);
   });
 });

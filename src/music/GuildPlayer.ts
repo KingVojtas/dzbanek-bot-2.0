@@ -1,5 +1,6 @@
 import {
   AudioPlayerStatus,
+  StreamType,
   VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
@@ -527,7 +528,7 @@ export class GuildPlayer {
       if (intro) {
         this.djLine = intro.text;
         if (!this.destroyed) void this.publishFreshNowPlaying(track).catch(() => {});
-        if (intro.audio) await this.playIntro(intro.audio, gen);
+        if (intro.pcm) await this.playIntro(intro.pcm, gen);
       }
       if (this.destroyed || gen !== this.playGeneration) {
         void opening.then(
@@ -579,8 +580,9 @@ export class GuildPlayer {
     const station = this.station;
     if (!station || track === previous) return null;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const waitMs = station.introWaitMs?.(track) ?? INTRO_WAIT_MS;
     const late = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), INTRO_WAIT_MS);
+      timer = setTimeout(() => resolve(null), waitMs);
     });
     try {
       return await Promise.race([station.intro(track), late]);
@@ -592,21 +594,22 @@ export class GuildPlayer {
     }
   }
 
-  /** Play the DJ's clip and wait for it to end. Skip and Stop cut it short. */
-  private async playIntro(audio: Buffer, gen: number): Promise<void> {
+  /** Play the DJ's PCM clip and wait for it to end. Skip and Stop cut it short. */
+  private async playIntro(pcm: Buffer, gen: number): Promise<void> {
     try {
-      const probed = await demuxProbe(Readable.from([audio], { objectMode: false }));
-      if (this.destroyed || gen !== this.playGeneration) return;
-      const resource = createAudioResource(probed.stream, {
-        inputType: probed.type,
+      const resource = createAudioResource(Readable.from([pcm], { objectMode: false }), {
+        inputType: StreamType.Raw,
         inlineVolume: true,
       });
+      if (this.destroyed || gen !== this.playGeneration) return;
       resource.volume?.setVolume(this.volume);
       this.introPlaying = true;
       this.player.play(resource);
       await entersState(this.player, AudioPlayerStatus.Idle, INTRO_MAX_MS);
+      const seconds = (resource.playbackDuration / 1000).toFixed(1);
+      this.logger.info(`Kitchen FM DJ spoke for ${seconds} s`);
     } catch (error) {
-      this.logger.debug('The DJ clip did not play through:', error);
+      this.logger.warn('The DJ clip did not play through:', error);
       if (this.introPlaying) this.player.stop(true);
     } finally {
       this.introPlaying = false;
