@@ -15,8 +15,9 @@ export const FM_MIN_SONGS = 3;
 
 /**
  * Kitchen FM: the server's own station. It plays the kitchen's songs (every
- * /play and every 🍪 catch) on the music player, and a DJ written by Claude
- * introduces each one. /play requests still go first.
+ * /play and every 🍪 catch) on the music player in sets of a few songs, with a
+ * few new finds, and a DJ planned by Claude talks before each set. /play
+ * requests still go first.
  */
 export class KitchenFm {
   private readonly stations = new Map<string, FmStation>();
@@ -32,6 +33,11 @@ export class KitchenFm {
   ) {
     this.writer = new DjWriter(config.dj.model, logger);
     this.voice = new DjVoice(config.dj.voice, logger);
+  }
+
+  /** Claude plans the sets, and may bring songs the kitchen never played. */
+  get findsNew(): boolean {
+    return this.writer.ready && this.config.dj.discover > 0;
   }
 
   isOn(guildId: string): boolean {
@@ -95,6 +101,7 @@ export class KitchenFm {
         writer: this.writer,
         voice: this.voice,
         language: this.config.dj.language,
+        discover: this.config.dj.discover,
         timezone: this.config.timezone,
         logger: this.logger,
       },

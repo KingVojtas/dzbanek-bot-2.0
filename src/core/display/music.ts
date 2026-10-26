@@ -85,8 +85,8 @@ export interface NowPlayingDisplayOptions {
   hasHistory?: boolean;
   /** The track after this one, named on the card. */
   next?: Track | null;
-  /** Kitchen FM is on air, with what the DJ said before this song. */
-  dj?: { line: string | null };
+  /** Kitchen FM is on air: the set's vibe, and what the DJ said before this song. */
+  dj?: { line: string | null; vibe?: string | null };
 }
 
 /** Now Playing card, as on the website: who asked, the clock, the transport row. */
@@ -139,9 +139,10 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): EmbedCar
     .join(' · ');
 
   const status = paused ? '⏸️ Paused' : opts.dj ? '🎙️ Kitchen FM' : '🔊 Now Playing';
+  const vibe = plainBlurb(opts.dj?.vibe ?? undefined, 40);
   const embed = buildSiteEmbed({
     color: paused ? PAUSED_COLOR : SITE_CLAY,
-    author: `${status} · ${musicSourceLabel(track.source)}`,
+    author: `${status} · ${vibe || musicSourceLabel(track.source)}`,
     title: track.title,
     url: track.sourceUrl || track.url,
     description,

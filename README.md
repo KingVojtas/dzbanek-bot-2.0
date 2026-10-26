@@ -1,6 +1,6 @@
 # 🍪 Dzbanek-bot 2.0
 
-A TypeScript Discord bot (discord.js v14) for the kitchen. It plays YouTube and Spotify in voice, streams live radio from Prague, London, and California, runs the kitchen’s own station with a DJ who knows who brought each song, posts Steam deals and Epic free games, and keeps a cookie warm for anyone who walks in.
+A TypeScript Discord bot (discord.js v14) for the kitchen. It plays YouTube and Spotify in voice, streams live radio from Prague, London, and California, runs the kitchen’s own station with an AI DJ who knows who brought each song, posts Steam deals and Epic free games, and keeps a cookie warm for anyone who walks in.
 
 Music and radio share one voice slot per server. Starting one takes the speaker from the other.
 
@@ -94,21 +94,23 @@ On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for t
 
 ### 🎙️ Kitchen FM
 
-The kitchen’s own station. `/radio play station:Kitchen FM` joins your voice channel and plays the kitchen’s songs: every track the server `/play`ed and every 🍪 catch, picked at random, with recent ones left out. Between songs a DJ talks, as on real radio. It names the next song and who brought it in, sometimes looks back at the last one, greets whoever just walked in, and knows what time it is in Prague.
+The kitchen’s own station, in the style of Spotify’s DJ. `/radio play station:Kitchen FM` joins your voice channel and plays the kitchen’s songs (every track the server `/play`ed and every 🍪 catch) in **sets** of 3 to 5 songs that share a vibe. The DJ talks once, before each set: the time, the vibe, the first song, and who brought it in. For example: “It’s 6 PM and we’re going for a Friday warm-up. First up, Numb by Linkin Park, brought in by Vojta.” Then the songs play back to back. It also welcomes whoever walked in during the last set.
 
-- **The words** come from Claude (`claude-opus-5-5` at low effort). It gets the song, who brought it and when, who is listening, and the time. Nothing else. Without an API key, the DJ reads its own short lines instead.
+- **The sets** come from Claude (`claude-opus-5-5` at low effort). It picks a vibe for the time and the people listening, then picks songs for it from 40 kitchen songs, never the same vibe twice in a row. It can add up to two **new finds**, songs the kitchen never played. A new find plays only when YouTube has that song by that artist, and the card says “Kitchen FM · new find”. Claude gets the songs, who brought them and when, who is listening, and the time. Nothing else.
+- **Without an API key** the station picks its own sets: someone’s picks, radio catches, throwbacks, what’s fresh, or a bit of everything. The DJ reads a short line of its own.
 - **The voice** is a Microsoft Edge read-aloud voice: free, no key. Microsoft changes that service now and then. When it fails, the line still shows on the card and the music carries on.
-- **The card**: Now Playing turns into 🎙️ Kitchen FM, with the DJ’s line under the progress bar.
+- **The card**: Now Playing turns into 🎙️ Kitchen FM with the set’s vibe. The DJ’s line sits under the progress bar, and Up next names the station’s next song.
 
-`/play` requests go first, and the DJ introduces them too. ⏭️ Skip while the DJ talks cuts the talk and starts the song. `/stop` or `/radio stop` ends the show. The next line is written while the current song plays, so there is no dead air. When the voice channel empties, the show ends after the idle timeout. Kitchen FM needs at least 3 kitchen songs.
+`/play` requests go first, and the set carries on after them. ⏭️ Skip while the DJ talks cuts the talk and starts the song. `/stop` or `/radio stop` ends the show. The next set is planned while the current set’s last song plays, so there is no dead air. A set that waits more than 20 minutes behind requests is planned again, since its line names the time. When the voice channel empties, the show ends after the idle timeout. Kitchen FM needs at least 3 kitchen songs.
 
 | `config.json` → `dj` | Default                          | What it does                                                     |
 | -------------------- | -------------------------------- | ---------------------------------------------------------------- |
 | `language`           | `en`                             | `en` or `cs`.                                                    |
 | `voice`              | `en-US-AndrewMultilingualNeural` | Any Edge voice. `cs-CZ-VlastaNeural` speaks Czech.               |
 | `model`              | `claude-opus-5-5`                | The Claude model. `claude-haiku-5-5` costs about a 40th as much. |
+| `discover`           | `2`                              | New finds per set, 0 to 3. `0` keeps to the kitchen’s own songs. |
 
-A line costs roughly a cent on Opus 5.5, so a three-hour evening is somewhere around 30–50 cents; on Haiku 5.5 it is a few cents. These are estimates from the prompt size. The bot logs each line’s token count at `LOG_LEVEL=debug`.
+Claude is asked once per set, not once per song. A set costs roughly 2 cents on Opus 5.5, so a three-hour evening comes to about 30 cents; on Haiku 5.5 it is under a cent. These are estimates from the prompt size. The bot logs each set’s token count at `LOG_LEVEL=debug`.
 
 ### 🎧 Kitchen Quiz
 
@@ -289,7 +291,7 @@ Create a key at [platform.claude.com](https://platform.claude.com) and set:
 ANTHROPIC_API_KEY=...
 ```
 
-Or save the key alone in `secrets/anthropic-api-key.txt`. `/update-dzbanek` ships it the same way as the cookies, so the server's `.env` stays untouched. The env var wins when both are set. Without a key, Kitchen FM still plays, and the DJ reads short lines of its own.
+Or save the key alone in `secrets/anthropic-api-key.txt`. `/update-dzbanek` ships it the same way as the cookies, so the server's `.env` stays untouched. The env var wins when both are set. Without a key, Kitchen FM still plays: the station picks its own sets, and the DJ reads short lines of its own.
 
 ---
 
@@ -328,7 +330,8 @@ Everyday settings live in `src/config/config.json`. The one secret is `DISCORD_T
   "dj": {
     "language": "en",
     "voice": "en-US-AndrewMultilingualNeural",
-    "model": "claude-opus-5-5"
+    "model": "claude-opus-5-5",
+    "discover": 2
   },
   "embedColor": "#5865F2"
 }
@@ -358,7 +361,7 @@ src/
   kitchen/                 Kitchen Board, Radio Night votes, catches, presence
   music/                   Voice queue, Now Playing, YouTube + Spotify
   radio/                   Icecast session, station catalog, now-playing poll
-  fm/                      Kitchen FM: song picks, the DJ's lines (Claude) and voice (Edge)
+  fm/                      Kitchen FM: sets, the DJ's plans and lines (Claude) and voice (Edge)
   db/                      Prisma client + one-shot JSON → SQLite migrate
   deals/
     seen-store.ts          SQLite seen IDs (Prisma DedupEntry)

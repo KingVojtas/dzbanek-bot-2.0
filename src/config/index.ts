@@ -34,8 +34,10 @@ export interface Config {
     language: 'en' | 'cs';
     /** A Microsoft Edge read-aloud voice, e.g. en-US-AndrewMultilingualNeural. */
     voice: string;
-    /** The Claude model that writes the lines. */
+    /** The Claude model that plans the sets and writes the lines. */
     model: string;
+    /** Songs the kitchen never played that Claude may add to a set, 0 to 3. */
+    discover: number;
   };
   embedColor: number;
 }
@@ -124,6 +126,10 @@ function loadConfig(): Config {
       language: djLanguage,
       voice: optionalString(dj.voice) ?? DJ_VOICES[djLanguage],
       model: optionalString(dj.model) ?? 'claude-opus-5-5',
+      discover:
+        typeof dj.discover === 'number' && Number.isFinite(dj.discover)
+          ? Math.min(3, Math.max(0, Math.round(dj.discover)))
+          : 2,
     },
     embedColor: parseColor(raw.embedColor),
   };

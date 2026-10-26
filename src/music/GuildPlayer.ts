@@ -130,14 +130,14 @@ export class GuildPlayer {
     const upcoming = upcomingQueue(this.current, this.queue);
     return buildNowPlayingDisplay({
       track,
-      next: upcoming[0] ?? null,
+      next: upcoming[0] ?? this.station?.queued() ?? null,
       queueLength: upcoming.length,
       paused: this.paused,
       loopMode: this.loopMode,
       positionSec,
       volume: this.volume,
       hasHistory: this.history.length > 0,
-      dj: this.station ? { line: this.djLine } : undefined,
+      dj: this.station ? { line: this.djLine, vibe: this.station.vibeOf(track) } : undefined,
     });
   }
 
@@ -583,7 +583,7 @@ export class GuildPlayer {
       timer = setTimeout(() => resolve(null), INTRO_WAIT_MS);
     });
     try {
-      return await Promise.race([station.intro(track, previous), late]);
+      return await Promise.race([station.intro(track), late]);
     } catch (error) {
       this.logger.debug('Station intro failed:', error);
       return null;
@@ -619,9 +619,7 @@ export class GuildPlayer {
     if (!station || this.loopMode !== 'off') return;
     const queued = this.queue.find((track) => track !== current);
     void (queued ? Promise.resolve(queued) : station.upNext())
-      .then((upcoming) =>
-        upcoming && this.station === station ? station.intro(upcoming, current) : null,
-      )
+      .then((upcoming) => (upcoming && this.station === station ? station.intro(upcoming) : null))
       .catch((error: unknown) => this.logger.debug('Station could not prepare ahead:', error));
   }
 

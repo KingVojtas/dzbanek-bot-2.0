@@ -69,7 +69,7 @@ export interface Track {
   stationPick?: boolean;
 }
 
-/** What the DJ says before a song: the words, and the clip when the voice worked. */
+/** What the DJ says before a set: the words, and the clip when the voice worked. */
 export interface StationIntro {
   text: string;
   /** WebM/Opus. Null plays no clip; the words still show on the card. */
@@ -77,16 +77,20 @@ export interface StationIntro {
 }
 
 /**
- * A station on the music player (Kitchen FM): it picks a song whenever the
- * queue runs dry, and introduces each song before it plays.
+ * A station on the music player (Kitchen FM): it plays sets of songs whenever
+ * the queue runs dry, and the DJ talks before each set.
  */
 export interface PlayerStation {
   /** The song after the queue, picked ahead of time. Null ends the show. */
   upNext(): Promise<Track | null>;
+  /** The song `upNext` would give now, when it is already known. */
+  queued(): Track | null;
   /** The player is about to play `track`, a request or the station's pick. */
   starting(track: Track): void;
-  /** The intro for `track` after `previous`. Asked early to prepare it, then again to play it. */
-  intro(track: Track, previous: Track | null): Promise<StationIntro | null>;
+  /** What the DJ says before `track`, if anything. Asked early to prepare it, then again to play it. */
+  intro(track: Track): Promise<StationIntro | null>;
+  /** The vibe of the set `track` belongs to, for the card. */
+  vibeOf(track: Track): string | null;
   /** The player left voice, or the station was switched off. */
   end(): void;
 }

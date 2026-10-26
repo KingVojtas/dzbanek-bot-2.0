@@ -3,58 +3,84 @@ import type { Logger } from '../core/logger';
 import type { PlayerStation, StationIntro, Track } from '../core/types';
 import { zonedParts } from '../kitchen/time';
 import type { CompositeTrackSource } from '../music/sources';
-import { songFromTrack } from '../quiz/songs';
 import { getStation } from '../radio/station';
 import type { DjVoice } from './voice';
 import type { DjWriter } from './writer';
 import {
+  CRATE_SIZE,
   MAX_SONG_SEC,
-  cleanLine,
+  SET_MIN,
+  isSameSong,
   pickSong,
   relativeDay,
-  templateLine,
-  type DjFacts,
+  sampleCrate,
+  templateOpener,
+  themeName,
+  themedSet,
   type DjLanguage,
   type FmSong,
+  type OpenerSong,
+  type PlannedSong,
+  type Theme,
 } from './script';
 
-/** Tries per pick before the show gives up (a catch with no YouTube match, a dead link). */
-const PICK_TRIES = 3;
-/** Intros kept ready: the next song, and one spare for a queue that just changed. */
-const INTRO_CACHE = 3;
+/** A set still waiting behind requests after this long is planned again: its line names the time. */
+const STALE_MS = 20 * 60_000;
+/** Tries to top up a set whose songs would not load. */
+const FILL_TRIES = 4;
+/** What Claude hears of this show: its last vibes and songs. */
+const VIBES_SHOWN = 6;
+const PLAYED_SHOWN = 30;
+/** Shown under "Brought in by" for a song nobody in the kitchen brought. */
+const NEW_FIND = '🎙️ Kitchen FM · new find';
 
 export interface FmStationDeps {
   guild: Guild;
   /** People (not bots) in the bot's voice channel right now. */
   listeners: () => GuildMember[];
-  /** The kitchen's songs, read fresh for every pick. */
+  /** The kitchen's songs, read fresh for every set. */
   pool: () => Promise<FmSong[]>;
   source: CompositeTrackSource;
   writer: DjWriter;
   voice: DjVoice;
   language: DjLanguage;
+  /** New finds a set may hold, songs the kitchen never played. */
+  discover: number;
   timezone: string;
   logger: Logger;
 }
 
+/** A few songs that share a vibe. The DJ talks before the first one only. */
+interface FmSet {
+  vibe: string;
+  line: string;
+  tracks: Track[];
+  /** The next of `tracks` to hand out. */
+  next: number;
+  plannedAt: number;
+}
+
+type SetBase = { hour: number; minute: number; set: number; newcomers: string[] };
+
 /**
- * Kitchen FM in one server. When the queue runs dry it plays a kitchen song,
- * and before every song the DJ says a line about it: who brought it, when,
- * and who just walked in.
+ * Kitchen FM in one server, in the style of Spotify's DJ. When the queue runs
+ * dry it plays sets of a few songs with one vibe, and the DJ talks once per
+ * set: the time, the vibe, the first song, and who brought it in.
  */
 export class FmStation implements PlayerStation {
-  private picking: Promise<Track | null> | null = null;
-  private picked: Track | null = null;
+  private current: FmSet | null = null;
+  private pending: FmSet | null = null;
+  private peeking: Promise<Track | null> | null = null;
   private readonly recent: string[] = [];
-  /** The kitchen song behind each pick, for the DJ's facts. */
-  private readonly songs = new WeakMap<Track, FmSong>();
-  private readonly intros = new Map<string, Promise<StationIntro | null>>();
-  /** Who was listening when the last song started, and when the one before it did. */
+  private readonly vibes: string[] = [];
+  /** "Artist – Title" of every song this show put on, so a new find is not suggested twice. */
+  private readonly played: string[] = [];
+  private readonly setOf = new WeakMap<Track, FmSet>();
+  private readonly about = new WeakMap<Track, OpenerSong>();
+  private readonly intros = new WeakMap<FmSet, Promise<StationIntro | null>>();
+  private lastTheme: Theme['kind'] | undefined;
+  /** Who was listening when the current set started. */
   private heard = new Set<string>();
-  private heardBefore = new Set<string>();
-  /** Songs started so far; `startingTrack` is the latest. */
-  private songNumber = 0;
-  private startingTrack: Track | null = null;
   private ended = false;
 
   constructor(
@@ -64,156 +90,287 @@ export class FmStation implements PlayerStation {
 
   upNext(): Promise<Track | null> {
     if (this.ended) return Promise.resolve(null);
-    this.picking ??= this.pick().then(
+    if (this.pending && Date.now() - this.pending.plannedAt > STALE_MS) {
+      this.pending = null;
+      this.peeking = null;
+    }
+    this.peeking ??= this.peek().then(
       (track) => {
-        this.picked = track;
         // Nobody listening, or nothing playable: ask again next time.
-        if (!track) this.picking = null;
+        if (!track) this.peeking = null;
         return track;
       },
       (error: unknown) => {
-        this.deps.logger.warn('Kitchen FM could not pick a song:', error);
-        this.picking = null;
+        this.deps.logger.warn('Kitchen FM could not plan a set:', error);
+        this.peeking = null;
         return null;
       },
     );
-    return this.picking;
+    return this.peeking;
+  }
+
+  queued(): Track | null {
+    const current = this.current;
+    if (current && current.next < current.tracks.length) return current.tracks[current.next]!;
+    return this.pending?.tracks[0] ?? null;
   }
 
   starting(track: Track): void {
-    this.songNumber += 1;
-    this.startingTrack = track;
-    this.heardBefore = this.heard;
-    this.heard = new Set(this.deps.listeners().map((member) => member.id));
-    if (track === this.picked) {
-      this.picked = null;
-      this.picking = null;
+    const set = this.setOf.get(track);
+    if (!set) return;
+    if (set === this.pending && set.tracks[0] === track) {
+      this.pending = null;
+      this.current = set;
+      this.vibes.push(set.vibe);
+      this.heard = new Set(this.deps.listeners().map((member) => member.id));
     }
+    // Requests and replays leave the set where it was.
+    if (set !== this.current || set.tracks[set.next] !== track) return;
+    set.next += 1;
+    this.peeking = null;
   }
 
-  intro(track: Track, previous: Track | null): Promise<StationIntro | null> {
+  intro(track: Track): Promise<StationIntro | null> {
     if (this.ended) return Promise.resolve(null);
-    const key = `${previous?.url ?? ''} > ${track.url}`;
-    let pending = this.intros.get(key);
+    const set = this.setOf.get(track);
+    // The DJ talks once a set, before its first song.
+    if (!set || set.tracks[0] !== track) return Promise.resolve(null);
+    let pending = this.intros.get(set);
     if (!pending) {
-      pending = this.writeIntro(track, previous).catch((error: unknown) => {
-        this.deps.logger.warn('Kitchen FM intro failed:', error);
-        return null;
-      });
-      this.intros.set(key, pending);
-      for (const old of this.intros.keys()) {
-        if (this.intros.size <= INTRO_CACHE) break;
-        this.intros.delete(old);
-      }
+      pending = this.deps.voice
+        .speak(set.line)
+        .then((audio) => ({ text: set.line, audio }))
+        .catch((error: unknown) => {
+          this.deps.logger.warn('Kitchen FM intro failed:', error);
+          return { text: set.line, audio: null };
+        });
+      this.intros.set(set, pending);
     }
     return pending;
+  }
+
+  vibeOf(track: Track): string | null {
+    return this.setOf.get(track)?.vibe ?? null;
   }
 
   end(): void {
     if (this.ended) return;
     this.ended = true;
-    this.intros.clear();
     this.onEnd();
   }
 
-  private async pick(): Promise<Track | null> {
-    if (this.deps.listeners().length === 0) {
+  private async peek(): Promise<Track | null> {
+    const queued = this.queued();
+    if (queued) return queued;
+    this.pending = await this.plan();
+    return this.pending?.tracks[0] ?? null;
+  }
+
+  /** The next set: Claude's when it can, else one the station puts together itself. */
+  private async plan(): Promise<FmSet | null> {
+    const listeners = this.deps.listeners();
+    if (listeners.length === 0) {
       this.deps.logger.info(`Kitchen FM in ${this.deps.guild.name}: nobody is listening.`);
       return null;
     }
-    const pool = await this.deps.pool();
-    for (let attempt = 0; attempt < PICK_TRIES; attempt += 1) {
-      const song = pickSong(pool, this.recent);
-      if (!song) return null;
-      this.recent.push(song.key);
-      if (this.recent.length > 200) this.recent.splice(0, this.recent.length - 200);
-      const track = await this.toTrack(song).catch((error: unknown) => {
-        this.deps.logger.warn(`Kitchen FM could not load "${song.label}":`, error);
-        return null;
-      });
-      if (track) {
-        this.songs.set(track, song);
-        return track;
-      }
+    const pool = (await this.deps.pool()).filter((song) => song.durationSec <= MAX_SONG_SEC);
+    const clock = zonedParts(this.deps.timezone);
+    const number = this.vibes.length + 1;
+    const base: SetBase = {
+      hour: clock.hour,
+      minute: clock.minute,
+      set: number,
+      newcomers:
+        number > 1
+          ? listeners
+              .filter((member) => !this.heard.has(member.id))
+              .map((member) => member.displayName)
+          : [],
+    };
+    const time = `${clock.weekday} ${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}`;
+
+    const set =
+      (await this.planWithClaude(pool, base, time, listeners)) ??
+      (await this.planThemed(pool, base, listeners));
+    if (!set || this.ended) return null;
+    for (const track of set.tracks) {
+      this.setOf.set(track, set);
+      const song = this.about.get(track);
+      if (song) this.played.push(song.artist ? `${song.artist} – ${song.title}` : song.title);
     }
-    return null;
+    if (this.played.length > 200) this.played.splice(0, this.played.length - 200);
+    const finds = set.tracks.filter((track) => this.about.get(track)?.how === 'new').length;
+    this.deps.logger.info(
+      `Kitchen FM in ${this.deps.guild.name}: set ${number}, "${set.vibe}", ` +
+        `${set.tracks.length} songs${finds ? ` (${finds} new)` : ''}: "${set.line}"`,
+    );
+    return set;
+  }
+
+  private async planWithClaude(
+    pool: FmSong[],
+    base: SetBase,
+    time: string,
+    listeners: GuildMember[],
+  ): Promise<FmSet | null> {
+    if (!this.deps.writer.ready) return null;
+    const crateSongs = sampleCrate(pool, this.recent, CRATE_SIZE);
+    const names = await this.namesOf(crateSongs);
+    const plan = await this.deps.writer.planSet({
+      language: this.deps.language,
+      server: this.deps.guild.name,
+      time,
+      ...base,
+      earlierVibes: this.vibes.slice(-VIBES_SHOWN),
+      playedThisShow: this.played.slice(-PLAYED_SHOWN),
+      listeners: listeners.map((member) => member.displayName),
+      discover: this.deps.discover,
+      crate: crateSongs.map((song, i) => ({
+        n: i + 1,
+        artist: song.artist,
+        title: song.title,
+        by: names.get(song.from.userId ?? '') ?? null,
+        how: song.from.kind === 'catch' ? 'catch' : 'play',
+        when: relativeDay(song.at),
+        station: song.stationId ? (getStation(song.stationId)?.name ?? null) : null,
+      })),
+    });
+    if (!plan) return null;
+
+    const loaded = await Promise.all(
+      plan.songs.map((song) =>
+        this.loadPlanned(song, crateSongs, pool).catch((error: unknown) => {
+          this.deps.logger.warn(`Kitchen FM could not load "${song.title}":`, error);
+          return null;
+        }),
+      ),
+    );
+    // A new find can turn out to be a kitchen song already in the set.
+    const tracks = loaded.filter(
+      (track, i): track is Track =>
+        track !== null && loaded.findIndex((other) => other?.url === track.url) === i,
+    );
+    await this.fill(tracks, pool);
+    if (tracks.length === 0) return null;
+    const line = loaded[0] && plan.line ? plan.line : this.opener(base, plan.vibe, tracks[0]!);
+    return { vibe: plan.vibe, line, tracks, next: 0, plannedAt: Date.now() };
+  }
+
+  private async planThemed(
+    pool: FmSong[],
+    base: SetBase,
+    listeners: GuildMember[],
+  ): Promise<FmSet | null> {
+    const picked = themedSet(pool, this.recent, {
+      listeners: new Map(listeners.map((member) => [member.id, member.displayName])),
+      last: this.lastTheme,
+    });
+    if (!picked) return null;
+    const loaded = await Promise.all(picked.songs.map((song) => this.loadSong(song)));
+    const tracks = loaded.filter((track): track is Track => track !== null);
+    await this.fill(tracks, pool);
+    if (tracks.length === 0) return null;
+    this.lastTheme = picked.theme.kind;
+    return {
+      vibe: themeName(picked.theme, this.deps.language),
+      line: this.opener(base, picked.theme, tracks[0]!),
+      tracks,
+      next: 0,
+      plannedAt: Date.now(),
+    };
+  }
+
+  private opener(base: SetBase, vibe: string | Theme, first: Track): string {
+    return templateOpener({
+      language: this.deps.language,
+      server: this.deps.guild.name,
+      ...base,
+      vibe,
+      first: this.about.get(first) ?? { artist: '', title: first.title, by: null, how: 'play' },
+    });
+  }
+
+  /** A crate song by its number, a kitchen song Claude named, or a new find off YouTube. */
+  private async loadPlanned(
+    song: PlannedSong,
+    crate: FmSong[],
+    pool: FmSong[],
+  ): Promise<Track | null> {
+    if (song.crate !== null) {
+      const kitchen = crate[song.crate - 1];
+      return kitchen ? this.loadSong(kitchen) : null;
+    }
+    const known = pool.find((kitchen) => isSameSong(song, { title: kitchen.label }));
+    if (known) return this.loadSong(known);
+    if (this.played.some((label) => isSameSong(song, { title: label }))) return null;
+
+    const query = song.artist ? `${song.artist} - ${song.title}` : song.title;
+    const hit = await this.deps.source.youtube.searchOne(query, NEW_FIND);
+    if (!hit || hit.durationSec > MAX_SONG_SEC || !isSameSong(song, hit)) {
+      this.deps.logger.info(`Kitchen FM: no YouTube match for the new find "${query}".`);
+      return null;
+    }
+    hit.stationPick = true;
+    this.about.set(hit, { artist: song.artist, title: song.title, by: null, how: 'new' });
+    return hit;
+  }
+
+  /** Top a short set up with random kitchen songs. */
+  private async fill(tracks: Track[], pool: FmSong[]): Promise<void> {
+    for (let tries = 0; tracks.length < SET_MIN && tries < FILL_TRIES; tries += 1) {
+      const song = pickSong(pool, this.recent);
+      if (!song) return;
+      const track = await this.loadSong(song);
+      if (track && !tracks.some((other) => other.url === track.url)) tracks.push(track);
+    }
   }
 
   /** A played song plays from its link; a catch is looked up on YouTube first. */
-  private async toTrack(song: FmSong): Promise<Track | null> {
+  private async loadSong(song: FmSong): Promise<Track | null> {
+    this.recent.push(song.key);
+    if (this.recent.length > 200) this.recent.splice(0, this.recent.length - 200);
     const userId = song.from.userId;
-    const requestedBy = (userId && (await this.nameOf(userId))) || 'Kitchen FM';
+    const by = userId ? await this.nameOf(userId) : null;
+    const about: OpenerSong = {
+      artist: song.artist,
+      title: song.title,
+      by,
+      how: song.from.kind === 'catch' ? 'catch' : 'play',
+    };
     if (song.url) {
-      return {
+      const track: Track = {
         title: song.videoTitle ?? song.label,
         url: song.url,
         durationSec: song.durationSec,
         thumbnail: song.thumbnail,
         uploader: song.uploader,
-        requestedBy,
+        requestedBy: by ?? 'Kitchen FM',
         requestedById: userId,
         source: 'youtube',
         stationPick: true,
       };
+      this.about.set(track, about);
+      return track;
     }
-    const hit = await this.deps.source.youtube.searchOne(song.query, requestedBy);
+    const hit = await this.deps.source.youtube
+      .searchOne(song.query, by ?? 'Kitchen FM')
+      .catch((error: unknown) => {
+        this.deps.logger.warn(`Kitchen FM could not look up "${song.label}":`, error);
+        return null;
+      });
     if (!hit || hit.durationSec > MAX_SONG_SEC) return null;
     hit.requestedById = userId;
     hit.stationPick = true;
     hit.thumbnail ??= song.thumbnail;
+    this.about.set(hit, about);
     return hit;
   }
 
-  private async writeIntro(track: Track, previous: Track | null): Promise<StationIntro | null> {
-    const facts = await this.facts(track, previous);
-    if (!facts) return null;
-    const written = cleanLine((await this.deps.writer.write(facts)) ?? '');
-    const text = written || templateLine(facts);
-    const audio = await this.deps.voice.speak(text);
-    this.deps.logger.info(
-      `Kitchen FM in ${this.deps.guild.name}: "${text}"${audio ? '' : ' (text only)'}`,
-    );
-    return { text, audio };
-  }
-
-  /** What the DJ knows before `track`. Null when nobody is there to hear it. */
-  private async facts(track: Track, previous: Track | null): Promise<DjFacts | null> {
-    const listeners = this.deps.listeners();
-    if (listeners.length === 0) return null;
-    const song = this.songs.get(track);
-    const parsed = song ?? songFromTrack(track, { kind: 'play' });
-    const by = song?.from.userId
-      ? await this.nameOf(song.from.userId)
-      : track.requestedById
-        ? ((await this.nameOf(track.requestedById)) ?? track.requestedBy)
-        : null;
-    const last = previous ? songFromTrack(previous, { kind: 'play' }) : null;
-    const clock = zonedParts(this.deps.timezone);
-    // Usually written ahead, during the song before. Written late, the song has already started.
-    const late = track === this.startingTrack;
-    const songNumber = late ? this.songNumber : this.songNumber + 1;
-    const heard = late ? this.heardBefore : this.heard;
-    return {
-      language: this.deps.language,
-      server: this.deps.guild.name,
-      time: `${clock.weekday} ${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}`,
-      hour: clock.hour,
-      songNumber,
-      previous: last ? { artist: last.artist, title: last.title } : null,
-      next: {
-        artist: parsed.artist,
-        title: parsed.title,
-        by,
-        how: song ? (song.from.kind === 'catch' ? 'catch' : 'play') : 'request',
-        when: song ? relativeDay(song.at) : null,
-        station: song?.stationId ? (getStation(song.stationId)?.name ?? null) : null,
-      },
-      listeners: listeners.map((member) => member.displayName),
-      newcomers:
-        songNumber > 1
-          ? listeners.filter((member) => !heard.has(member.id)).map((member) => member.displayName)
-          : [],
-    };
+  /** Display names of who brought each song, by user id. */
+  private async namesOf(songs: FmSong[]): Promise<Map<string, string>> {
+    const ids = [...new Set(songs.flatMap((song) => (song.from.userId ? [song.from.userId] : [])))];
+    const names = await Promise.all(ids.map((id) => this.nameOf(id)));
+    return new Map(ids.flatMap((id, i) => (names[i] ? [[id, names[i]]] : [])));
   }
 
   private async nameOf(userId: string): Promise<string | null> {

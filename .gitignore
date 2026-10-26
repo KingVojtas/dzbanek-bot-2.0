@@ -15,5 +15,8 @@ data/*
 /update-dzbanek/
 .claude/skills/update-dzbanek/
 
+# Kitchen FM skills for Grok - stay on the admin's machine only
+.grok/skills/kitchen-fm-*/
+
 # YouTube cookies shipped with /update-dzbanek uploads — a signed-in session, never commit
 secrets/

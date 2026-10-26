@@ -773,15 +773,32 @@ checkV2('steam-empty', () => buildSteamDealsDisplay([], new Map()), [
         queueLength: 0,
         paused: false,
         loopMode: 'off',
-        dj: { line: 'That was Pohoda. Here’s **Numb** by Linkin Park, brought in by Vojta.' },
+        dj: {
+          line: 'It’s 6 PM, and we’re going for a vibe. Here’s **Numb** by Linkin Park.',
+          vibe: 'friday warm-up',
+        },
       }),
     [
-      '🎙️ Kitchen FM · YouTube',
+      '🎙️ Kitchen FM · friday warm-up',
       '"name":"Brought in by"',
-      '> 🎙️ *That was Pohoda. Here’s Numb by Linkin Park, brought in by Vojta.*',
+      '> 🎙️ *It’s 6 PM, and we’re going for a vibe. Here’s Numb by Linkin Park.*',
       'Kitchen FM picks one.',
       'Kitchen FM on air',
     ],
+  );
+
+  checkEmbedCard(
+    'now-playing-kitchen-fm-next',
+    () =>
+      buildNowPlayingDisplay({
+        track: { ...track('Now'), stationPick: true },
+        next: { ...track('Digital Love'), stationPick: true },
+        queueLength: 0,
+        paused: false,
+        loopMode: 'off',
+        dj: { line: null, vibe: null },
+      }),
+    ['🎙️ Kitchen FM · YouTube', 'Digital Love', 'Kitchen FM on air'],
   );
 
   const fresh = JSON.stringify(
