@@ -12,6 +12,7 @@ import type { Logger } from '../core/logger';
 import type { Track } from '../core/types';
 import { GuildPlayer } from './GuildPlayer';
 import { CompositeTrackSource } from './sources';
+import { YouTubeHealth, type YouTubeAlert } from './youtube-health';
 import { ensureYtDlpCookies } from './ytdlp-cookies';
 
 const JOIN_TIMEOUT_MS = 20_000;
@@ -25,12 +26,31 @@ export class MusicManager {
   private onQueueIdle: ((guildId: string, channelId: string) => void) | null = null;
   private onTrackStart: ((guildId: string, track: Track) => void) | null = null;
 
+  private readonly youtubeHealth: YouTubeHealth;
+  private readonly firstUpdate: Promise<void>;
+
   constructor(
     private readonly config: Config,
     private readonly logger: Logger,
   ) {
     ensureYtDlpCookies(this.logger);
-    void this.updateYtDlp();
+    this.firstUpdate = this.updateYtDlp();
+    this.youtubeHealth = new YouTubeHealth(() => this.source.youtube.probe(), this.logger);
+    this.source.youtube.onYouTube = (ok) => {
+      if (ok) void this.youtubeHealth.working();
+      else this.youtubeHealth.suspect();
+    };
+  }
+
+  /** Who hears that YouTube's sign-in ran out, and that it works again. */
+  setYouTubeAlert(fn: YouTubeAlert): void {
+    this.youtubeHealth.setAlert(fn);
+  }
+
+  /** Probe YouTube once the startup yt-dlp update is through. */
+  async checkYouTube(): Promise<void> {
+    await this.firstUpdate;
+    await this.youtubeHealth.check();
   }
 
   /**

@@ -255,7 +255,11 @@ If yt-dlp meets an age gate or a bot check, export Netscape `cookies.txt` from a
 YTDLP_COOKIES_BASE64=...
 ```
 
-Or save the file as `secrets/yt-cookies.txt`. The folder is gitignored, and `/update-dzbanek` ships it with each upload, so the server's `.env` stays untouched. The env var wins when both are set. Export from a private window and close it right after, or YouTube rotates the session and the cookies die early.
+Or save the file as `secrets/yt-cookies.txt`. The folder is gitignored, and `/update-dzbanek` ships it with each upload, so the server's `.env` stays untouched. The env var wins when both are set. Export from a private window and close it right after, or YouTube rotates the session and the cookies die within hours. A spare Google account is safer than your own.
+
+The bot copies the export to `data/yt-cookies.txt`, where yt-dlp saves the cookies YouTube refreshes. Restarts keep that copy; a new export replaces it on the next deploy.
+
+After every boot and after the 04:15 yt-dlp update, the bot checks one short YouTube video. When the check meets a bot check, the bot's owner (from the Developer Portal) gets one DM asking for fresh cookies, and another once YouTube works again. The log line `YouTube alerts DM <name>` says who that is.
 
 While YouTube blocks a song, the bot looks for the same song on SoundCloud and plays it from there. A match needs the song name in its title and about the same length. Previews and remixes don't count.
 
@@ -352,13 +356,13 @@ data/bot.db                Runtime SQLite (git-ignored)
 
 ## 🔧 If something smells off
 
-| What happened                            | What to try                                                                                                                                                                                           |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Song won't play / "Could not load track" | yt-dlp updates itself at startup and daily at 04:15. If it is still stuck, delete `node_modules/youtube-dl-exec` and reinstall. Set `YTDLP_COOKIES_BASE64` if YouTube asks you to prove you’re human. |
-| No audio                                 | Confirm `ffmpeg-static` came in with `npm install`, and that the bot has Connect + Speak.                                                                                                             |
-| Slash commands missing                   | Run `npm run deploy`. The two kitchen servers update immediately. Other servers can take about an hour. Restart Discord if the picker is stale.                                                       |
-| `/radio` is missing the station option   | Deploy again after pulling. Type `/radio`, then pick **play** and a station.                                                                                                                          |
-| Radio Beat shows a show name             | During a program, Beat publishes the show. The card follows “Právě v éteru”. Catch waits for a real song.                                                                                             |
-| Steam / Epic stayed quiet                | Check `/setup status` and the bot’s permissions. An unchanged lineup stays in the pot.                                                                                                                |
-| Welcome / goodbye stayed quiet           | Enable **Server Members Intent**, then `/setup welcome` and `/setup goodbye`.                                                                                                                         |
-| An old card is stuck                     | Grant **Manage Messages** so Dzbanek can clear the previous one.                                                                                                                                      |
+| What happened                            | What to try                                                                                                                                                                                                                                                               |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Song won't play / "Could not load track" | yt-dlp updates itself at startup and daily at 04:15. If it is still stuck, delete `node_modules/youtube-dl-exec` and reinstall. If YouTube asks you to prove you’re human, put a fresh cookies export in `secrets/yt-cookies.txt` (or `YTDLP_COOKIES_BASE64`) and deploy. |
+| No audio                                 | Confirm `ffmpeg-static` came in with `npm install`, and that the bot has Connect + Speak.                                                                                                                                                                                 |
+| Slash commands missing                   | Run `npm run deploy`. The two kitchen servers update immediately. Other servers can take about an hour. Restart Discord if the picker is stale.                                                                                                                           |
+| `/radio` is missing the station option   | Deploy again after pulling. Type `/radio`, then pick **play** and a station.                                                                                                                                                                                              |
+| Radio Beat shows a show name             | During a program, Beat publishes the show. The card follows “Právě v éteru”. Catch waits for a real song.                                                                                                                                                                 |
+| Steam / Epic stayed quiet                | Check `/setup status` and the bot’s permissions. An unchanged lineup stays in the pot.                                                                                                                                                                                    |
+| Welcome / goodbye stayed quiet           | Enable **Server Members Intent**, then `/setup welcome` and `/setup goodbye`.                                                                                                                                                                                             |
+| An old card is stuck                     | Grant **Manage Messages** so Dzbanek can clear the previous one.                                                                                                                                                                                                          |

@@ -16,6 +16,8 @@ const RESOLVE_CACHE_MAX = 200;
 const RESOLVE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 /** A warm stream nobody claims is killed after this. */
 const WARM_TTL_MS = 30_000;
+/** "Me at the zoo": 19 s, never age-gated. The health check's test song. */
+const PROBE_URL = 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
 
 /** `watch?v=`, `youtu.be/`, `/shorts/`, `/live/`, `/embed/` → the 11-char id. */
 export function youTubeVideoId(input: string): string | null {
@@ -208,6 +210,9 @@ export class YouTubeSource implements TrackSource {
     { stream: PassThrough; ready: Promise<void>; timer: ReturnType<typeof setTimeout> }
   >();
 
+  /** Told when YouTube streams a song (true) or refuses with a bot check (false). */
+  onYouTube: ((ok: boolean) => void) | null = null;
+
   async resolve(input: string, requestedBy: string): Promise<Track[]> {
     const trimmed = input.trim();
     if (!trimmed) return [];
@@ -224,7 +229,10 @@ export class YouTubeSource implements TrackSource {
         extra.flatPlaylist = true;
         extra.playlistEnd = PLAYLIST_CAP;
       }
-      const info = await dumpJson(trimmed, extra);
+      const info = await dumpJson(trimmed, extra).catch((error: unknown) => {
+        this.noticeBlock(error);
+        throw error;
+      });
       if (info._type === 'playlist' && Array.isArray(info.entries)) {
         return info.entries
           .slice(0, PLAYLIST_CAP)
@@ -284,10 +292,11 @@ export class YouTubeSource implements TrackSource {
    */
   async stream(track: Track): Promise<Readable> {
     try {
-      return await this.streamYouTube(track);
+      const audio = await this.streamYouTube(track);
+      this.onYouTube?.(true);
+      return audio;
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (!isBotCheck(msg)) throw error;
+      if (!this.noticeBlock(error)) throw error;
       const standIn = await findSoundCloudStandIn(track).catch(() => null);
       if (!standIn) throw error;
       logger.warn(`YouTube bot check on "${track.title}" — playing ${standIn} instead.`);
@@ -295,6 +304,35 @@ export class YouTubeSource implements TrackSource {
       await fallback.ready;
       return fallback.audio;
     }
+  }
+
+  /**
+   * Null when YouTube hands over a song's audio URL, as it does for /play,
+   * else yt-dlp's reason. Nothing is downloaded.
+   */
+  async probe(): Promise<string | null> {
+    try {
+      await youtubeDl(PROBE_URL, {
+        getUrl: true,
+        format: 'bestaudio/best',
+        noPlaylist: true,
+        ...streamFlags(),
+      } as Parameters<typeof youtubeDl>[1]);
+      return null;
+    } catch (err) {
+      const stderr = (err as { stderr?: unknown }).stderr;
+      return ytDlpError(
+        typeof stderr === 'string' ? stderr : '',
+        err instanceof Error ? err.message : String(err),
+      ).message;
+    }
+  }
+
+  /** A bot check is passed on to `onYouTube`; true when `error` was one. */
+  private noticeBlock(error: unknown): boolean {
+    if (!isBotCheck(error instanceof Error ? error.message : String(error))) return false;
+    this.onYouTube?.(false);
+    return true;
   }
 
   private async streamYouTube(track: Track): Promise<Readable> {

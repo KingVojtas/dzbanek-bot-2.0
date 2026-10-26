@@ -3,7 +3,7 @@ import ffmpegPath from 'ffmpeg-static';
 import '@snazzah/davey';
 import 'libsodium-wrappers';
 import { Cron } from 'croner';
-import { ChannelType, Events, type Client } from 'discord.js';
+import { ChannelType, Events, Team, type Client, type User } from 'discord.js';
 import { buildCommandCollection } from './commands';
 import { DISCORD_TOKEN, config } from './config';
 import { createClient } from './core/client';
@@ -157,7 +157,18 @@ async function main(): Promise<void> {
       `Kitchen chart: cron "${KITCHEN_CHART_CRON}" (${config.timezone}), next ${chartJob.nextRun()?.toISOString() ?? '?'}.`,
     );
 
-    const ytDlpJob = new Cron(YTDLP_UPDATE_CRON, cronOpts, () => void music.updateYtDlp());
+    // A YouTube check after each boot and each morning's update; each run also
+    // lets yt-dlp save the cookies YouTube refreshed.
+    music.setYouTubeAlert((text) => dmOwner(client, text, logger));
+    void ownerUser(client).then(
+      (user) =>
+        logger.info(user ? `YouTube alerts DM ${user.username}.` : 'YouTube alerts: no bot owner.'),
+      (error: unknown) => logger.warn('Could not look up the bot owner:', error),
+    );
+    void music.checkYouTube();
+    const ytDlpJob = new Cron(YTDLP_UPDATE_CRON, cronOpts, () => {
+      void music.updateYtDlp().then(() => music.checkYouTube());
+    });
     logger.info(
       `yt-dlp update: cron "${YTDLP_UPDATE_CRON}" (${config.timezone}), next ${ytDlpJob.nextRun()?.toISOString() ?? '?'}.`,
     );
@@ -206,6 +217,26 @@ async function syncAboutMe(client: Client, logger: Logger): Promise<void> {
     logger.warn('Could not update About Me:', error);
   }
 }
+/** Whoever owns the bot in the Developer Portal: the user, or a team's owner. */
+async function ownerUser(client: Client): Promise<User | null> {
+  const owner = (await client.application?.fetch())?.owner;
+  return owner instanceof Team ? (owner.owner?.user ?? null) : (owner ?? null);
+}
+
+/** DM the bot's owner. No owner, or closed DMs, cost only a warning. */
+async function dmOwner(client: Client, text: string, logger: Logger): Promise<void> {
+  try {
+    const user = await ownerUser(client);
+    if (!user) {
+      logger.warn('No bot owner to DM.');
+      return;
+    }
+    await user.send(text);
+  } catch (error) {
+    logger.warn('Could not DM the bot owner:', error);
+  }
+}
+
 
 async function resumeRadios(
   client: Client,
