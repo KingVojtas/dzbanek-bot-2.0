@@ -62,8 +62,8 @@ function weightedPick(choices: [GenreId, number][], rng: () => number): GenreId 
 }
 
 /**
- * Kitchen songs of one genre for a set: fresh ones from `sampleCrate`, and recent
- * ones only when the genre has nothing unplayed left.
+ * Kitchen songs of one genre for a set, never one that played recently. Empty
+ * when the genre has run out, so the block moves on instead of repeating itself.
  */
 export function genreSongs<T extends FmSong>(
   pool: readonly T[],
@@ -72,11 +72,33 @@ export function genreSongs<T extends FmSong>(
   genreOf: (song: T) => GenreId | undefined,
   rng: () => number = Math.random,
 ): T[] {
-  const matching = pool.filter((song) => genreOf(song) === genre);
-  const crate = sampleCrate(matching, recent, SET_MAX, rng);
   const played = new Set(recent);
-  const fresh = crate.filter((song) => !played.has(song.key));
-  return fresh.length > 0 ? fresh : crate;
+  const fresh = pool.filter((song) => genreOf(song) === genre && !played.has(song.key));
+  return sampleCrate(fresh, [], SET_MAX, rng);
+}
+
+/** A block needs this many unplayed kitchen songs of its genre to start: two sets' worth. */
+export const BLOCK_MIN_FRESH = 6;
+
+/**
+ * The profile without genres too thin for a block: fewer than `min` kitchen
+ * songs that have not played recently. One metal song is not a metal hour.
+ */
+export function blockProfile<T extends FmSong>(
+  profile: ReadonlyMap<GenreId, number>,
+  pool: readonly T[],
+  recent: readonly string[],
+  genreOf: (song: T) => GenreId | undefined,
+  min = BLOCK_MIN_FRESH,
+): Map<GenreId, number> {
+  const played = new Set(recent);
+  const fresh = new Map<GenreId, number>();
+  for (const song of pool) {
+    const genre = genreOf(song);
+    if (!genre || played.has(song.key) || song.durationSec > MAX_SONG_SEC) continue;
+    fresh.set(genre, (fresh.get(genre) ?? 0) + 1);
+  }
+  return new Map([...profile].filter(([genre]) => (fresh.get(genre) ?? 0) >= min));
 }
 
 /**

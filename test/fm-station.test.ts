@@ -1,0 +1,126 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import type { FmCatalog } from '../src/fm/catalog';
+import { FmStation } from '../src/fm/FmStation';
+import type { GenreId, GenreIndex } from '../src/fm/genres';
+import type { FmSong } from '../src/fm/script';
+
+const START = Date.parse('2026-10-26T17:00:00Z');
+const SONG_MS = 200_000;
+
+function kitchenSong(genre: GenreId, n: number): FmSong {
+  return {
+    key: `${genre}|${n}`,
+    artist: `${genre} artist ${n}`,
+    title: `${genre} song ${n}`,
+    label: `${genre} artist ${n} — ${genre} song ${n}`,
+    query: `${genre} artist ${n} - ${genre} song ${n}`,
+    url: `https://youtu.be/${genre}${n}`,
+    durationSec: SONG_MS / 1000,
+    from: { kind: 'play', userId: 'u1' },
+    at: new Date(START - n * 86_400_000),
+  };
+}
+
+const quiet = { debug() {}, info() {}, warn() {}, error() {} };
+
+/** A show with fake Discord, Deezer, and YouTube, and a clock that moves one song at a time. */
+function show(opts: {
+  pool: FmSong[];
+  related?: { id: number; name: string }[];
+  searchOne?: (query: string) => Promise<unknown>;
+}) {
+  const genres: GenreIndex = {
+    genreOf: (key) => key.split('|')[0] as GenreId,
+    artistId: () => 1,
+    ready: () => true,
+    enqueue() {},
+  };
+  const catalog: FmCatalog = {
+    searchTrack: async () => ({ ok: true, value: null }),
+    albumGenres: async () => ({ ok: true, value: [] }),
+    relatedArtists: async () => opts.related ?? [],
+    topTracks: async () => [{ title: 'Brand New', artist: 'Stranger', durationSec: 200 }],
+    artistCountry: async () => ({ ok: true, value: null }),
+  };
+  let clock = START;
+  const members = [{ id: 'u1', displayName: 'Vojta' }];
+  const station = new FmStation(
+    {
+      guild: {
+        name: 'Kitchen',
+        members: { cache: new Map(members.map((m) => [m.id, m])), fetch: async () => null },
+      } as never,
+      listeners: () => members as never,
+      pool: async () => opts.pool,
+      source: { youtube: { searchOne: opts.searchOne ?? (async () => null) } } as never,
+      writer: { ready: false } as never,
+      voice: { speak: async () => null } as never,
+      language: 'en',
+      discover: 2,
+      blockMinutes: 20,
+      genres,
+      catalog,
+      lines: null,
+      now: () => clock,
+      timezone: 'Europe/Prague',
+      logger: quiet as never,
+    },
+    () => {},
+  );
+  return {
+    /** Play `count` songs; stops early when the station has nothing. */
+    async play(count: number): Promise<{ title: string; vibe: string | null }[]> {
+      const played: { title: string; vibe: string | null }[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const track = await station.upNext();
+        if (!track) break;
+        station.starting(track);
+        played.push({ title: track.title, vibe: station.vibeOf(track) });
+        clock += SONG_MS;
+      }
+      return played;
+    },
+  };
+}
+
+describe('FmStation genre blocks', () => {
+  it('keeps playing when the YouTube search for a new find throws', async () => {
+    const radio = show({
+      pool: Array.from({ length: 12 }, (_, n) => kitchenSong('cz-rap', n)),
+      related: [{ id: 7, name: 'Stranger' }],
+      searchOne: async () => {
+        throw new Error('Sign in to confirm you are not a bot');
+      },
+    });
+    const played = await radio.play(6);
+    assert.equal(played.length, 6);
+  });
+
+  it('gives no block to a genre with one song, and repeats nothing inside a block', async () => {
+    const radio = show({
+      pool: [
+        ...Array.from({ length: 20 }, (_, n) => kitchenSong('cz-rap', n)),
+        kitchenSong('metal', 99),
+      ],
+    });
+    const played = await radio.play(20);
+    assert.ok(played.length >= 18);
+    assert.ok(played.every((song) => song.vibe !== 'metal'));
+    const rap = played.filter((song) => song.vibe === 'Czech rap').map((song) => song.title);
+    assert.equal(new Set(rap).size, rap.length);
+  });
+
+  it('labels every song of a block with its own genre', async () => {
+    const radio = show({
+      pool: [
+        ...Array.from({ length: 12 }, (_, n) => kitchenSong('cz-rap', n)),
+        ...Array.from({ length: 8 }, (_, n) => kitchenSong('rock', n)),
+      ],
+    });
+    for (const song of await radio.play(20)) {
+      if (song.vibe === 'Czech rap') assert.match(song.title, /cz-rap/);
+      if (song.vibe === 'rock') assert.match(song.title, /rock/);
+    }
+  });
+});

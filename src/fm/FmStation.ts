@@ -40,6 +40,7 @@ import {
 } from './script';
 import {
   blockOverruns,
+  blockProfile,
   findAllowance,
   genreSongs,
   kitchenSlots,
@@ -246,8 +247,13 @@ export class FmStation implements PlayerStation {
     };
     const time = `${clock.weekday} ${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}`;
 
+    // A genre set that fails (a search that threw, a catalog hiccup) falls back; the show goes on.
+    const blockSet = await this.planBlocks(pool, base, listeners).catch((error: unknown) => {
+      this.deps.logger.warn('Kitchen FM could not plan a genre set:', error);
+      return null;
+    });
     const set =
-      (await this.planBlocks(pool, base, listeners)) ??
+      blockSet ??
       (await this.planWithClaude(pool, base, time, listeners)) ??
       (await this.planThemed(pool, base, listeners));
     if (!set || this.ended) return null;
@@ -343,7 +349,8 @@ export class FmStation implements PlayerStation {
   /**
    * One set inside a genre block, once enough songs have a genre. The first
    * block of a show is the server's favourite. A set that would run long past
-   * the hour starts the next genre instead.
+   * the hour, or a genre out of unplayed songs, starts the next genre instead.
+   * Only genres with `BLOCK_MIN_FRESH` unplayed songs get a block.
    */
   private async planBlocks(
     pool: FmSong[],
@@ -355,7 +362,13 @@ export class FmStation implements PlayerStation {
 
     const now = this.now();
     const listenerIds = new Set(listeners.map((member) => member.id));
-    const profile = tasteProfile(pool, (song) => index.genreOf(song.key), { now, listenerIds });
+    const genreOf = (song: FmSong) => index.genreOf(song.key);
+    const profile = blockProfile(
+      tasteProfile(pool, genreOf, { now, listenerIds }),
+      pool,
+      this.recent,
+      genreOf,
+    );
     const blockMs = (this.deps.blockMinutes ?? 60) * 60_000;
 
     let genre = this.block?.genre ?? null;
@@ -366,19 +379,24 @@ export class FmStation implements PlayerStation {
     }
     if (!genre) return null;
 
-    let picked = genreSongs(pool, this.recent, genre, (song) => index.genreOf(song.key));
+    let picked = genreSongs(pool, this.recent, genre, genreOf);
     let finds = this.findBudget(picked.length);
+    const runOut = picked.length < SET_MIN;
     if (
       this.block &&
       !fresh &&
-      blockOverruns(now, this.block.startedAt, blockMs, this.estimate(picked, finds))
+      (runOut || blockOverruns(now, this.block.startedAt, blockMs, this.estimate(picked, finds)))
     ) {
       const next = nextGenre(profile, this.blockHistory, Math.random);
       if (next && next !== genre) {
         genre = next;
         fresh = true;
-        picked = genreSongs(pool, this.recent, genre, (song) => index.genreOf(song.key));
+        picked = genreSongs(pool, this.recent, genre, genreOf);
         finds = this.findBudget(picked.length);
+      } else if (runOut) {
+        // No genre has enough unplayed songs for a block: the station's own sets take over.
+        this.block = null;
+        return null;
       }
     }
     if (fresh) index.enqueue(pool);
@@ -436,8 +454,10 @@ export class FmStation implements PlayerStation {
         if (!tracks.some((other) => other.url === track.url)) tracks.push(track);
       }
     }
-    const same = pool.filter((song) => index.genreOf(song.key) === genre);
-    await this.fill(tracks, same.length >= SET_MIN ? same : pool);
+    // Top up only with unplayed songs of the same genre: a short set beats one under the wrong name.
+    const played = new Set(this.recent);
+    const same = pool.filter((song) => index.genreOf(song.key) === genre && !played.has(song.key));
+    await this.fill(tracks, same);
     return tracks;
   }
 
@@ -474,7 +494,13 @@ export class FmStation implements PlayerStation {
         const pick = pickDiscoverTrack(tops, blocked, Math.random);
         if (!pick) continue;
         const query = `${pick.artist} - ${pick.title}`;
-        const hit = await this.deps.source.youtube.searchOne(query, NEW_FIND);
+        // A search that throws (a bot check, a timeout) is no match, not the end of the set.
+        const hit = await this.deps.source.youtube
+          .searchOne(query, NEW_FIND)
+          .catch((error: unknown) => {
+            this.deps.logger.warn(`Kitchen FM: YouTube search failed for "${query}":`, error);
+            return null;
+          });
         if (!hit || hit.durationSec > MAX_SONG_SEC || !isSameSong(pick, hit)) {
           this.deps.logger.info(`Kitchen FM: no YouTube match for the new find "${query}".`);
           continue;

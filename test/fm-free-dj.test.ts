@@ -40,6 +40,7 @@ import {
 import type { FmSong } from '../src/fm/script';
 import {
   blockOverruns,
+  blockProfile,
   findAllowance,
   genreSongs,
   kitchenSlots,
@@ -199,6 +200,28 @@ describe('genre sets', () => {
     );
     assert.ok(picked.length >= 3 && picked.length <= 5);
     assert.ok(picked.every((item) => item.key !== 'a' && item.key !== 'b'));
+  });
+
+  it('gives nothing once every song of the genre played recently', () => {
+    const pool = ['a', 'b', 'c'].map((key) => song(key));
+    assert.deepEqual(
+      genreSongs(pool, ['a', 'b', 'c'], 'rock', () => 'rock'),
+      [],
+    );
+  });
+
+  it('leaves genres without enough unplayed songs out of the block draw', () => {
+    const pool = [
+      ...['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'].map((key) => song(key)),
+      song('m1'),
+    ];
+    const genreOf = (item: FmSong): GenreId => (item.key.startsWith('m') ? 'metal' : 'cz-rap');
+    const profile = new Map<GenreId, number>([
+      ['cz-rap', 7],
+      ['metal', 1],
+    ]);
+    assert.deepEqual([...blockProfile(profile, pool, [], genreOf).keys()], ['cz-rap']);
+    assert.deepEqual([...blockProfile(profile, pool, ['r1', 'r2'], genreOf).keys()], []);
   });
 
   it('allows more finds when the shelf has fewer than three fresh songs', () => {
