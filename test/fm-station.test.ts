@@ -33,17 +33,30 @@ function show(opts: {
   searchOne?: (query: string) => Promise<unknown>;
   artistId?: (key: string) => number | undefined;
   blockSets?: number;
+  /** False: genres are not known yet, so the station plans a themed set. */
+  blocks?: boolean;
+  planSet?: (discover: number) => {
+    vibe: string;
+    line: string;
+    songs: { crate: number | null; artist: string; title: string }[];
+  } | null;
 }) {
   const calls = { deezer: 0, youtube: 0 };
   const genres: GenreIndex = {
     genreOf: (key) => key.split('|')[0] as GenreId,
     artistId: opts.artistId ?? (() => 1),
-    ready: () => true,
+    ready: () => opts.blocks !== false,
     enqueue() {},
   };
   const catalog: FmCatalog = {
-    searchTrack: async () => ({ ok: true, value: null }),
-    albumGenres: async () => ({ ok: true, value: [] }),
+    searchTrack: async () => {
+      calls.deezer += 1;
+      return { ok: true, value: null };
+    },
+    albumGenres: async () => {
+      calls.deezer += 1;
+      return { ok: true, value: [] };
+    },
     relatedArtists: async (seedId) => {
       calls.deezer += 1;
       if (typeof opts.related === 'function') return opts.related(seedId);
@@ -54,8 +67,14 @@ function show(opts: {
       if (opts.topsFor) return opts.topsFor(artistId);
       return opts.tops ?? [{ title: 'Brand New', artist: 'Stranger', durationSec: 200 }];
     },
-    artistCountry: async () => ({ ok: true, value: { country: null, tags: [] } }),
-    lookupArea: async () => ({ ok: true, value: { country: null, parents: [] } }),
+    artistCountry: async () => {
+      calls.deezer += 1;
+      return { ok: true, value: { country: null, tags: [] } };
+    },
+    lookupArea: async () => {
+      calls.deezer += 1;
+      return { ok: true, value: { country: null, parents: [] } };
+    },
   };
   let clock = START;
   const members = [{ id: 'u1', displayName: 'Vojta' }];
@@ -75,7 +94,12 @@ function show(opts: {
           },
         },
       } as never,
-      writer: { ready: false } as never,
+      writer: (opts.planSet
+        ? {
+            ready: true,
+            planSet: async (facts: { discover: number }) => opts.planSet!(facts.discover),
+          }
+        : { ready: false }) as never,
       voice: { speak: async () => null } as never,
       language: 'en',
       discover: 2,
@@ -154,8 +178,12 @@ describe('FmStation genre blocks', () => {
       tops: [{ title: 'Fresh Cut', artist: 'Outside', durationSec: 180 }],
       searchOne: async () => null,
     });
-    const played = await radio.play(1);
-    const first = played[0];
+    const opening = await radio.play(5);
+    assert.equal(opening.length, 5);
+    assert.equal(radio.calls.youtube, 0);
+    assert.equal(radio.calls.deezer, 0);
+    const next = await radio.play(1);
+    const first = next[0];
     assert.ok(first);
     assert.match(first.title, /cz-rap/);
     assert.equal(radio.calls.youtube, 4);
@@ -228,7 +256,65 @@ describe('FmStation genre blocks', () => {
     const played = await radio.play(15);
     assert.equal(played.length, 15);
     const kitchen = (song: { title: string }) => song.title.includes('pop song');
-    assert.equal(played.slice(0, 5).filter(kitchen).length, 4);
-    assert.deepEqual(played.slice(5).filter(kitchen), []);
+    assert.equal(played.slice(0, 4).filter(kitchen).length, 4);
+    assert.ok(played.slice(0, 4).every((song) => !song.vibe?.includes('new find')));
+    assert.deepEqual(played.slice(4).filter(kitchen), []);
+    assert.ok(played.slice(4).every((song) => song.vibe?.includes('new find')));
+  });
+
+  it('plans the first set with no catalog or YouTube calls', async () => {
+    const hit = async () => ({
+      title: 'Brand New',
+      url: 'https://youtu.be/brandnew',
+      durationSec: 180,
+      uploader: 'Stranger',
+      requestedBy: 'Kitchen FM',
+    });
+    const block = show({
+      pool: Array.from({ length: 12 }, (_, n) => kitchenSong('cz-rap', n)),
+      related: [{ id: 7, name: 'Stranger' }],
+      searchOne: hit,
+    });
+    const played = await block.play(5);
+    assert.equal(played.length, 5);
+    assert.equal(block.calls.deezer, 0);
+    assert.equal(block.calls.youtube, 0);
+    assert.ok(played.every((song) => !song.vibe?.includes('new find')));
+
+    const themed = show({
+      pool: Array.from({ length: 12 }, (_, n) => kitchenSong('pop', n)),
+      blocks: false,
+      related: [{ id: 7, name: 'Stranger' }],
+      searchOne: hit,
+    });
+    const themedPlayed = await themed.play(1);
+    assert.equal(themedPlayed.length, 1);
+    assert.equal(themed.calls.deezer, 0);
+    assert.equal(themed.calls.youtube, 0);
+
+    let discover: number | null = null;
+    const claude = show({
+      pool: Array.from({ length: 12 }, (_, n) => kitchenSong('rock', n)),
+      blocks: false,
+      related: [{ id: 9, name: 'Stranger' }],
+      searchOne: hit,
+      planSet: (value) => {
+        discover = value;
+        return {
+          vibe: 'rock',
+          line: 'Hey.',
+          songs: [
+            { crate: 1, artist: 'rock artist 0', title: 'rock song 0' },
+            { crate: null, artist: 'Stranger', title: 'Brand New' },
+          ],
+        };
+      },
+    });
+    const first = await claude.play(1);
+    assert.equal(first.length, 1);
+    assert.equal(discover, 0);
+    assert.equal(claude.calls.deezer, 0);
+    assert.equal(claude.calls.youtube, 0);
+    assert.equal(first[0]?.vibe?.includes('new find'), false);
   });
 });

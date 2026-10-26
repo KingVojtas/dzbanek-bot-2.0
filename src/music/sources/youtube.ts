@@ -104,6 +104,8 @@ interface SpawnedStream {
   audio: Readable;
   /** Resolves on the first audio bytes; rejects with yt-dlp's error if none come. */
   ready: Promise<void>;
+  /** Video id yt-dlp prints before it downloads, when asked. Null if it never says. */
+  videoId: Promise<string | null>;
 }
 
 function pickThumbnail(info: YtDlpJson): string | undefined {
@@ -169,20 +171,26 @@ async function dumpJson(target: string, extra: Record<string, unknown> = {}): Pr
  * Falls back to a full extraction when the flat list has nothing usable.
  */
 async function searchFirst(query: string): Promise<YtDlpJson | null> {
+  const started = Date.now();
   try {
-    const raw = await youtubeDl(`ytsearch1:${query}`, {
-      dumpSingleJson: true,
-      flatPlaylist: true,
-      ...baseFlags(),
-    } as Parameters<typeof youtubeDl>[1]);
-    const info = typeof raw === 'string' ? (JSON.parse(raw) as YtDlpJson) : (raw as YtDlpJson);
-    const hit = info.entries?.find((entry) => entry?.title && entry.id);
-    if (hit) return hit;
-  } catch {
-    /* fall through to the full search */
+    try {
+      const raw = await youtubeDl(`ytsearch1:${query}`, {
+        dumpSingleJson: true,
+        flatPlaylist: true,
+        ...baseFlags(),
+      } as Parameters<typeof youtubeDl>[1]);
+      const info = typeof raw === 'string' ? (JSON.parse(raw) as YtDlpJson) : (raw as YtDlpJson);
+      const hit = info.entries?.find((entry) => entry?.title && entry.id);
+      if (hit) return hit;
+    } catch {
+      /* fall through to the full search */
+    }
+    const info = await dumpJson(`ytsearch1:${query}`, { noPlaylist: true });
+    return info._type === 'playlist' ? (info.entries?.[0] ?? null) : info;
+  } finally {
+    const seconds = ((Date.now() - started) / 1000).toFixed(1);
+    logger.info(`YouTube search: ${seconds} s for "${query}"`);
   }
-  const info = await dumpJson(`ytsearch1:${query}`, { noPlaylist: true });
-  return info._type === 'playlist' ? (info.entries?.[0] ?? null) : info;
 }
 
 /** Only what toTrack reads, so the cache does not hold format lists. */
@@ -205,10 +213,9 @@ function slim(info: YtDlpJson): YtDlpJson {
 export class YouTubeSource implements TrackSource {
   /** Query or URL → slim metadata, oldest first (Map keeps insertion order). */
   private readonly resolved = new Map<string, { at: number; entries: YtDlpJson[] }>();
-  private readonly warmed = new Map<
-    string,
-    { stream: PassThrough; ready: Promise<void>; timer: ReturnType<typeof setTimeout> }
-  >();
+  private readonly warmed = new Map<string, WarmEntry>();
+  /** A `ytsearch1:` download started while the flat search runs, keyed by the query. */
+  private readonly searchWarm = new Map<string, WarmEntry>();
 
   /** Told when YouTube streams a song (true) or refuses with a bot check (false). */
   onYouTube: ((ok: boolean) => void) | null = null;
@@ -241,6 +248,11 @@ export class YouTubeSource implements TrackSource {
       return [info];
     });
 
+    if (!isYouTubeUrl(trimmed)) {
+      const id = entries[0]?.id;
+      if (id) this.bindSearchWarm(trimmed, id);
+      else this.dropSearchWarm(trimmed);
+    }
     return entries.flatMap((entry) => toTrack(entry, requestedBy) ?? []);
   }
 
@@ -257,6 +269,8 @@ export class YouTubeSource implements TrackSource {
       const found = await searchFirst(query);
       return found ? [found] : [];
     });
+    if (hit?.id) this.bindSearchWarm(query, hit.id);
+    else this.dropSearchWarm(query);
     return hit ? toTrack(hit, requestedBy, extras) : null;
   }
 
@@ -267,23 +281,33 @@ export class YouTubeSource implements TrackSource {
   warm(url: string): void {
     const id = youTubeVideoId(url);
     if (!id || this.warmed.has(id)) return;
-    let spawned: SpawnedStream;
-    try {
-      spawned = this.spawnStream(url);
-    } catch {
-      return;
-    }
+    const spawned = this.trySpawn(url);
+    if (!spawned) return;
     const stream = bufferStream(spawned.audio);
-    const timer = setTimeout(() => {
-      if (this.warmed.get(id)?.stream !== stream) return;
-      this.warmed.delete(id);
-      stream.destroy();
-    }, WARM_TTL_MS);
-    timer.unref?.();
-    stream.once('close', () => {
+    const entry = this.holdWarm(stream, spawned.ready, () => {
       if (this.warmed.get(id)?.stream === stream) this.warmed.delete(id);
     });
-    this.warmed.set(id, { stream, ready: spawned.ready, timer });
+    this.warmed.set(id, entry);
+  }
+
+  /**
+   * Start `ytsearch1:` audio while the flat search is still running.
+   * Claimed later only if yt-dlp's id is the search hit's id.
+   */
+  warmSearch(query: string): void {
+    const key = query.trim();
+    if (!key || this.searchWarm.has(key)) return;
+    const spawned = this.trySpawn(`ytsearch1:${key}`, true);
+    if (!spawned) return;
+    const stream = bufferStream(spawned.audio);
+    const entry = this.holdWarm(stream, spawned.ready, () => {
+      if (this.searchWarm.get(key)?.stream === stream) this.searchWarm.delete(key);
+      for (const [warmId, warm] of this.warmed) {
+        if (warm.stream === stream) this.warmed.delete(warmId);
+      }
+    });
+    entry.expectId = spawned.videoId;
+    this.searchWarm.set(key, entry);
   }
 
   /**
@@ -337,18 +361,68 @@ export class YouTubeSource implements TrackSource {
 
   private async streamYouTube(track: Track): Promise<Readable> {
     const id = youTubeVideoId(track.url);
-    const warm = id ? this.warmed.get(id) : undefined;
-    if (id && warm) {
-      this.warmed.delete(id);
-      clearTimeout(warm.timer);
-      if (!warm.stream.destroyed) {
+    const warm = id ? this.takeWarm(id) : undefined;
+    if (warm && !warm.stream.destroyed) {
+      const printed = warm.expectId ? await warm.expectId : id;
+      if (printed === id) {
+        // yt-dlp's own error (a bot check) goes to stream(), which tries SoundCloud.
         await warm.ready;
-        return warm.stream;
+        if (!warm.stream.destroyed) return warm.stream;
+      } else {
+        warm.stream.destroy();
       }
     }
     const fresh = this.spawnStream(track.url);
     await fresh.ready;
     return fresh.audio;
+  }
+
+  /** Move a search download onto its video id, or drop it when the search missed. */
+  private bindSearchWarm(query: string, id: string): void {
+    const warm = this.searchWarm.get(query.trim());
+    if (!warm) return;
+    this.searchWarm.delete(query.trim());
+    if (this.warmed.has(id)) {
+      clearTimeout(warm.timer);
+      warm.stream.destroy();
+      return;
+    }
+    this.warmed.set(id, warm);
+  }
+
+  private dropSearchWarm(query: string): void {
+    const warm = this.searchWarm.get(query.trim());
+    if (!warm) return;
+    this.searchWarm.delete(query.trim());
+    clearTimeout(warm.timer);
+    warm.stream.destroy();
+  }
+
+  private takeWarm(id: string): WarmEntry | undefined {
+    const warm = this.warmed.get(id);
+    if (!warm) return undefined;
+    this.warmed.delete(id);
+    clearTimeout(warm.timer);
+    return warm;
+  }
+
+  private trySpawn(url: string, printId = false): SpawnedStream | null {
+    try {
+      return this.spawnStream(url, printId);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Kill the download if nobody claims it within 30 s. `forget` drops it from its map. */
+  private holdWarm(stream: PassThrough, ready: Promise<void>, forget: () => void): WarmEntry {
+    const timer = setTimeout(() => {
+      forget();
+      stream.destroy();
+    }, WARM_TTL_MS);
+    timer.unref?.();
+    stream.once('close', forget);
+    return { stream, ready, timer };
   }
 
   private async cached(key: string, load: () => Promise<YtDlpJson[]>): Promise<YtDlpJson[]> {
@@ -372,7 +446,7 @@ export class YouTubeSource implements TrackSource {
    * yt-dlp's audio on a stream. When YouTube refuses (bot check), stdout just
    * ends empty, so `ready` waits for real bytes and otherwise carries the error.
    */
-  private spawnStream(url: string): SpawnedStream {
+  private spawnStream(url: string, printId = false): SpawnedStream {
     const subprocess = youtubeDl.exec(
       url,
       {
@@ -380,6 +454,8 @@ export class YouTubeSource implements TrackSource {
         format: 'bestaudio/best',
         noPlaylist: true,
         quiet: true,
+        // The id is printed on stderr. Audio stays on stdout (`-o -`).
+        ...(printId ? { print: 'before_dl:%(id)s', noSimulate: true } : {}),
         ...streamFlags(),
       } as Parameters<typeof youtubeDl.exec>[1],
       { stdio: ['ignore', 'pipe', 'pipe'] },
@@ -389,9 +465,6 @@ export class YouTubeSource implements TrackSource {
     if (!stdout) {
       throw new Error('yt-dlp produced no audio stream.');
     }
-
-    // Drain stderr so a full pipe cannot stall yt-dlp.
-    subprocess.stderr?.resume();
 
     let started = (): void => {};
     let failed = (_error: Error): void => {};
@@ -439,8 +512,69 @@ export class YouTubeSource implements TrackSource {
     audio.once('close', kill);
     audio.once('error', kill);
 
-    return { audio, ready };
+    const videoId = printId ? printedVideoId(subprocess.stderr, ready) : Promise.resolve(null);
+    // Drain stderr so a full pipe cannot stall yt-dlp. The id listener is already on.
+    subprocess.stderr?.resume();
+
+    return { audio, ready, videoId };
   }
+}
+
+interface WarmEntry {
+  stream: PassThrough;
+  ready: Promise<void>;
+  timer: ReturnType<typeof setTimeout>;
+  expectId?: Promise<string | null>;
+}
+
+/**
+ * The id yt-dlp prints on stderr (`before_dl:%(id)s`). It arrives before the
+ * audio. Null when the line never comes, including once audio has started
+ * without one, so a search download is not held open to guess.
+ */
+function printedVideoId(
+  stderr: Readable | null,
+  audioReady: Promise<void>,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    if (!stderr) {
+      resolve(null);
+      return;
+    }
+    let buf = '';
+    let settled = false;
+    const finish = (id: string | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(id);
+    };
+    const take = (text: string) => {
+      buf += text;
+      const lines = buf.split(/\r?\n/);
+      buf = lines.pop() ?? '';
+      for (const line of lines) {
+        const id = line.trim();
+        if (/^[\w-]{6,}$/.test(id)) finish(id);
+      }
+    };
+    stderr.on('data', (chunk: Buffer | string) => {
+      take(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
+    });
+    stderr.on('end', () => {
+      const id = buf.trim();
+      finish(/^[\w-]{6,}$/.test(id) ? id : null);
+    });
+    void audioReady.then(
+      () => {
+        const timer = setTimeout(() => {
+          const id = buf.trim();
+          finish(/^[\w-]{6,}$/.test(id) ? id : null);
+        }, 500);
+        timer.unref?.();
+      },
+      () => finish(null),
+    );
+  });
 }
 
 export { isYouTubeUrl };

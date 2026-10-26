@@ -27,9 +27,15 @@ export class CompositeTrackSource implements TrackSource {
     return this.spotify.resolveProgressive(input, requestedBy, onTracks);
   }
 
-  /** Start streaming a single YouTube video while its metadata resolves. */
+  /** Start audio for a YouTube video, or for a text search, while the title is still loading. */
   warm(input: string): void {
-    if (isYouTubeUrl(input) && !/[?&]list=|\/playlist\?/i.test(input)) this.youtube.warm(input);
+    const trimmed = input.trim();
+    if (!trimmed || isSpotifyUrl(trimmed)) return;
+    if (isYouTubeUrl(trimmed) && !/[?&]list=|\/playlist\?/i.test(trimmed)) {
+      this.youtube.warm(trimmed);
+      return;
+    }
+    if (!isYouTubeUrl(trimmed)) this.youtube.warmSearch(trimmed);
   }
 
   stream(track: Track): Promise<Readable> {

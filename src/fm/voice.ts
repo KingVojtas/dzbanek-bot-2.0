@@ -2,8 +2,10 @@ import { spawn } from 'node:child_process';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import type { Logger } from '../core/logger';
 
-const CONNECT_TIMEOUT_MS = 10_000;
-const SPEAK_TIMEOUT_MS = 20_000;
+/** A stuck handshake is dropped so the one retry can start. A line connects in about a second. */
+const CONNECT_TIMEOUT_MS = 4_000;
+/** No audio for this long ends the attempt. A 26-word line is spoken in about a second. */
+const SPEAK_TIMEOUT_MS = 10_000;
 const DECODE_TIMEOUT_MS = 15_000;
 /** A short DJ line is tens of kilobytes; anything near this is not one. */
 const MAX_CLIP_BYTES = 2 * 1024 * 1024;
@@ -102,7 +104,11 @@ export class DjVoice {
     if (!text || Date.now() < this.restUntil) return null;
     try {
       // Edge drops a connection now and then; one fresh try usually gets the line.
-      const mp3 = await this.synthesize(text).catch(() => this.synthesize(text));
+      const mp3 = await this.synthesize(text).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.info(`Kitchen FM voice: first try failed: ${message}`);
+        return this.synthesize(text);
+      });
       const pcm = await decodeClip(mp3);
       if (pcm.length === 0 || pcmLoudness(pcm) < MIN_LOUDNESS_DB) {
         throw new Error('The DJ clip is silent.');

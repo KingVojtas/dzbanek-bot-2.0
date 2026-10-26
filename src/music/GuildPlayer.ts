@@ -61,7 +61,18 @@ export class GuildPlayer {
   private lastProgressSec = -1;
   private progressEditInFlight = false;
   private progressBackoffUntil = 0;
-  private prefetched: { url: string; stream: Readable } | null = null;
+  /**
+   * The next song's audio, started while this one plays. `stream` is null until
+   * yt-dlp sends bytes. `taken` means playTrack is waiting for it; `drop` means
+   * skip, stop, or a newer prefetch threw it away.
+   */
+  private prefetched: {
+    url: string;
+    stream: Readable | null;
+    ready: Promise<void>;
+    drop: boolean;
+    taken: boolean;
+  } | null = null;
   private lastSkipAt = 0;
   private idleAdvanceScheduled = false;
   /** URL already retried once after ending instantly. */
@@ -150,6 +161,9 @@ export class GuildPlayer {
     if (this.station === station || this.destroyed) return;
     this.station?.end();
     this.station = station;
+    // A station pick is no longer next. A queued request's prefetch stays.
+    const queuedNext = this.queue.find((track) => track !== this.current);
+    if (!queuedNext || this.prefetched?.url !== queuedNext.url) this.invalidatePrefetch();
     if (!station) return;
     this.clearIdleTimer();
     if (this.current) this.warmStation(this.current);
@@ -386,6 +400,7 @@ export class GuildPlayer {
     if (index === 0) {
       this.invalidatePrefetch();
       this.prefetchNext();
+      if (this.current && this.queue.length === 0) this.warmStation(this.current);
     }
     return removed;
   }
@@ -521,8 +536,22 @@ export class GuildPlayer {
 
     try {
       this.logger.info(`Starting stream for: ${track.title} (${track.url})`);
-      // The song loads while the DJ talks.
-      const opening = this.openStream(track, gen);
+      // The song loads while the DJ talks. The clock stops when the stream is
+      // ready, so a long intro does not look like a slow download.
+      const streamStarted = Date.now();
+      let prefetchedHit = false;
+      let streamReadyMs = 0;
+      const opening = this.openStream(track, gen).then(async (opened) => {
+        if (!opened) return null;
+        prefetchedHit = opened.prefetched;
+        const probed = await demuxProbe(opened.stream);
+        streamReadyMs = Date.now() - streamStarted;
+        if (this.destroyed || gen !== this.playGeneration) {
+          probed.stream.destroy();
+          return null;
+        }
+        return probed;
+      });
       opening.catch(() => {});
       const intro = await this.stationIntro(track, previous);
       if (intro) {
@@ -532,16 +561,13 @@ export class GuildPlayer {
       }
       if (this.destroyed || gen !== this.playGeneration) {
         void opening.then(
-          (stream) => stream?.destroy(),
+          (probed) => probed?.stream.destroy(),
           () => {},
         );
         return false;
       }
-      const stream = await opening;
-      if (!stream) return false;
-
-      const probed = await demuxProbe(stream);
-      if (this.destroyed || gen !== this.playGeneration) return false;
+      const probed = await opening;
+      if (!probed) return false;
 
       const resource = createAudioResource(probed.stream, {
         inputType: probed.type,
@@ -551,7 +577,11 @@ export class GuildPlayer {
       this.current = track;
       this.currentResource = resource;
       this.player.play(resource);
-      this.logger.info(`Audio player started: ${track.title} (${this.queue.length} still queued)`);
+      const readySec = (streamReadyMs / 1000).toFixed(1);
+      const via = prefetchedHit ? ', prefetched' : '';
+      this.logger.info(
+        `Audio player started: ${track.title} (stream ready in ${readySec} s${via}; ${this.queue.length} still queued)`,
+      );
       this.lastStarted = track;
       this.onTrackStart?.(track);
 
@@ -616,13 +646,21 @@ export class GuildPlayer {
     }
   }
 
-  /** While a song plays, let the station prepare what it will say before the next one. */
+  /**
+   * While a song plays, prepare the next intro. With nothing queued, also
+   * start the station's next song so the hand-off is not a fresh yt-dlp.
+   */
   private warmStation(current: Track): void {
     const station = this.station;
     if (!station || this.loopMode !== 'off') return;
     const queued = this.queue.find((track) => track !== current);
     void (queued ? Promise.resolve(queued) : station.upNext())
-      .then((upcoming) => (upcoming && this.station === station ? station.intro(upcoming) : null))
+      .then((upcoming) => {
+        if (!upcoming || this.station !== station || this.loopMode !== 'off') return null;
+        const next = this.queue.find((track) => track !== this.current);
+        if (!next) this.prefetchStation(station, upcoming);
+        return station.intro(upcoming);
+      })
       .catch((error: unknown) => this.logger.debug('Station could not prepare ahead:', error));
   }
 
@@ -630,17 +668,28 @@ export class GuildPlayer {
     return !stream.destroyed && !stream.readableEnded && stream.readable;
   }
 
-  private async openStream(track: Track, gen: number): Promise<Readable | null> {
-    const prefetched =
-      this.prefetched && this.prefetched.url === track.url ? this.prefetched.stream : null;
-    this.prefetched = null;
-
-    if (prefetched && this.streamUsable(prefetched)) {
-      return prefetched;
-    }
-    if (prefetched) {
+  private async openStream(
+    track: Track,
+    gen: number,
+  ): Promise<{ stream: Readable; prefetched: boolean } | null> {
+    const slot = this.prefetched?.url === track.url ? this.prefetched : null;
+    // Some other song was warming: it is not next any more.
+    if (!slot) this.invalidatePrefetch();
+    if (slot) {
+      slot.taken = true;
+      this.prefetched = null;
+      await slot.ready;
+      if (
+        !slot.drop &&
+        slot.stream &&
+        this.streamUsable(slot.stream) &&
+        !this.destroyed &&
+        gen === this.playGeneration
+      ) {
+        return { stream: slot.stream, prefetched: true };
+      }
       try {
-        prefetched.destroy();
+        slot.stream?.destroy();
       } catch {
         /* ignore */
       }
@@ -651,44 +700,84 @@ export class GuildPlayer {
       fresh.destroy();
       return null;
     }
-    return fresh;
+    return { stream: fresh, prefetched: false };
   }
 
   private invalidatePrefetch(): void {
-    if (!this.prefetched) return;
+    const slot = this.prefetched;
+    this.prefetched = null;
+    if (!slot) return;
+    slot.drop = true;
     try {
-      this.prefetched.stream.destroy();
+      slot.stream?.destroy();
     } catch {
       /* ignore */
     }
-    this.prefetched = null;
+  }
+
+  /** Start `track` if that url is not already warming. `keep` runs when bytes arrive. */
+  private prefetchTrack(track: Track, keep: (url: string) => boolean): void {
+    if (this.destroyed) return;
+    if (this.prefetched?.url === track.url) return;
+    this.invalidatePrefetch();
+    const url = track.url;
+    const gen = this.playGeneration;
+    let settle = (): void => {};
+    const slot = {
+      url,
+      stream: null as Readable | null,
+      drop: false,
+      taken: false,
+      ready: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    };
+    this.prefetched = slot;
+    void this.source
+      .stream(track)
+      .then((raw) => {
+        // A request that landed in the queue, or a new prefetch, wins over this one.
+        // A taken slot belongs to playTrack, which checks its own generation.
+        const stale =
+          slot.drop ||
+          this.destroyed ||
+          (!slot.taken && (gen !== this.playGeneration || !keep(url)));
+        if (stale) {
+          raw.destroy();
+          if (this.prefetched === slot) this.prefetched = null;
+          return;
+        }
+        // Destroying the buffer (skip, shuffle) also ends yt-dlp.
+        slot.stream = bufferStream(raw);
+      })
+      .catch(() => {
+        if (this.prefetched === slot) this.prefetched = null;
+      })
+      .finally(settle);
   }
 
   private prefetchNext(): void {
     const next = this.queue.find((track) => track !== this.current);
     if (!next || this.destroyed) return;
-    if (this.prefetched?.url === next.url) return;
-    this.invalidatePrefetch();
-    const url = next.url;
-    const gen = this.playGeneration;
-    void this.source
-      .stream(next)
-      .then((raw) => {
-        if (this.destroyed || gen !== this.playGeneration) {
-          raw.destroy();
-          return;
-        }
-        const queued = this.queue.find((track) => track !== this.current);
-        if (!queued || queued.url !== url) {
-          raw.destroy();
-          return;
-        }
-        // Destroying the buffer (skip, shuffle) also ends yt-dlp.
-        this.prefetched = { url, stream: bufferStream(raw) };
-      })
-      .catch(() => {
-        /* miss is fine — playTrack will stream on demand */
-      });
+    this.prefetchTrack(next, (url) => {
+      const queued = this.queue.find((track) => track !== this.current);
+      return queued?.url === url;
+    });
+  }
+
+  /**
+   * Warm the station's upcoming pick. A queued request already warming, or a
+   * different song now at the front, is left alone.
+   */
+  private prefetchStation(station: PlayerStation, upcoming: Track): void {
+    if (this.destroyed || this.station !== station || this.loopMode !== 'off') return;
+    if (this.queue.find((track) => track !== this.current)) return;
+    this.prefetchTrack(upcoming, (url) => {
+      const queued = this.queue.find((track) => track !== this.current);
+      if (queued) return queued.url === url;
+      if (this.station !== station || this.loopMode !== 'off') return false;
+      return station.queued()?.url === url;
+    });
   }
 
   private startProgressTicker(): void {

@@ -263,7 +263,8 @@ export class FmStation implements PlayerStation {
     };
     const time = `${clock.weekday} ${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}`;
 
-    // A small kitchen gets one set of its own songs; after that, new finds from similar artists.
+    // The first set is the kitchen's own songs, so the show can start at once.
+    // A small kitchen's later sets are new finds from similar artists.
     // A set that fails (a search that threw, a catalog hiccup) falls back; the show goes on.
     const findSet =
       number > 1 && pool.length < SMALL_KITCHEN
@@ -303,6 +304,7 @@ export class FmStation implements PlayerStation {
   private cueVoice(set: FmSet): void {
     const first = set.tracks[0];
     if (!first) return;
+    const started = Date.now();
     void this.intro(first).then((intro) => {
       if (!intro?.pcm?.length) {
         this.deps.logger.info('Kitchen FM voice: text only');
@@ -311,7 +313,10 @@ export class FmStation implements PlayerStation {
       // s16le, 48 kHz, stereo.
       const seconds = intro.pcm.length / (48_000 * 2 * 2);
       const db = Math.round(pcmLoudness(intro.pcm));
-      this.deps.logger.info(`Kitchen FM voice: ${seconds.toFixed(1)} s, ${db} dBFS`);
+      const ready = ((Date.now() - started) / 1000).toFixed(1);
+      this.deps.logger.info(
+        `Kitchen FM voice: ${seconds.toFixed(1)} s, ${db} dBFS, ready in ${ready} s`,
+      );
     });
   }
 
@@ -332,7 +337,7 @@ export class FmStation implements PlayerStation {
       earlierVibes: this.vibes.slice(-VIBES_SHOWN),
       playedThisShow: this.played.slice(-PLAYED_SHOWN),
       listeners: listeners.map((member) => member.displayName),
-      discover: this.deps.discover,
+      discover: base.set === 1 ? 0 : this.deps.discover,
       crate: crateSongs.map((song, i) => ({
         n: i + 1,
         artist: song.artist,
@@ -346,12 +351,13 @@ export class FmStation implements PlayerStation {
     if (!plan) return null;
 
     const loaded = await Promise.all(
-      plan.songs.map((song) =>
-        this.loadPlanned(song, crateSongs, pool).catch((error: unknown) => {
+      plan.songs.map((song) => {
+        if (base.set === 1 && song.crate === null) return null;
+        return this.loadPlanned(song, crateSongs, pool).catch((error: unknown) => {
           this.deps.logger.warn(`Kitchen FM could not load "${song.title}":`, error);
           return null;
-        }),
-      ),
+        });
+      }),
     );
     // A new find can turn out to be a kitchen song already in the set.
     const tracks = loaded.filter(
@@ -377,11 +383,13 @@ export class FmStation implements PlayerStation {
       fresh.length > 0
         ? themedSet(fresh, [], { listeners: listenerMap, last: this.lastTheme })
         : null;
-    // A small kitchen opens with all of its own songs; finds only fill the gap.
+    // Set 1 is the kitchen's own songs. Later, a small kitchen fills the gap with finds.
     const allowance =
-      pool.length < SMALL_KITCHEN
-        ? Math.min(this.findBudget(fresh.length), Math.max(0, SET_MAX - fresh.length))
-        : this.findBudget(fresh.length);
+      base.set === 1
+        ? 0
+        : pool.length < SMALL_KITCHEN
+          ? Math.min(this.findBudget(fresh.length), Math.max(0, SET_MAX - fresh.length))
+          : this.findBudget(fresh.length);
     const chosen = (picked?.songs ?? []).slice(
       0,
       kitchenSlots(picked?.songs.length ?? 0, allowance),
@@ -481,7 +489,14 @@ export class FmStation implements PlayerStation {
     }
     if (fresh) index.enqueue(pool);
 
-    const tracks = await this.loadGenreSet(picked, pool, genre, finds, listenerIds, index);
+    const tracks = await this.loadGenreSet(
+      picked,
+      pool,
+      genre,
+      base.set === 1 ? 0 : finds,
+      listenerIds,
+      index,
+    );
     if (tracks.length === 0 || !tracks[0]) return null;
     if (fresh) {
       const limit = this.setsPerBlock(this.blockHistory.length === 0);

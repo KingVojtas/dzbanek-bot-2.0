@@ -18,6 +18,7 @@ export async function playSearch(
 ): Promise<PlaySearchResult> {
   const guildId = opts.voiceChannel.guild.id;
   const alreadyPlaying = Boolean(services.music.get(guildId)?.current);
+  services.music.trackSource.warm(opts.query);
 
   let tracks;
   let player;

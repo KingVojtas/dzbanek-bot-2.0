@@ -160,6 +160,7 @@ export class SpotifySource {
       if (ref.kind === 'track') {
         const pageUrl = `https://open.spotify.com/track/${ref.id}`;
         const query = (await oembedTitle(pageUrl)) ?? input;
+        this.youtube.warmSearch(query);
         const fallback = await this.youtube.searchOne(query, requestedBy, {
           source: 'spotify',
           sourceUrl: pageUrl,
@@ -173,7 +174,7 @@ export class SpotifySource {
 
     if (ref.kind === 'track') {
       const payload = await spotifyGet<SpotifyTrackPayload>(`/tracks/${ref.id}`);
-      const track = await this.matchTrack(payload, requestedBy);
+      const track = await this.matchTrack(payload, requestedBy, true);
       return track ? [track] : [];
     }
 
@@ -290,10 +291,12 @@ export class SpotifySource {
   private async matchTrack(
     payload: SpotifyTrackPayload,
     requestedBy: string,
+    warm = false,
   ): Promise<Track | null> {
     const artists = artistNames(payload);
     const query = artists ? `${artists} - ${payload.name}` : payload.name;
     const thumbnail = payload.album?.images?.[0]?.url;
+    if (warm) this.youtube.warmSearch(query);
 
     const matched = await this.youtube.searchOne(query, requestedBy, {
       source: 'spotify',
