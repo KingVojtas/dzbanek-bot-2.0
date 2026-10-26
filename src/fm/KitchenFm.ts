@@ -5,7 +5,9 @@ import type { RadioCatchStore } from '../kitchen/catches';
 import type { MusicManager } from '../music/MusicManager';
 import { dedupeSongs, songFromCatch, songFromTrack } from '../quiz/songs';
 import type { PlayedTrackStore } from '../quiz/stores';
+import { createCatalog, type FmCatalog } from './catalog';
 import { FmStation } from './FmStation';
+import { GenreBook, genreCachePath } from './GenreBook';
 import type { FmSong } from './script';
 import { DjVoice } from './voice';
 import { DjWriter } from './writer';
@@ -15,14 +17,15 @@ export const FM_MIN_SONGS = 3;
 
 /**
  * Kitchen FM: the server's own station. It plays the kitchen's songs (every
- * /play and every 🍪 catch) on the music player in sets of a few songs, with a
- * few new finds, and a DJ planned by Claude talks before each set. /play
- * requests still go first.
+ * /play and every 🍪 catch) in genre blocks of about an hour, with a few new
+ * finds and a DJ between the sets. /play requests still go first. No API key.
  */
 export class KitchenFm {
   private readonly stations = new Map<string, FmStation>();
   private readonly writer: DjWriter;
   private readonly voice: DjVoice;
+  private readonly genres: GenreBook;
+  private readonly catalog: FmCatalog;
 
   constructor(
     private readonly music: MusicManager,
@@ -33,11 +36,13 @@ export class KitchenFm {
   ) {
     this.writer = new DjWriter(config.dj.model, logger);
     this.voice = new DjVoice(config.dj.voice, logger);
+    this.catalog = createCatalog();
+    this.genres = new GenreBook(genreCachePath(), this.catalog, logger);
   }
 
-  /** Claude plans the sets, and may bring songs the kitchen never played. */
+  /** A set may bring songs the kitchen never played, from related artists. */
   get findsNew(): boolean {
-    return this.writer.ready && this.config.dj.discover > 0;
+    return this.config.dj.discover > 0;
   }
 
   isOn(guildId: string): boolean {
@@ -80,7 +85,8 @@ export class KitchenFm {
    */
   async start(voice: VoiceBasedChannel, text: SendableChannels | null): Promise<number> {
     const guild = voice.guild;
-    const songs = (await this.pool(guild.id)).length;
+    const kitchen = await this.pool(guild.id);
+    const songs = kitchen.length;
     if (songs < FM_MIN_SONGS) {
       throw new Error(
         `Kitchen FM needs at least ${FM_MIN_SONGS} kitchen songs and found ${songs}. ` +
@@ -90,6 +96,7 @@ export class KitchenFm {
 
     const player = await this.music.join(voice);
     if (text) player.setAnnounceChannel(text);
+    this.genres.enqueue(kitchen);
     if (player.onAir && this.stations.has(guild.id)) return songs;
 
     const station: FmStation = new FmStation(
@@ -102,6 +109,9 @@ export class KitchenFm {
         voice: this.voice,
         language: this.config.dj.language,
         discover: this.config.dj.discover,
+        blockMinutes: this.config.dj.blockMinutes,
+        genres: this.genres,
+        catalog: this.catalog,
         timezone: this.config.timezone,
         logger: this.logger,
       },

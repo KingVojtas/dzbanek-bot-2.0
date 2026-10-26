@@ -94,23 +94,25 @@ On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for t
 
 ### 🎙️ Kitchen FM
 
-The kitchen’s own station, in the style of Spotify’s DJ. `/radio play station:Kitchen FM` joins your voice channel and plays the kitchen’s songs (every track the server `/play`ed and every 🍪 catch) in **sets** of 3 to 5 songs that share a vibe. The DJ talks once, before each set: the time, the vibe, the first song, and who brought it in. For example: “It’s 6 PM and we’re going for a Friday warm-up. First up, Numb by Linkin Park, brought in by Vojta.” Then the songs play back to back. It also welcomes whoever walked in during the last set.
+The kitchen’s own station. `/radio play station:Kitchen FM` joins your voice channel and plays the kitchen’s songs (every track the server `/play`ed and every 🍪 catch). It does this for free: no API key.
 
-- **The sets** come from Claude (`claude-opus-5-5` at low effort). It picks a vibe for the time and the people listening, then picks songs for it from 40 kitchen songs, never the same vibe twice in a row. It can add up to two **new finds**, songs the kitchen never played. A new find plays only when YouTube has that song by that artist, and the card says “Kitchen FM · new find”. Claude gets the songs, who brought them and when, who is listening, and the time. Nothing else.
-- **Without an API key** the station picks its own sets: someone’s picks, radio catches, throwbacks, what’s fresh, or a bit of everything. The DJ reads a short line of its own.
+The show is **genre blocks**. The station learns what the server likes from its `/play` history, plays about an hour of one genre, then moves on. The favourite, often Czech rap, comes up most often. A block is sets of 3 to 5 songs. The DJ talks once, before each set: the time, the genre for the hour, the first song, and who brought it in. For example: “It’s 6 PM and The Kitchen is open for business. For the next hour it’s Czech rap, starting with Numb by Linkin Park. Brought in by Vojta.” Then the songs play back to back. Someone who walked in during the last set gets a welcome.
+
+- **Genres** come from Deezer and MusicBrainz, both free and keyless. Deezer’s album genre plus the artist’s country decide the shelf: rap from Czechia or Slovakia is Czech rap, Dance and Electro are EDM, and so on. The result is cached in `data/fm-genres.json`, which deploys leave in place. Blocks start once 30 songs have a genre, or 60% of the kitchen. Until then the station plays themed sets: someone’s picks, radio catches, throwbacks, what’s fresh, or a bit of everything.
+- **The DJ’s words** are a line book, `src/fm/lines/en.json` and `cs.json`. The bot only fills in the time, the genre, the song, and the name. It does not call an AI to write them. A line is not repeated in the same show while unused ones remain. From midnight to 5 AM a new block gets a quieter line.
+- **New finds** are songs the kitchen has not played. The station asks Deezer for artists related to the ones in the block, takes one of their top tracks, and plays it from YouTube only when the upload is that song and at most 12 minutes. The card says `Czech rap · new find`.
 - **The voice** is a Microsoft Edge read-aloud voice: free, no key. Microsoft changes that service now and then. When it fails, the line still shows on the card and the music carries on.
-- **The card**: Now Playing turns into 🎙️ Kitchen FM with the set’s vibe. The DJ’s line sits under the progress bar, and Up next names the station’s next song.
+- **The card**: Now Playing turns into 🎙️ Kitchen FM with the block’s genre. The DJ’s line sits under the progress bar, and Up next names the station’s next song.
 
 `/play` requests go first, and the set carries on after them. ⏭️ Skip while the DJ talks cuts the talk and starts the song. `/stop` or `/radio stop` ends the show. The next set is planned while the current set’s last song plays, so there is no dead air. A set that waits more than 20 minutes behind requests is planned again, since its line names the time. When the voice channel empties, the show ends after the idle timeout. Kitchen FM needs at least 3 kitchen songs.
 
 | `config.json` → `dj` | Default                          | What it does                                                     |
 | -------------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `language`           | `en`                             | `en` or `cs`.                                                    |
+| `language`           | `en`                             | `en` or `cs`. The line book and the genre names follow it.       |
 | `voice`              | `en-US-AndrewMultilingualNeural` | Any Edge voice. `cs-CZ-VlastaNeural` speaks Czech.               |
-| `model`              | `claude-opus-5-5`                | The Claude model. `claude-haiku-5-5` costs about a 40th as much. |
+| `model`              | `claude-opus-5-5`                | Unused once genres are known. See the optional key below.        |
 | `discover`           | `2`                              | New finds per set, 0 to 3. `0` keeps to the kitchen’s own songs. |
-
-Claude is asked once per set, not once per song. A set costs roughly 2 cents on Opus 5.5, so a three-hour evening comes to about 30 cents; on Haiku 5.5 it is under a cent. These are estimates from the prompt size. The bot logs each set’s token count at `LOG_LEVEL=debug`.
+| `blockMinutes`       | `60`                             | How long one genre stays on, from 20 to 180.                     |
 
 ### 🎧 Kitchen Quiz
 
@@ -291,7 +293,7 @@ Create a key at [platform.claude.com](https://platform.claude.com) and set:
 ANTHROPIC_API_KEY=...
 ```
 
-Or save the key alone in `secrets/anthropic-api-key.txt`. `/update-dzbanek` ships it the same way as the cookies, so the server's `.env` stays untouched. The env var wins when both are set. Without a key, Kitchen FM still plays: the station picks its own sets, and the DJ reads short lines of its own.
+Or save the key alone in `secrets/anthropic-api-key.txt`. `/update-dzbanek` ships it the same way as the cookies, so the server's `.env` stays untouched. The env var wins when both are set. Kitchen FM does not need it. The free DJ, the line book, and the genre blocks run with no key. A key is used only while the genre cache is still too thin to start blocks, and only to plan those early sets.
 
 ---
 
@@ -331,7 +333,8 @@ Everyday settings live in `src/config/config.json`. The one secret is `DISCORD_T
     "language": "en",
     "voice": "en-US-AndrewMultilingualNeural",
     "model": "claude-opus-5-5",
-    "discover": 2
+    "discover": 2,
+    "blockMinutes": 60
   },
   "embedColor": "#5865F2"
 }
@@ -361,7 +364,7 @@ src/
   kitchen/                 Kitchen Board, Radio Night votes, catches, presence
   music/                   Voice queue, Now Playing, YouTube + Spotify
   radio/                   Icecast session, station catalog, now-playing poll
-  fm/                      Kitchen FM: sets, the DJ's plans and lines (Claude) and voice (Edge)
+  fm/                      Kitchen FM: genre blocks, the line book, Deezer, MusicBrainz, voice (Edge)
   db/                      Prisma client + one-shot JSON → SQLite migrate
   deals/
     seen-store.ts          SQLite seen IDs (Prisma DedupEntry)

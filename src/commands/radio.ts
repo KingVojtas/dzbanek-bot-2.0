@@ -256,8 +256,8 @@ async function playKitchenFm(
         buildReplyEmbed(
           'success',
           `🎙️ **Kitchen FM** is on air in <#${voiceChannel.id}>: ${songs} kitchen songs` +
-            (services.fm.findsNew ? ' and a few new finds' : '') +
-            ', in sets with a DJ between them.\n' +
+            (services.fm.findsNew ? ', plus a few new finds' : '') +
+            '. About an hour of one genre, then the next, with a DJ between the sets.\n' +
             '-# `/play` requests go first. ⏭️ Skip cuts the DJ short. `/radio stop` ends the show.',
         ),
       ],

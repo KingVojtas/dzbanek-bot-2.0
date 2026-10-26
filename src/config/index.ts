@@ -34,10 +34,12 @@ export interface Config {
     language: 'en' | 'cs';
     /** A Microsoft Edge read-aloud voice, e.g. en-US-AndrewMultilingualNeural. */
     voice: string;
-    /** The Claude model that plans the sets and writes the lines. */
+    /** The Claude model that plans a set only while genres are still unknown. */
     model: string;
-    /** Songs the kitchen never played that Claude may add to a set, 0 to 3. */
+    /** New finds per set, from related artists, 0 to 3. */
     discover: number;
+    /** Minutes one genre stays on, 20 to 180. */
+    blockMinutes: number;
   };
   embedColor: number;
 }
@@ -130,6 +132,10 @@ function loadConfig(): Config {
         typeof dj.discover === 'number' && Number.isFinite(dj.discover)
           ? Math.min(3, Math.max(0, Math.round(dj.discover)))
           : 2,
+      blockMinutes:
+        typeof dj.blockMinutes === 'number' && Number.isFinite(dj.blockMinutes)
+          ? Math.min(180, Math.max(20, Math.round(dj.blockMinutes)))
+          : 60,
     },
     embedColor: parseColor(raw.embedColor),
   };
