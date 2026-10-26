@@ -11,6 +11,7 @@ import type { Logger } from './logger';
 import type { GuildSettingsStore } from '../deals/guild-settings';
 import type { WishlistRadar } from '../deals/steam/WishlistRadar';
 import type { SteamLinkStore } from '../deals/steam/steam-links';
+import type { KitchenFm } from '../fm/KitchenFm';
 import type { KitchenBoard } from '../kitchen/KitchenBoard';
 import type { MusicManager } from '../music/MusicManager';
 import type { QuizManager } from '../quiz/QuizManager';
@@ -27,6 +28,7 @@ export interface Services {
   steamLinks: SteamLinkStore;
   wishlistRadar: WishlistRadar;
   quiz: QuizManager;
+  fm: KitchenFm;
 }
 
 /** Loop modes for music queue. */
@@ -60,6 +62,33 @@ export interface Track {
    * (e.g. Spotify open.spotify.com link while audio is pulled from YouTube).
    */
   sourceUrl?: string;
+  /**
+   * Picked by Kitchen FM, not asked for. `requestedById` is who brought the song
+   * in, and the played-songs list leaves it out so its date and story stay true.
+   */
+  stationPick?: boolean;
+}
+
+/** What the DJ says before a song: the words, and the clip when the voice worked. */
+export interface StationIntro {
+  text: string;
+  /** WebM/Opus. Null plays no clip; the words still show on the card. */
+  audio: Buffer | null;
+}
+
+/**
+ * A station on the music player (Kitchen FM): it picks a song whenever the
+ * queue runs dry, and introduces each song before it plays.
+ */
+export interface PlayerStation {
+  /** The song after the queue, picked ahead of time. Null ends the show. */
+  upNext(): Promise<Track | null>;
+  /** The player is about to play `track`, a request or the station's pick. */
+  starting(track: Track): void;
+  /** The intro for `track` after `previous`. Asked early to prepare it, then again to play it. */
+  intro(track: Track, previous: Track | null): Promise<StationIntro | null>;
+  /** The player left voice, or the station was switched off. */
+  end(): void;
 }
 
 /**

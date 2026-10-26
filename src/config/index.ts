@@ -29,8 +29,19 @@ export interface Config {
   wishlist: { channelIds: string[] };
   welcome: { channelId: string | null };
   goodbye: { channelId: string | null };
+  /** Kitchen FM's DJ. */
+  dj: {
+    language: 'en' | 'cs';
+    /** A Microsoft Edge read-aloud voice, e.g. en-US-AndrewMultilingualNeural. */
+    voice: string;
+    /** The Claude model that writes the lines. */
+    model: string;
+  };
   embedColor: number;
 }
+
+/** The DJ's voice when config.json names none. */
+const DJ_VOICES = { en: 'en-US-AndrewMultilingualNeural', cs: 'cs-CZ-VlastaNeural' } as const;
 
 type Json = Record<string, unknown>;
 
@@ -78,6 +89,8 @@ function loadConfig(): Config {
   const wishlist = (raw.wishlist ?? {}) as Json;
   const welcome = (raw.welcome ?? {}) as Json;
   const goodbye = (raw.goodbye ?? {}) as Json;
+  const dj = (raw.dj ?? {}) as Json;
+  const djLanguage = dj.language === 'cs' ? 'cs' : 'en';
 
   return {
     discord: {
@@ -107,6 +120,11 @@ function loadConfig(): Config {
     },
     welcome: { channelId: optionalString(welcome.channelId) },
     goodbye: { channelId: optionalString(goodbye.channelId) },
+    dj: {
+      language: djLanguage,
+      voice: optionalString(dj.voice) ?? DJ_VOICES[djLanguage],
+      model: optionalString(dj.model) ?? 'claude-opus-5-5',
+    },
     embedColor: parseColor(raw.embedColor),
   };
 }

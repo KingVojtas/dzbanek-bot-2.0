@@ -765,6 +765,25 @@ checkV2('steam-empty', () => buildSteamDealsDisplay([], new Map()), [
     ['⏸️ Paused · YouTube', '"name":"Length"', 'Nothing yet.', 'Nothing up next', 'music:resume'],
   );
 
+  checkEmbedCard(
+    'now-playing-kitchen-fm',
+    () =>
+      buildNowPlayingDisplay({
+        track: { ...track('Now'), stationPick: true },
+        queueLength: 0,
+        paused: false,
+        loopMode: 'off',
+        dj: { line: 'That was Pohoda. Here’s **Numb** by Linkin Park, brought in by Vojta.' },
+      }),
+    [
+      '🎙️ Kitchen FM · YouTube',
+      '"name":"Brought in by"',
+      '> 🎙️ *That was Pohoda. Here’s Numb by Linkin Park, brought in by Vojta.*',
+      'Kitchen FM picks one.',
+      'Kitchen FM on air',
+    ],
+  );
+
   const fresh = JSON.stringify(
     buildNowPlayingDisplay({
       track: nowArt,

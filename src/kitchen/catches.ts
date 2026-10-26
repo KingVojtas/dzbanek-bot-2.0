@@ -81,6 +81,7 @@ export class RadioCatchStore {
       artistKey: string;
       titleKey: string;
       userId: string;
+      stationId: string;
       caughtAt: Date;
     }>
   > {
@@ -92,6 +93,7 @@ export class RadioCatchStore {
         artistKey: true,
         titleKey: true,
         userId: true,
+        stationId: true,
         caughtAt: true,
       },
     });

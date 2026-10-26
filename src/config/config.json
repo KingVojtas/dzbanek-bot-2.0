@@ -28,5 +28,10 @@
   "goodbye": {
     "channelId": ""
   },
+  "dj": {
+    "language": "en",
+    "voice": "en-US-AndrewMultilingualNeural",
+    "model": "claude-opus-5-5"
+  },
   "embedColor": "#5865F2"
 }

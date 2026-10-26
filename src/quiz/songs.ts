@@ -94,7 +94,7 @@ export function songFromCatch(row: { artist: string; title: string; userId: stri
 }
 
 /** First of each song wins; a title nobody could read is dropped. */
-export function dedupeSongs(songs: QuizSong[]): QuizSong[] {
+export function dedupeSongs<T extends QuizSong>(songs: T[]): T[] {
   const seen = new Set<string>();
   const labels = new Set<string>();
   return songs.filter((song) => {

@@ -11,6 +11,7 @@ export interface PlayedTrackRow {
   thumbnail: string | null;
   durationSec: number;
   requestedById: string | null;
+  playedAt: Date;
 }
 
 /** Every track that started playing, per server. A replay only bumps the date. */
@@ -51,6 +52,7 @@ export class PlayedTrackStore {
         thumbnail: true,
         durationSec: true,
         requestedById: true,
+        playedAt: true,
       },
     });
   }

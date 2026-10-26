@@ -18,6 +18,7 @@ import { SteamDealsService } from './deals/steam/SteamDealsService';
 import { WishlistRadar } from './deals/steam/WishlistRadar';
 import { SteamLinkStore } from './deals/steam/steam-links';
 import { registerEvents } from './events';
+import { KitchenFm } from './fm/KitchenFm';
 import { KitchenBoard } from './kitchen/KitchenBoard';
 import { KITCHEN_CHART_CRON } from './kitchen/chart';
 import { RADIO_NIGHT_CRON } from './kitchen/display';
@@ -57,15 +58,12 @@ async function main(): Promise<void> {
   const kitchen = new KitchenBoard(client, music, radio, guildSettings, config, logger);
   const presence = new LorePresence(client, logger, config.timezone);
   const played = new PlayedTrackStore();
-  const quiz = new QuizManager(
-    music,
-    radio,
-    played,
-    new RadioCatchStore(),
-    new QuizScoreStore(),
-    logger,
-  );
+  const catches = new RadioCatchStore();
+  const quiz = new QuizManager(music, radio, played, catches, new QuizScoreStore(), logger);
+  const fm = new KitchenFm(music, played, catches, config, logger);
   music.setOnTrackStart((guildId, track) => {
+    // Kitchen FM's own picks are already kitchen songs; replaying one is not a new /play.
+    if (track.stationPick) return;
     void played.record(guildId, track).catch((error) => {
       logger.debug('Failed to remember a played track:', error);
     });
@@ -104,6 +102,7 @@ async function main(): Promise<void> {
     steamLinks,
     wishlistRadar,
     quiz,
+    fm,
   };
 
   const steamService = new SteamDealsService(client, seen, config, logger, guildSettings);
@@ -217,6 +216,7 @@ async function syncAboutMe(client: Client, logger: Logger): Promise<void> {
     logger.warn('Could not update About Me:', error);
   }
 }
+
 /** Whoever owns the bot in the Developer Portal: the user, or a team's owner. */
 async function ownerUser(client: Client): Promise<User | null> {
   const owner = (await client.application?.fetch())?.owner;
@@ -236,7 +236,6 @@ async function dmOwner(client: Client, text: string, logger: Logger): Promise<vo
     logger.warn('Could not DM the bot owner:', error);
   }
 }
-
 
 async function resumeRadios(
   client: Client,

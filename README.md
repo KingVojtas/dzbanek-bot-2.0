@@ -1,6 +1,6 @@
 # 🍪 Dzbanek-bot 2.0
 
-A TypeScript Discord bot (discord.js v14) for the kitchen. It plays YouTube and Spotify in voice, streams live radio from Prague, London, and California, posts Steam deals and Epic free games, and keeps a cookie warm for anyone who walks in.
+A TypeScript Discord bot (discord.js v14) for the kitchen. It plays YouTube and Spotify in voice, streams live radio from Prague, London, and California, runs the kitchen’s own station with a DJ who knows who brought each song, posts Steam deals and Epic free games, and keeps a cookie warm for anyone who walks in.
 
 Music and radio share one voice slot per server. Starting one takes the speaker from the other.
 
@@ -63,12 +63,12 @@ Now-playing sources stay off the FFmpeg voice stream:
 
 Beat often sends only a station tag over Icecast. During shows such as **Hard & Heavy**, the site publishes the program name. That is what the card shows. 🍪 Catch will smile and refuse it: a show is not a song.
 
-| Command                 | What it does                                             |
-| ----------------------- | -------------------------------------------------------- |
-| `/radio play <station>` | Join your channel and start one of the seven stations.   |
-| `/radio stop`           | Stop the stream, leave voice, and delete the radio card. |
-| `/radio night`          | Schedule Friday 20:00 Radio Night in a voice channel.    |
-| `/radio night-off`      | Cancel scheduled Radio Night.                            |
+| Command                 | What it does                                                          |
+| ----------------------- | --------------------------------------------------------------------- |
+| `/radio play <station>` | Join your channel and start one of the seven stations, or Kitchen FM. |
+| `/radio stop`           | Stop the stream, leave voice, and delete the radio card.              |
+| `/radio night`          | Schedule Friday 20:00 Radio Night in a voice channel.                 |
+| `/radio night-off`      | Cancel scheduled Radio Night.                                         |
 
 The card has **🍪 Catch**, **⏹️ Stop**, and **🌐 Website**. Catch is greyed out while nothing is on air. Stop wants you in the bot’s voice channel. Catch saves the artist and title for you. The reply grows a **Play** button, which finds that song on YouTube and queues it the same way `/play` does. The Kitchen Board keeps the server’s latest catch, and only the person who saved it can press Play there.
 
@@ -91,6 +91,24 @@ On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for t
 ### 🌙 Radio Night
 
 `/radio night` (Manage Server) picks a voice channel and a fallback station. On Friday from **12:00 to 20:00 Europe/Prague** the Kitchen Board puts out a vote button for each station, five to a row. One vote per person, and you can change your mind. At **20:00** the winner starts in that channel. A tie falls through the scheduled station, then the last station that played, then Beat. `/radio night-off` takes it off the calendar.
+
+### 🎙️ Kitchen FM
+
+The kitchen’s own station. `/radio play station:Kitchen FM` joins your voice channel and plays the kitchen’s songs: every track the server `/play`ed and every 🍪 catch, picked at random, with recent ones left out. Between songs a DJ talks, as on real radio. It names the next song and who brought it in, sometimes looks back at the last one, greets whoever just walked in, and knows what time it is in Prague.
+
+- **The words** come from Claude (`claude-opus-5-5` at low effort). It gets the song, who brought it and when, who is listening, and the time. Nothing else. Without an API key, the DJ reads its own short lines instead.
+- **The voice** is a Microsoft Edge read-aloud voice: free, no key. Microsoft changes that service now and then. When it fails, the line still shows on the card and the music carries on.
+- **The card**: Now Playing turns into 🎙️ Kitchen FM, with the DJ’s line under the progress bar.
+
+`/play` requests go first, and the DJ introduces them too. ⏭️ Skip while the DJ talks cuts the talk and starts the song. `/stop` or `/radio stop` ends the show. The next line is written while the current song plays, so there is no dead air. When the voice channel empties, the show ends after the idle timeout. Kitchen FM needs at least 3 kitchen songs.
+
+| `config.json` → `dj` | Default                          | What it does                                                     |
+| -------------------- | -------------------------------- | ---------------------------------------------------------------- |
+| `language`           | `en`                             | `en` or `cs`.                                                    |
+| `voice`              | `en-US-AndrewMultilingualNeural` | Any Edge voice. `cs-CZ-VlastaNeural` speaks Czech.               |
+| `model`              | `claude-opus-5-5`                | The Claude model. `claude-haiku-5-5` costs about a 40th as much. |
+
+A line costs roughly a cent on Opus 5.5, so a three-hour evening is somewhere around 30–50 cents; on Haiku 5.5 it is a few cents. These are estimates from the prompt size. The bot logs each line’s token count at `LOG_LEVEL=debug`.
 
 ### 🎧 Kitchen Quiz
 
@@ -263,6 +281,16 @@ After every boot and after the 04:15 yt-dlp update, the bot checks one short You
 
 While YouTube blocks a song, the bot looks for the same song on SoundCloud and plays it from there. A match needs the song name in its title and about the same length. Previews and remixes don't count.
 
+### 🎙️ Optional Anthropic API key (Kitchen FM’s DJ)
+
+Create a key at [platform.claude.com](https://platform.claude.com) and set:
+
+```
+ANTHROPIC_API_KEY=...
+```
+
+Or save the key alone in `secrets/anthropic-api-key.txt`. `/update-dzbanek` ships it the same way as the cookies, so the server's `.env` stays untouched. The env var wins when both are set. Without a key, Kitchen FM still plays, and the DJ reads short lines of its own.
+
 ---
 
 ## ⚙️ Configuration
@@ -297,6 +325,11 @@ Everyday settings live in `src/config/config.json`. The one secret is `DISCORD_T
   "goodbye": {
     "channelId": ""
   },
+  "dj": {
+    "language": "en",
+    "voice": "en-US-AndrewMultilingualNeural",
+    "model": "claude-opus-5-5"
+  },
   "embedColor": "#5865F2"
 }
 ```
@@ -325,6 +358,7 @@ src/
   kitchen/                 Kitchen Board, Radio Night votes, catches, presence
   music/                   Voice queue, Now Playing, YouTube + Spotify
   radio/                   Icecast session, station catalog, now-playing poll
+  fm/                      Kitchen FM: song picks, the DJ's lines (Claude) and voice (Edge)
   db/                      Prisma client + one-shot JSON → SQLite migrate
   deals/
     seen-store.ts          SQLite seen IDs (Prisma DedupEntry)

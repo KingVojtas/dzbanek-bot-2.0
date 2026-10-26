@@ -14,6 +14,9 @@ import { RADIO_NIGHT_LABEL } from '../kitchen/display';
 import { nextRadioNight } from '../kitchen/time';
 import { STATION_LIST, getStation } from '../radio/station';
 
+/** The /radio play choice for the kitchen's own station. It runs on the music player. */
+const KITCHEN_FM_CHOICE = 'kitchen-fm';
+
 export const radio: Command = {
   data: new SlashCommandBuilder()
     .setName('radio')
@@ -32,6 +35,7 @@ export const radio: Command = {
                 name: station.choiceName,
                 value: station.id,
               })),
+              { name: 'Kitchen FM: your songs, with a DJ', value: KITCHEN_FM_CHOICE },
             ),
         ),
     )
@@ -101,7 +105,13 @@ async function playRadio(
     return;
   }
 
-  const station = getStation(interaction.options.getString('station', true));
+  const choice = interaction.options.getString('station', true);
+  if (choice === KITCHEN_FM_CHOICE) {
+    await playKitchenFm(interaction, services);
+    return;
+  }
+
+  const station = getStation(choice);
   if (!station) {
     await replyEphemeral(interaction, '❌ Unknown radio station.');
     return;
@@ -190,6 +200,10 @@ async function stopRadio(
   }
 
   if (!services.radio.isPlaying(guildId)) {
+    if (services.fm.isOn(guildId)) {
+      await stopKitchenFm(interaction, services, guildId);
+      return;
+    }
     await replyEphemeral(interaction, '🔇 Radio is not playing right now.');
     return;
   }
@@ -209,6 +223,73 @@ async function stopRadio(
   services.kitchen.refresh(guildId);
   await interaction.reply({
     embeds: [buildReplyEmbed('success', `⏹️ Stopped ${name} and left the voice channel.`)],
+  });
+}
+
+/** Kitchen FM: the kitchen's songs on the music player, with a DJ between them. */
+async function playKitchenFm(
+  interaction: ChatInputCommandInteraction,
+  services: Services,
+): Promise<void> {
+  const voiceChannel = memberVoiceChannel(interaction);
+  if (!voiceChannel) {
+    await interaction.reply({
+      embeds: [buildReplyEmbed('warn', '🔇 You need to be in a voice channel for Kitchen FM.')],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const permissionError = missingVoicePermissions(voiceChannel);
+  if (permissionError) {
+    await replyEphemeral(interaction, permissionError);
+    return;
+  }
+
+  await interaction.deferReply();
+  services.radio.stop(voiceChannel.guild.id);
+  try {
+    const text = interaction.channel?.isSendable() ? interaction.channel : null;
+    const songs = await services.fm.start(voiceChannel, text);
+    await interaction.editReply({
+      embeds: [
+        buildReplyEmbed(
+          'success',
+          `🎙️ **Kitchen FM** is on air in <#${voiceChannel.id}>: ${songs} kitchen songs, ` +
+            'and a DJ who knows who brought each one.\n' +
+            '-# `/play` requests go first. ⏭️ Skip cuts the DJ short. `/radio stop` ends the show.',
+        ),
+      ],
+    });
+    services.kitchen.refresh(voiceChannel.guild.id);
+  } catch (error: unknown) {
+    services.logger.error('Failed to start Kitchen FM:', error);
+    const errMsg = error instanceof Error ? error.message : String(error || '');
+    await interaction.editReply({
+      embeds: [buildReplyEmbed('error', `❌ Kitchen FM could not start.\n${errMsg.slice(0, 400)}`)],
+    });
+  }
+}
+
+async function stopKitchenFm(
+  interaction: ChatInputCommandInteraction,
+  services: Services,
+  guildId: string,
+): Promise<void> {
+  const channel = memberVoiceChannel(interaction);
+  const botChannelId = services.music.get(guildId)?.connection.joinConfig.channelId;
+  if (!channel || channel.id !== botChannelId) {
+    await replyEphemeral(
+      interaction,
+      '🔇 Join the voice channel the bot is in to use this command.',
+    );
+    return;
+  }
+
+  services.fm.stop(guildId);
+  services.kitchen.refresh(guildId);
+  await interaction.reply({
+    embeds: [buildReplyEmbed('success', '⏹️ Kitchen FM is off the air. See you next show.')],
   });
 }
 

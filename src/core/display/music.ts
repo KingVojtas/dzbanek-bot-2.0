@@ -85,6 +85,8 @@ export interface NowPlayingDisplayOptions {
   hasHistory?: boolean;
   /** The track after this one, named on the card. */
   next?: Track | null;
+  /** Kitchen FM is on air, with what the DJ said before this song. */
+  dj?: { line: string | null };
 }
 
 /** Now Playing card, as on the website: who asked, the clock, the transport row. */
@@ -96,11 +98,13 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): EmbedCar
   const volumePct = Math.round(volume * 100);
 
   const artist = plainBlurb(track.uploader, 80);
+  const djLine = plainBlurb(opts.dj?.line ?? undefined, 300);
   const description = [
     artist ? `by **${artist}**` : '',
     `\`${formatClock(positionSec)}\` ${progressBar(positionSec, durationSec)} \`${
       durationSec > 0 ? formatClock(durationSec) : 'Live'
     }\``,
+    djLine ? `> 🎙️ *${djLine}*` : '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -123,18 +127,26 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): EmbedCar
           ]
             .filter(Boolean)
             .join(' · ')
-        : 'Nothing yet. `/play` adds more.';
+        : opts.dj
+          ? '🎙️ Kitchen FM picks one. `/play` to request.'
+          : 'Nothing yet. `/play` adds more.';
 
-  const footer = [upNextLine(queueLength), LOOP_FOOTER[loopMode]].filter(Boolean).join(' · ');
+  const footer = [
+    opts.dj && queueLength === 0 ? 'Kitchen FM on air' : upNextLine(queueLength),
+    LOOP_FOOTER[loopMode],
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
+  const status = paused ? '⏸️ Paused' : opts.dj ? '🎙️ Kitchen FM' : '🔊 Now Playing';
   const embed = buildSiteEmbed({
     color: paused ? PAUSED_COLOR : SITE_CLAY,
-    author: `${paused ? '⏸️ Paused' : '🔊 Now Playing'} · ${musicSourceLabel(track.source)}`,
+    author: `${status} · ${musicSourceLabel(track.source)}`,
     title: track.title,
     url: track.sourceUrl || track.url,
     description,
     fields: [
-      ['Requested by', requesterOf(track)],
+      [track.stationPick ? 'Brought in by' : 'Requested by', requesterOf(track)],
       timing,
       ['Volume', `${volumePct < 100 ? '🔉' : '🔊'} ${volumePct}%`],
       ['Up next', upNext, true],

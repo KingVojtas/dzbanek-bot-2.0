@@ -11,10 +11,13 @@ export const skip: Command = {
     if (!player) return;
 
     const skipped = player.current;
+    const talking = player.talking;
     const next = player.skip();
-    const line = next
-      ? `⏭️ Skipped **${skipped?.title ?? 'the track'}** · up next **${next.title}**.`
-      : `⏭️ Skipped **${skipped?.title ?? 'the track'}**. The queue is empty now.`;
+    const line = talking
+      ? `⏭️ Skipped the DJ · here’s **${skipped?.title ?? 'the song'}**.`
+      : next
+        ? `⏭️ Skipped **${skipped?.title ?? 'the track'}** · up next **${next.title}**.`
+        : `⏭️ Skipped **${skipped?.title ?? 'the track'}**. The queue is empty now.`;
     await interaction.reply({ embeds: [buildReplyEmbed('success', line.slice(0, 4000))] });
   },
 };

@@ -7,14 +7,14 @@ import {
   entersState,
 } from '@discordjs/voice';
 import type { AudioPlayer, AudioResource, VoiceConnection } from '@discordjs/voice';
-import type { Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import type { Message, SendableChannels } from 'discord.js';
 import { bufferStream } from './buffer-stream';
 import { isUnknownMessage } from '../core/discord-errors';
 import { buildNowPlayingDisplay } from '../core/display/music';
 import { upcomingQueue, type EmbedCard } from '../core/embeds';
 import type { Logger } from '../core/logger';
-import type { LoopMode, Track, TrackSource } from '../core/types';
+import type { LoopMode, PlayerStation, StationIntro, Track, TrackSource } from '../core/types';
 import { afterTrackEnds, pushHistory, takeNext } from './queue-rules';
 
 const VOLUME_MIN = 0.25;
@@ -22,6 +22,12 @@ const VOLUME_MAX = 1.5;
 const VOLUME_STEP = 0.25;
 /** Discord allows about 5 edits per 5 s per channel; leave room for buttons and the board. */
 const PROGRESS_TICK_MS = 5_000;
+/** The next intro is written during the song before; an unprepared one gets this long. */
+const INTRO_WAIT_MS = 12_000;
+/** A DJ clip that runs longer than this (or stays paused) is cut. */
+const INTRO_MAX_MS = 60_000;
+/** Station picks that fail in a row before the show stops trying (YouTube is down). */
+const STATION_MISSES = 3;
 
 /**
  * Owns the voice connection, audio player, and queue for a single guild.
@@ -62,6 +68,13 @@ export class GuildPlayer {
   /** Set by previous(): the finished track is already back in the queue. */
   private goingBack = false;
   private volume = 1;
+  /** Kitchen FM, while it is on air. */
+  private station: PlayerStation | null = null;
+  /** What the DJ said before the current track. */
+  private djLine: string | null = null;
+  private introPlaying = false;
+  /** The track that last started: the DJ's "that was…", and no intro for a repeat of it. */
+  private lastStarted: Track | null = null;
 
   constructor(
     readonly connection: VoiceConnection,
@@ -124,7 +137,31 @@ export class GuildPlayer {
       positionSec,
       volume: this.volume,
       hasHistory: this.history.length > 0,
+      dj: this.station ? { line: this.djLine } : undefined,
     });
+  }
+
+  /**
+   * Put a station on air: it fills the gaps when the queue runs dry and talks
+   * between songs. Requests in the queue still go first. Null takes it off.
+   */
+  setStation(station: PlayerStation | null): void {
+    if (this.station === station || this.destroyed) return;
+    this.station?.end();
+    this.station = station;
+    if (!station) return;
+    this.clearIdleTimer();
+    if (this.current) this.warmStation(this.current);
+    else void this.processQueue();
+  }
+
+  get onAir(): boolean {
+    return this.station !== null;
+  }
+
+  /** The DJ is speaking; Skip cuts the talk and starts the song. */
+  get talking(): boolean {
+    return this.introPlaying;
   }
 
   /** Move the Now Playing card to the bottom of `channel` (deletes the old one). */
@@ -247,7 +284,10 @@ export class GuildPlayer {
     this.queue.push(...tracks);
     this.clearIdleTimer();
     if (!this.current) void this.processQueue();
-    else if (wasEmpty) this.prefetchNext();
+    else if (wasEmpty) {
+      this.prefetchNext();
+      this.warmStation(this.current);
+    }
   }
 
   enqueueNext(tracks: Track[]): void {
@@ -258,6 +298,7 @@ export class GuildPlayer {
     else {
       this.invalidatePrefetch();
       this.prefetchNext();
+      this.warmStation(this.current);
     }
   }
 
@@ -274,6 +315,10 @@ export class GuildPlayer {
   }
 
   skip(): Track | null {
+    if (this.introPlaying) {
+      this.player.stop(true);
+      return this.current;
+    }
     const now = Date.now();
     const next = this.queue.find((track) => track !== this.current) ?? this.queue[0] ?? null;
     if (now - this.lastSkipAt < 1000) {
@@ -437,16 +482,28 @@ export class GuildPlayer {
     if (this.queuePumpRunning) return;
     this.queuePumpRunning = true;
 
+    let stationMisses = 0;
     try {
       while (!this.destroyed) {
-        const next = takeNext(this.queue, this.loopMode, this.queueSnapshot);
+        let next = takeNext(this.queue, this.loopMode, this.queueSnapshot);
+        let picked = false;
+        const station = this.station;
+        if (!next && station && stationMisses < STATION_MISSES) {
+          const pick = await station.upNext();
+          // Taken off air meanwhile, or a request arrived while the station picked: look again.
+          if (this.station !== station || this.queue.length > 0) continue;
+          next = pick ?? undefined;
+          picked = pick !== null;
+        }
         if (!next) {
           this.startIdleTimer();
           return;
         }
 
+        station?.starting(next);
         const playing = await this.playTrack(next);
         if (playing) return;
+        if (picked) stationMisses += 1;
       }
     } finally {
       this.queuePumpRunning = false;
@@ -456,12 +513,30 @@ export class GuildPlayer {
   private async playTrack(track: Track): Promise<boolean> {
     if (this.destroyed) return false;
     const gen = ++this.playGeneration;
+    const previous = this.lastStarted;
     this.lastError = null;
     this.current = track;
+    this.djLine = null;
 
     try {
       this.logger.info(`Starting stream for: ${track.title} (${track.url})`);
-      const stream = await this.openStream(track, gen);
+      // The song loads while the DJ talks.
+      const opening = this.openStream(track, gen);
+      opening.catch(() => {});
+      const intro = await this.stationIntro(track, previous);
+      if (intro) {
+        this.djLine = intro.text;
+        if (!this.destroyed) void this.publishFreshNowPlaying(track).catch(() => {});
+        if (intro.audio) await this.playIntro(intro.audio, gen);
+      }
+      if (this.destroyed || gen !== this.playGeneration) {
+        void opening.then(
+          (stream) => stream?.destroy(),
+          () => {},
+        );
+        return false;
+      }
+      const stream = await opening;
       if (!stream) return false;
 
       const probed = await demuxProbe(stream);
@@ -476,12 +551,17 @@ export class GuildPlayer {
       this.currentResource = resource;
       this.player.play(resource);
       this.logger.info(`Audio player started: ${track.title} (${this.queue.length} still queued)`);
+      this.lastStarted = track;
       this.onTrackStart?.(track);
 
-      void this.publishFreshNowPlaying(track).catch((err: unknown) =>
-        this.logger.debug('publishFreshNowPlaying failed:', err),
-      );
+      // A DJ intro already brought this song's card down.
+      if (!intro) {
+        void this.publishFreshNowPlaying(track).catch((err: unknown) =>
+          this.logger.debug('publishFreshNowPlaying failed:', err),
+        );
+      }
       this.prefetchNext();
+      this.warmStation(track);
       return true;
     } catch (error) {
       const lastMsg = error instanceof Error ? error.message : String(error);
@@ -492,6 +572,57 @@ export class GuildPlayer {
       this.logger.warn(`Skipping unplayable track "${track.title}" — continuing queue`);
       return false;
     }
+  }
+
+  /** The station's intro for `track`, if it is ready in time. A repeat gets none. */
+  private async stationIntro(track: Track, previous: Track | null): Promise<StationIntro | null> {
+    const station = this.station;
+    if (!station || track === previous) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), INTRO_WAIT_MS);
+    });
+    try {
+      return await Promise.race([station.intro(track, previous), late]);
+    } catch (error) {
+      this.logger.debug('Station intro failed:', error);
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Play the DJ's clip and wait for it to end. Skip and Stop cut it short. */
+  private async playIntro(audio: Buffer, gen: number): Promise<void> {
+    try {
+      const probed = await demuxProbe(Readable.from([audio], { objectMode: false }));
+      if (this.destroyed || gen !== this.playGeneration) return;
+      const resource = createAudioResource(probed.stream, {
+        inputType: probed.type,
+        inlineVolume: true,
+      });
+      resource.volume?.setVolume(this.volume);
+      this.introPlaying = true;
+      this.player.play(resource);
+      await entersState(this.player, AudioPlayerStatus.Idle, INTRO_MAX_MS);
+    } catch (error) {
+      this.logger.debug('The DJ clip did not play through:', error);
+      if (this.introPlaying) this.player.stop(true);
+    } finally {
+      this.introPlaying = false;
+    }
+  }
+
+  /** While a song plays, let the station prepare what it will say before the next one. */
+  private warmStation(current: Track): void {
+    const station = this.station;
+    if (!station || this.loopMode !== 'off') return;
+    const queued = this.queue.find((track) => track !== current);
+    void (queued ? Promise.resolve(queued) : station.upNext())
+      .then((upcoming) =>
+        upcoming && this.station === station ? station.intro(upcoming, current) : null,
+      )
+      .catch((error: unknown) => this.logger.debug('Station could not prepare ahead:', error));
   }
 
   private streamUsable(stream: Readable): boolean {
@@ -647,6 +778,8 @@ export class GuildPlayer {
   private destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.station?.end();
+    this.station = null;
     this.clearIdleTimer();
     this.stopProgressTicker();
     this.invalidatePrefetch();
