@@ -4,7 +4,9 @@ import type { PlayerStation, StationIntro, Track } from '../core/types';
 import { zonedParts } from '../kitchen/time';
 import type { CompositeTrackSource } from '../music/sources';
 import { getStation } from '../radio/station';
+import { songFromTrack } from '../quiz/songs';
 import type { FmCatalog } from './catalog';
+import { DedicationQueue, dedicationText, joinIntro, type WaitingDedication } from './dedications';
 import type { GenreId, GenreIndex } from './genres';
 import { artistKey, genreName } from './genres';
 import {
@@ -77,6 +79,12 @@ function splitPlayed(label: string): { artist: string; title: string } {
   return { artist: '', title: label };
 }
 
+/** A pool song is this track: by its link, or by its title when the song has none. */
+function playedMatches(song: FmSong, track: Track): boolean {
+  if (song.url) return song.url === track.url;
+  return song.key === songFromTrack(track, { kind: 'play' }).key;
+}
+
 export interface FmStationDeps {
   guild: Guild;
   /** People (not bots) in the bot's voice channel right now. */
@@ -95,6 +103,8 @@ export interface FmStationDeps {
   genres?: GenreIndex;
   /** Deezer, for new finds inside a genre block. */
   catalog?: FmCatalog;
+  /** New finds a 👎 retired. Read again for every set. */
+  findBlocks?: () => Promise<readonly { artist: string; title: string }[]>;
   /** The DJ's line book. Loaded for `language` when omitted. */
   lines?: LineBook | null;
   /** Clock for the block and for a set going stale. */
@@ -133,9 +143,15 @@ export class FmStation implements PlayerStation {
   private readonly setOf = new WeakMap<Track, FmSet>();
   private readonly about = new WeakMap<Track, OpenerSong>();
   private readonly intros = new WeakMap<FmSet, Promise<StationIntro | null>>();
+  private readonly dedications = new DedicationQueue();
+  /** Handed over in `starting`, so an early `intro` cannot spend it. */
+  private readonly dedicationOf = new WeakMap<Track, WaitingDedication>();
+  private readonly combined = new WeakMap<Track, Promise<StationIntro | null>>();
   private lastTheme: Theme['kind'] | undefined;
   /** Who was listening when the current set started. */
-  private heard = new Set<string>();
+  private wasListening = new Set<string>();
+  /** Requests, and the song already on when the station started. Pushed into `recent` at plan time. */
+  private readonly justPlayed: Track[] = [];
   private ended = false;
   /** The genre block on air: how many sets it should hold, and how many are planned. */
   private block: { genre: GenreId; sets: number; limit: number } | null = null;
@@ -178,14 +194,54 @@ export class FmStation implements PlayerStation {
     return this.pending?.tracks[0] ?? null;
   }
 
+  /**
+   * Read `message` before `track`, or before the next song when `track` is null.
+   * The clip starts now, so playback is not waiting on it later.
+   */
+  dedicate(input: {
+    userId: string;
+    from: string;
+    to: string;
+    message: string;
+    track: Track | null;
+    song: string;
+  }): 'ok' | 'yours' | 'full' {
+    const block = this.dedications.block(input.userId);
+    if (block) return block;
+    const text = dedicationText(this.lineBook?.of('dedication') ?? [], input, this.deps.language);
+    const speech = this.deps.voice.speak(text).catch((error: unknown) => {
+      this.deps.logger.warn('Kitchen FM dedication failed:', error);
+      return null;
+    });
+    this.dedications.add({ ...input, text, speech });
+    return 'ok';
+  }
+
+  /** Dedications still waiting. The show drops them when it ends. */
+  pendingDedications(): number {
+    return this.dedications.length;
+  }
+
+  /** Whether this person can send one now. */
+  dedicationBlock(userId: string): 'ok' | 'yours' | 'full' {
+    return this.dedications.block(userId) ?? 'ok';
+  }
+
+  /** The song on air when the station started. The next set leaves it out. */
+  heard(track: Track): void {
+    this.justPlayed.push(track);
+  }
+
   starting(track: Track): void {
+    this.justPlayed.push(track);
+    this.handDedication(track);
     const set = this.setOf.get(track);
     if (!set) return;
     if (set === this.pending && set.tracks[0] === track) {
       this.pending = null;
       this.current = set;
       this.vibes.push(set.vibe);
-      this.heard = new Set(this.deps.listeners().map((member) => member.id));
+      this.wasListening = new Set(this.deps.listeners().map((member) => member.id));
     }
     // Requests and replays leave the set where it was.
     if (set !== this.current || set.tracks[set.next] !== track) return;
@@ -195,25 +251,24 @@ export class FmStation implements PlayerStation {
 
   intro(track: Track): Promise<StationIntro | null> {
     if (this.ended) return Promise.resolve(null);
-    const set = this.setOf.get(track);
-    // The DJ talks once a set, before its first song.
-    if (!set || set.tracks[0] !== track) return Promise.resolve(null);
-    let pending = this.intros.get(set);
+    const dedication = this.dedicationOf.get(track);
+    const setLine = this.setIntro(track);
+    if (!dedication) return setLine ?? Promise.resolve(null);
+    let pending = this.combined.get(track);
     if (!pending) {
-      pending = this.deps.voice
-        .speak(set.line)
-        .then((pcm) => ({ text: set.line, pcm }))
-        .catch((error: unknown) => {
-          this.deps.logger.warn('Kitchen FM intro failed:', error);
-          return { text: set.line, pcm: null };
-        });
-      this.intros.set(set, pending);
+      pending = this.withDedication(dedication, setLine);
+      this.combined.set(track, pending);
     }
     return pending;
   }
 
-  /** The opener may wait longer. Every later intro uses the player's usual wait. */
+  /**
+   * The opener is synthesized cold, so it may wait longer. A dedication's clip
+   * starts when it is accepted, and the same longer wait covers one that was
+   * only just accepted. Every other intro uses the player's usual wait.
+   */
   introWaitMs(track: Track): number | undefined {
+    if (this.dedicationOf.get(track)) return OPENER_WAIT_MS;
     const set = this.setOf.get(track);
     if (set?.opener && set.tracks[0] === track) return OPENER_WAIT_MS;
     return undefined;
@@ -230,7 +285,43 @@ export class FmStation implements PlayerStation {
   end(): void {
     if (this.ended) return;
     this.ended = true;
+    this.dedications.clear();
     this.onEnd();
+  }
+
+  /** Bind the dedication this song should read. An early `intro` has not called this. */
+  private handDedication(track: Track): void {
+    if (this.ended || this.dedicationOf.has(track)) return;
+    const dedication = this.dedications.take(track);
+    if (dedication) this.dedicationOf.set(track, dedication);
+  }
+
+  /** The set line for the first song of a set, synthesized once. Null for any other song. */
+  private setIntro(track: Track): Promise<StationIntro | null> | null {
+    const set = this.setOf.get(track);
+    if (!set || set.tracks[0] !== track) return null;
+    let pending = this.intros.get(set);
+    if (!pending) {
+      pending = this.deps.voice
+        .speak(set.line)
+        .then((pcm) => ({ text: set.line, pcm }))
+        .catch((error: unknown) => {
+          this.deps.logger.warn('Kitchen FM intro failed:', error);
+          return { text: set.line, pcm: null };
+        });
+      this.intros.set(set, pending);
+    }
+    return pending;
+  }
+
+  /** Dedication first, a short gap, then the set line. The card shows both texts. */
+  private async withDedication(
+    dedication: WaitingDedication,
+    setLine: Promise<StationIntro | null> | null,
+  ): Promise<StationIntro> {
+    const [spoken, set] = await Promise.all([dedication.speech, setLine ?? Promise.resolve(null)]);
+    const text = [dedication.text, set?.text].filter(Boolean).join(' ');
+    return { text, pcm: joinIntro(spoken, set?.pcm ?? null) };
   }
 
   private async peek(): Promise<Track | null> {
@@ -248,6 +339,7 @@ export class FmStation implements PlayerStation {
       return null;
     }
     const pool = (await this.deps.pool()).filter((song) => songFits(song.durationSec));
+    this.noteJustPlayed(pool);
     const clock = zonedParts(this.deps.timezone);
     const number = this.vibes.length + 1;
     const base: SetBase = {
@@ -257,7 +349,7 @@ export class FmStation implements PlayerStation {
       newcomers:
         number > 1
           ? listeners
-              .filter((member) => !this.heard.has(member.id))
+              .filter((member) => !this.wasListening.has(member.id))
               .map((member) => member.displayName)
           : [],
     };
@@ -597,9 +689,11 @@ export class FmStation implements PlayerStation {
     const catalog = this.deps.catalog;
     if (!catalog || allowance <= 0) return [];
     const kitchenArtists = new Set(pool.map((song) => artistKey(song.artist)).filter(Boolean));
+    const extra = (await this.deps.findBlocks?.()) ?? [];
     const blocked = [
       ...pool.map((song) => ({ artist: song.artist, title: song.title })),
       ...this.played.map(splitPlayed),
+      ...extra,
     ];
     // A genre block seeds from that genre. A themed set seeds from the whole kitchen.
     const seeded = genre === null ? pool : pool.filter((song) => index.genreOf(song.key) === genre);
@@ -697,6 +791,9 @@ export class FmStation implements PlayerStation {
       by: song.by ?? '',
       names: joinNames(base.newcomers, language),
       station: 'Kitchen FM',
+      from: '',
+      to: '',
+      message: '',
     };
   }
 
@@ -739,6 +836,24 @@ export class FmStation implements PlayerStation {
       const track = await this.loadSong(song);
       if (track && !tracks.some((other) => other.url === track.url)) tracks.push(track);
     }
+  }
+
+  /**
+   * Songs that started outside a planned set (a request, or whatever was already
+   * playing) go into the repeat gap, so the next set does not open with them.
+   * A station pick is already there: `loadSong` recorded it when the set was built.
+   */
+  private noteJustPlayed(pool: readonly FmSong[]): void {
+    if (this.justPlayed.length === 0) return;
+    const tracks = this.justPlayed.splice(0);
+    const gap = new Set(this.recent.slice(-REPEAT_GAP));
+    for (const track of tracks) {
+      const song = pool.find((item) => playedMatches(item, track));
+      if (!song || gap.has(song.key)) continue;
+      this.recent.push(song.key);
+      gap.add(song.key);
+    }
+    if (this.recent.length > 200) this.recent.splice(0, this.recent.length - 200);
   }
 
   /** A played song plays from its link; a catch is looked up on YouTube first. */

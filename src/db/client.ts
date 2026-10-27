@@ -73,6 +73,23 @@ export async function ensureQuizTables(): Promise<void> {
   );
 }
 
+/** 🔥 and 👎 on Kitchen FM songs. One row per person per song. */
+export async function ensureSongReactionTable(): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    'CREATE TABLE IF NOT EXISTS "SongReaction" (' +
+      '"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, ' +
+      '"guildId" TEXT NOT NULL, "userId" TEXT NOT NULL, "songKey" TEXT NOT NULL, ' +
+      '"url" TEXT NOT NULL, "title" TEXT NOT NULL, "artist" TEXT NOT NULL DEFAULT \'\', ' +
+      '"kind" TEXT NOT NULL, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE UNIQUE INDEX IF NOT EXISTS "SongReaction_guildId_userId_songKey_key" ON "SongReaction"("guildId", "userId", "songKey")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "SongReaction_guildId_songKey_idx" ON "SongReaction"("guildId", "songKey")',
+  );
+}
+
 if (process.env.NODE_ENV !== 'production') {
   global.prisma = prisma;
 }

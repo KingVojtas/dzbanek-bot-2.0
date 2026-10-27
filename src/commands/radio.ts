@@ -1,5 +1,6 @@
 import {
   ChannelType,
+  GuildMember,
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
@@ -8,6 +9,11 @@ import {
 } from 'discord.js';
 import { buildReplyEmbed, buildSiteEmbed } from '../core/embeds';
 import type { Command, Services } from '../core/types';
+import { cleanDedication, dedicationReply, isYouTubePlaylistLink } from '../fm/dedications';
+import { songPhrase } from '../fm/lines';
+import { isSpotifyAlbumUrl, isSpotifyPlaylistUrl } from '../music/sources';
+import { youtubeBotCheckHint } from '../music/ytdlp-cookies';
+import { songFromTrack } from '../quiz/songs';
 import { memberVoiceChannel, replyEphemeral } from './music/_util';
 import { buildRadioPlayingDisplay } from '../radio/embed';
 import { RADIO_NIGHT_LABEL } from '../kitchen/display';
@@ -68,6 +74,27 @@ export const radio: Command = {
     )
     .addSubcommand((sub) =>
       sub.setName('night-off').setDescription('Cancel scheduled Radio Night.'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('dedicate')
+        .setDescription('Send a dedication. The DJ reads it before the next song.')
+        .addStringOption((option) =>
+          option
+            .setName('message')
+            .setDescription('What the DJ reads out')
+            .setRequired(true)
+            .setMaxLength(120),
+        )
+        .addUserOption((option) =>
+          option.setName('to').setDescription('Who it is for').setRequired(false),
+        )
+        .addStringOption((option) =>
+          option
+            .setName('song')
+            .setDescription('A song to play it with: search, or a YouTube or Spotify link')
+            .setRequired(false),
+        ),
     ),
 
   async execute(interaction, services) {
@@ -86,6 +113,10 @@ export const radio: Command = {
     }
     if (sub === 'night-off') {
       await cancelRadioNight(interaction, services);
+      return;
+    }
+    if (sub === 'dedicate') {
+      await dedicateRadio(interaction, services);
     }
   },
 };
@@ -292,6 +323,218 @@ async function stopKitchenFm(
   await interaction.reply({
     embeds: [buildReplyEmbed('success', '⏹️ Kitchen FM is off the air. See you next show.')],
   });
+}
+
+/** A short message the DJ reads before the next song, and maybe a song to play with it. */
+async function dedicateRadio(
+  interaction: ChatInputCommandInteraction,
+  services: Services,
+): Promise<void> {
+  const guild = interaction.guild;
+  const guildId = interaction.guildId;
+  if (!guild || !guildId) {
+    await replyEphemeral(interaction, 'This command can only be used in a server.');
+    return;
+  }
+
+  if (!services.fm.isOn(guildId)) {
+    await interaction.reply({
+      embeds: [
+        buildReplyEmbed(
+          'warn',
+          "Kitchen FM isn't on. Start it with `/radio play station:Kitchen FM`.",
+        ),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const voice = memberVoiceChannel(interaction);
+  const botChannelId = services.music.get(guildId)?.connection.joinConfig.channelId;
+  if (!voice || voice.id !== botChannelId) {
+    await interaction.reply({
+      embeds: [
+        buildReplyEmbed(
+          'warn',
+          'Join the voice channel Kitchen FM is in, then send the dedication.',
+        ),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const raw = interaction.options.getString('message', true);
+  const names = await mentionNames(guild, raw);
+  const message = cleanDedication(raw, names);
+  if (!message) {
+    await interaction.reply({
+      embeds: [
+        buildReplyEmbed(
+          'warn',
+          'That dedication is empty once the links and mentions are cleaned up. Say it in a few words.',
+        ),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const from =
+    interaction.member instanceof GuildMember
+      ? interaction.member.displayName
+      : interaction.user.displayName;
+  const toUser = interaction.options.getUser('to');
+  const toMember = toUser ? await guild.members.fetch(toUser.id).catch(() => null) : null;
+  const to = toMember?.displayName ?? toUser?.displayName ?? '';
+  const query = interaction.options.getString('song')?.trim() ?? '';
+
+  if (
+    query &&
+    (isSpotifyAlbumUrl(query) || isSpotifyPlaylistUrl(query) || isYouTubePlaylistLink(query))
+  ) {
+    await interaction.reply({
+      embeds: [buildReplyEmbed('warn', 'Dedications take one song, not a playlist or an album.')],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const waiting = services.fm.dedicationBlock(guildId, interaction.user.id);
+  if (waiting !== 'ok') {
+    await replyDedication(interaction, waiting, from, to, '');
+    return;
+  }
+
+  if (!query) {
+    const accepted = services.fm.dedicate(guildId, {
+      userId: interaction.user.id,
+      from,
+      to,
+      message,
+      track: null,
+      song: '',
+    });
+    await replyDedication(interaction, accepted, from, to, '');
+    return;
+  }
+
+  await interaction.deferReply();
+  services.music.trackSource.warm(query);
+  let tracks;
+  try {
+    tracks = await services.music.trackSource.resolve(query, from);
+  } catch (error: unknown) {
+    services.logger.error('Failed to resolve a dedication:', error);
+    const errMsg = error instanceof Error ? error.message : String(error || '');
+    const hint = youtubeBotCheckHint(errMsg);
+    await interaction.editReply({
+      embeds: [
+        buildReplyEmbed('error', hint ?? `❌ Could not load that song.\n${errMsg.slice(0, 400)}`),
+      ],
+    });
+    return;
+  }
+
+  const track = tracks.length === 1 ? tracks[0] : null;
+  if (!track) {
+    await interaction.editReply({
+      embeds: [
+        buildReplyEmbed(
+          'warn',
+          tracks.length > 1
+            ? 'Dedications take one song, not a playlist or an album.'
+            : '🔍 No song found for that.',
+        ),
+      ],
+    });
+    return;
+  }
+
+  const player = services.music.get(guildId);
+  if (!player || !services.fm.isOn(guildId)) {
+    await interaction.editReply({
+      embeds: [
+        buildReplyEmbed(
+          'warn',
+          "Kitchen FM isn't on. Start it with `/radio play station:Kitchen FM`.",
+        ),
+      ],
+    });
+    return;
+  }
+  if (player.queue.length >= services.config.music.maxQueueSize) {
+    await interaction.editReply({
+      embeds: [buildReplyEmbed('warn', 'The queue is full. Try again once a song has played.')],
+    });
+    return;
+  }
+
+  track.requestedBy = from;
+  track.requestedById = interaction.user.id;
+  const named = songFromTrack(track, { kind: 'play', userId: interaction.user.id });
+  const song = songPhrase(named.artist, named.title, services.fm.language);
+  const accepted = services.fm.dedicate(guildId, {
+    userId: interaction.user.id,
+    from,
+    to,
+    message,
+    track,
+    song,
+  });
+  if (accepted !== 'ok') {
+    await replyDedication(interaction, accepted, from, to, song);
+    return;
+  }
+  player.enqueueNext([track]);
+  await interaction.editReply({
+    embeds: [buildReplyEmbed('success', dedicationReply(from, to, song))],
+  });
+}
+
+async function replyDedication(
+  interaction: ChatInputCommandInteraction,
+  accepted: 'off' | 'ok' | 'yours' | 'full',
+  from: string,
+  to: string,
+  song: string,
+): Promise<void> {
+  if (accepted === 'ok') {
+    await interaction.reply({
+      embeds: [buildReplyEmbed('success', dedicationReply(from, to, song))],
+    });
+    return;
+  }
+  const text =
+    accepted === 'yours'
+      ? 'Yours is still waiting, the DJ reads it before the next song.'
+      : accepted === 'full'
+        ? 'The DJ already has 3 dedications waiting. Try again once one has been read.'
+        : "Kitchen FM isn't on. Start it with `/radio play station:Kitchen FM`.";
+  const embeds = [buildReplyEmbed('warn', text)];
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply({ embeds });
+    return;
+  }
+  await interaction.reply({ embeds, flags: MessageFlags.Ephemeral });
+}
+
+/** Display names for the user mentions in a dedication. Unknown ones are dropped. */
+async function mentionNames(
+  guild: NonNullable<ChatInputCommandInteraction['guild']>,
+  text: string,
+): Promise<Map<string, string>> {
+  const ids = [...new Set([...text.matchAll(/<@!?(\d+)>/g)].map((match) => match[1]!))];
+  const names = new Map<string, string>();
+  await Promise.all(
+    ids.map(async (id) => {
+      const member =
+        guild.members.cache.get(id) ?? (await guild.members.fetch(id).catch(() => null));
+      if (member) names.set(id, member.displayName);
+    }),
+  );
+  return names;
 }
 
 async function scheduleRadioNight(

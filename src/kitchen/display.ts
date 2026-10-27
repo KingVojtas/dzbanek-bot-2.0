@@ -123,7 +123,7 @@ export interface KitchenDisplay extends V2Display {
 }
 
 /** Bump when the layout changes so every board redraws once. */
-const BOARD_LAYOUT = 'cards-voice';
+const BOARD_LAYOUT = 'cards-thanks';
 
 /** Pads the tally labels so the bars line up. */
 export const VOTE_NAME_WIDTH = Math.max(...STATION_LIST.map((station) => station.voteName.length));
@@ -510,10 +510,17 @@ function roomCard(view: KitchenBoardView, files: KitchenFiles): ContainerBuilder
   return container;
 }
 
+/** Always the last card: the kitchen's thank-you. */
+function thanksCard(): ContainerBuilder {
+  return new ContainerBuilder()
+    .setAccentColor(KITCHEN_COLOR)
+    .addTextDisplayComponents(textBlock(['💛 Thanks to **Sunka**']));
+}
+
 /**
- * The living Kitchen Board, four cards in one message: the stereo with its
- * controls, who is in voice, the pantry with the top Steam deal and the Epic
- * freebie, and the room with the latest catch, today's cookies, and Radio Night.
+ * The living Kitchen Board, in one message: the stereo with its controls, who
+ * is in voice, the pantry with the top Steam deal and the Epic freebie, the
+ * room with the latest catch, today's cookies, and Radio Night, and a thank-you.
  */
 export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay {
   const files = new KitchenFiles();
@@ -526,6 +533,7 @@ export function buildKitchenBoardDisplay(view: KitchenBoardView): KitchenDisplay
   const components = [stereo, voiceCard(view), pantryCard(view)];
   const room = roomCard(view, files);
   if (room) components.push(room);
+  components.push(thanksCard());
   return { components, flags: MessageFlags.IsComponentsV2, files: files.list() };
 }
 

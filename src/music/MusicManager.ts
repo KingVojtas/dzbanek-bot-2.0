@@ -25,6 +25,7 @@ export class MusicManager {
   private preemptRadio: ((guildId: string) => void) | null = null;
   private onQueueIdle: ((guildId: string, channelId: string) => void) | null = null;
   private onTrackStart: ((guildId: string, track: Track) => void) | null = null;
+  private fireCounts: ((guildId: string, track: Track) => Promise<number>) | null = null;
 
   private readonly youtubeHealth: YouTubeHealth;
   private readonly firstUpdate: Promise<void>;
@@ -83,6 +84,11 @@ export class MusicManager {
   /** Every track that starts playing, e.g. for the Kitchen Quiz song pool. */
   setOnTrackStart(fn: (guildId: string, track: Track) => void): void {
     this.onTrackStart = fn;
+  }
+
+  /** 🔥 on the song that just went on the card. Read when the player builds it. */
+  setFireCounts(fn: (guildId: string, track: Track) => Promise<number>): void {
+    this.fireCounts = fn;
   }
 
   get(guildId: string): GuildPlayer | undefined {
@@ -193,6 +199,7 @@ export class MusicManager {
       (idleGuildId, idleChannelId) => this.onQueueIdle?.(idleGuildId, idleChannelId),
       (track) => this.onTrackStart?.(guildId, track),
     );
+    player.setFireCountLoader((track) => this.fireCounts?.(guildId, track) ?? Promise.resolve(0));
     this.subscriptions.set(guildId, player);
     this.logger.info(`Voice ready in guild ${guildId} → #${channel.name} (${channel.id})`);
     return player;

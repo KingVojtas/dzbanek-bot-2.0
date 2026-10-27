@@ -36,6 +36,10 @@ export interface FmSong extends QuizSong {
   /** The YouTube title, for the Now Playing card. */
   videoTitle?: string;
   uploader?: string;
+  /** 🔥 reactions. Each one weighs like another copy of the song when a set is picked. */
+  heat?: number;
+  /** 👎 reactions. More of these than 🔥 and the song sits out of Kitchen FM's sets. */
+  nopes?: number;
 }
 
 /** A kitchen song as Claude sees it in the crate, numbered to be picked by. */
@@ -134,37 +138,81 @@ function recentMemory(recent: readonly string[], playable: number, keep: number)
   return new Set(recent.slice(-Math.min(RECENT_CAP, Math.max(0, playable - keep))));
 }
 
+/** More 👎 than 🔥: Kitchen FM leaves this song out of its sets. `/play` can still play it. */
+export function sidelined(song: { heat?: number; nopes?: number }): boolean {
+  return (song.nopes ?? 0) > (song.heat ?? 0);
+}
+
+/** One, plus one per 🔥. A fire weighs like another copy of a song the kitchen just played. */
+function songWeight(song: { heat?: number }): number {
+  const fires = song.heat ?? 0;
+  if (!Number.isFinite(fires) || fires <= 0) return 1;
+  return 1 + fires;
+}
+
+function weightedIndex(weights: readonly number[], rng: () => number): number {
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  let mark = rng() * total;
+  for (let i = 0; i < weights.length; i += 1) {
+    mark -= weights[i]!;
+    if (mark <= 0) return i;
+  }
+  return Math.max(0, weights.length - 1);
+}
+
+/** Fresh songs, hotter ones earlier. The repeat gap is applied by the caller. */
+function weightedOrder<T extends { heat?: number }>(items: readonly T[], rng: () => number): T[] {
+  const left = [...items];
+  const out: T[] = [];
+  while (left.length > 0) {
+    const index = weightedIndex(
+      left.map((song) => songWeight(song)),
+      rng,
+    );
+    const [picked] = left.splice(index, 1);
+    if (picked) out.push(picked);
+  }
+  return out;
+}
+
 /**
  * Pick the next kitchen song at random, skipping recent ones. When everything is
  * recent, anything but the song that just played will do.
  */
-export function pickSong<T extends Pick<FmSong, 'key' | 'durationSec'>>(
+export function pickSong<T extends Pick<FmSong, 'key' | 'durationSec' | 'heat' | 'nopes'>>(
   pool: T[],
   recent: readonly string[],
   rng: () => number = Math.random,
 ): T | null {
-  const playable = pool.filter((song) => songFits(song.durationSec));
+  const playable = pool.filter((song) => songFits(song.durationSec) && !sidelined(song));
   const memory = recentMemory(recent, playable.length, 1);
   const fresh = playable.filter((song) => !memory.has(song.key));
   const last = recent[recent.length - 1];
   const choices = fresh.length > 0 ? fresh : playable.filter((song) => song.key !== last);
   if (choices.length === 0) return playable[0] ?? null;
-  return choices[Math.floor(rng() * choices.length)] ?? null;
+  return (
+    choices[
+      weightedIndex(
+        choices.map((song) => songWeight(song)),
+        rng,
+      )
+    ] ?? null
+  );
 }
 
 /**
  * The songs Claude may choose a set from: unplayed ones in random order, then
  * recent ones, least recent first, when the kitchen is small.
  */
-export function sampleCrate<T extends Pick<FmSong, 'key' | 'durationSec'>>(
+export function sampleCrate<T extends Pick<FmSong, 'key' | 'durationSec' | 'heat' | 'nopes'>>(
   pool: T[],
   recent: readonly string[],
   size = CRATE_SIZE,
   rng: () => number = Math.random,
 ): T[] {
-  const playable = pool.filter((song) => songFits(song.durationSec));
+  const playable = pool.filter((song) => songFits(song.durationSec) && !sidelined(song));
   const memory = recentMemory(recent, playable.length, SET_MAX);
-  const fresh = shuffle(
+  const fresh = weightedOrder(
     playable.filter((song) => !memory.has(song.key)),
     rng,
   );
@@ -192,7 +240,7 @@ export function themedSet<T extends FmSong>(
 ): { theme: Theme; songs: T[] } | null {
   const rng = opts.rng ?? Math.random;
   const now = (opts.now ?? new Date()).getTime();
-  const playable = pool.filter((song) => songFits(song.durationSec));
+  const playable = pool.filter((song) => songFits(song.durationSec) && !sidelined(song));
   const memory = recentMemory(recent, playable.length, THEMED_SET_SIZE);
   const fresh = shuffle(
     playable.filter((song) => !memory.has(song.key)),

@@ -69,6 +69,7 @@ Beat often sends only a station tag over Icecast. During shows such as **Hard & 
 | `/radio stop`           | Stop the stream, leave voice, and delete the radio card.              |
 | `/radio night`          | Schedule Friday 20:00 Radio Night in a voice channel.                 |
 | `/radio night-off`      | Cancel scheduled Radio Night.                                         |
+| `/radio dedicate`       | Send a short dedication. The DJ on Kitchen FM reads it aloud.         |
 
 The card has **🍪 Catch**, **⏹️ Stop**, and **🌐 Website**. Catch is greyed out while nothing is on air. Stop wants you in the bot’s voice channel. Catch saves the artist and title for you. The reply grows a **Play** button, which finds that song on YouTube and queues it the same way `/play` does. The Kitchen Board keeps the server’s latest catch, and only the person who saved it can press Play there.
 
@@ -83,6 +84,8 @@ A restart puts that station back on if idle-radio is still on and people are sti
 - **The stereo**, in the color of what’s playing. Radio shows a 🔴 LIVE badge with the station’s slogan, the song and artist, the album cover (or the station logo), and who’s listening, with **🍪 Catch**, **⏹️ Stop**, and **🌐 Website**. Music shows the video art as a banner, the length, who asked for it, and how many are up next, with **Pause / Resume**, **Skip**, **Queue**, and **Stop** right on the board. When nothing is on, the kitchen photo hangs there instead.
 - **The Pantry**, in amber. The Steam deal of the day with its cover, `−75%` chip, struck price, what you save, Steam’s review label, and a countdown to the end of the sale, plus how many more wait in the Steam channel. Under it, this week’s Epic freebie with its countdown, or the next one when nothing is free.
 - **The room**, when there’s news: the latest catch with its cover and a **▶️ Play it** button, today’s cookies, and Radio Night. Friday from **12:00 to 20:00** the vote sits here, with tally bars, a 👑 for the leader, a live countdown to 20:00, and a button for each station (💋 🎸 🥁 1️⃣ ❤️ 🎤 🌴) that shows the count.
+
+The last card is always a small 💛 Thanks to **Sunka**.
 
 Discord presence is the well. Each hour in Europe/Prague the three lines play once, twenty minutes each, in a new order: Purifying the source, Analyzing bacteria levels, Pouring fresh drops.
 
@@ -103,7 +106,9 @@ The show is **genre blocks** of ten songs: two sets of five. The opening block i
 - **New finds** are songs the kitchen has not played. The first set of a show is only songs the kitchen already has, so it starts straight away. From the second set, the station asks Deezer for artists related to the ones in the block, takes one of their top tracks, and plays it from YouTube only when the upload is that song and at most 12 minutes. A themed set, before genres are known, does the same from the second set on, using every kitchen song that has a Deezer artist. A set aims for five songs and fills with finds when the kitchen runs short. Songs under a minute are left out, and a song does not come back while another is waiting. The card says `Czech rap · new find`.
 - **A small kitchen** (fewer than 10 songs) plays its own songs in the first set, then sets of new finds from similar artists, so a few songs never loop.
 - **The voice** is a Microsoft Edge read-aloud voice: free, no key. Edge returns MP3, and FFmpeg decodes it to audio the same way the radio plays, so the DJ is heard in voice. Microsoft changes that service now and then. When it fails, the line still shows on the card and the music carries on.
-- **The card**: Now Playing turns into 🎙️ Kitchen FM with the block’s genre. The DJ’s line sits under the progress bar, and Up next names the station’s next song.
+- **The card**: Now Playing turns into 🎙️ Kitchen FM with the block’s genre. The DJ’s line sits under the progress bar, and Up next names the station’s next song. While the show is on, the card also has **🔥** and **👎**.
+- **Dedications.** `/radio dedicate` sends a short message (120 characters) while Kitchen FM is on and you are in its voice channel. The DJ reads it before the next song, or before a song you named. One dedication per person can be waiting, and three per server. Anything still unread is dropped when the show ends.
+- **🔥 and 👎.** Anyone in the voice channel can react, once per song: press again to take it back, or press the other one to switch. 🔥 on a new find keeps it as a kitchen song, credited to the first person who did. 🔥 on a kitchen song makes the station pick it a bit more often. 👎 on a new find means it is never suggested again. 👎 on a kitchen song leaves it out of sets while the 👎s outnumber the 🔥s. `/play` can still play that song. The set already on air is left as it is.
 
 `/play` requests go first, and the set carries on after them. ⏭️ Skip while the DJ talks cuts the talk and starts the song. `/stop` or `/radio stop` ends the show. The next set is planned while the current set’s last song plays, so there is no dead air. A set that waits more than 20 minutes behind requests is planned again, since its line names the time. When the voice channel empties, the show ends after the idle timeout. Kitchen FM needs at least 3 kitchen songs.
 

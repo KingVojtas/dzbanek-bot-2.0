@@ -7,9 +7,16 @@ import { ChannelType, Events, Team, type Client, type User } from 'discord.js';
 import { buildCommandCollection } from './commands';
 import { DISCORD_TOKEN, config } from './config';
 import { createClient } from './core/client';
+import { claimInstance, type NewerCopy } from './core/instance-lock';
 import { logger, type Logger } from './core/logger';
+import { watchForTwin } from './core/twin-watch';
 import type { Services } from './core/types';
-import { ensureGuildSettingsColumns, ensureQuizTables, ensureSteamLinkTable } from './db/client';
+import {
+  ensureGuildSettingsColumns,
+  ensureQuizTables,
+  ensureSongReactionTable,
+  ensureSteamLinkTable,
+} from './db/client';
 import { migrateJsonStoresIfNeeded } from './db/migrate-json';
 import { EpicFreeGamesService } from './deals/epic/EpicFreeGamesService';
 import { GuildSettingsStore } from './deals/guild-settings';
@@ -19,6 +26,7 @@ import { WishlistRadar } from './deals/steam/WishlistRadar';
 import { SteamLinkStore } from './deals/steam/steam-links';
 import { registerEvents } from './events';
 import { KitchenFm } from './fm/KitchenFm';
+import { SongReactionStore } from './fm/reactions';
 import { KitchenBoard } from './kitchen/KitchenBoard';
 import { KITCHEN_CHART_CRON } from './kitchen/chart';
 import { RADIO_NIGHT_CRON } from './kitchen/display';
@@ -46,6 +54,7 @@ async function main(): Promise<void> {
   await ensureGuildSettingsColumns();
   await ensureSteamLinkTable();
   await ensureQuizTables();
+  await ensureSongReactionTable();
   await migrateJsonStoresIfNeeded();
 
   const guildSettings = new GuildSettingsStore();
@@ -54,13 +63,16 @@ async function main(): Promise<void> {
   const wishlistRadar = new WishlistRadar(steamLinks, seen, logger);
   const music = new MusicManager(config, logger);
   const radio = new RadioManager(logger);
+  // Set once this copy gives way, or a signal starts the shutdown.
+  let stopped = false;
   music.setPreempt((guildId) => radio.stop(guildId));
   const kitchen = new KitchenBoard(client, music, radio, guildSettings, config, logger);
   const presence = new LorePresence(client, logger, config.timezone);
   const played = new PlayedTrackStore();
   const catches = new RadioCatchStore();
   const quiz = new QuizManager(music, radio, played, catches, new QuizScoreStore(), logger);
-  const fm = new KitchenFm(music, played, catches, config, logger);
+  const fm = new KitchenFm(music, played, catches, new SongReactionStore(), config, logger);
+  music.setFireCounts((guildId, track) => fm.fires(guildId, track));
   music.setOnTrackStart((guildId, track) => {
     // Kitchen FM's own picks are already kitchen songs; replaying one is not a new /play.
     if (track.stationPick) return;
@@ -82,6 +94,7 @@ async function main(): Promise<void> {
     });
   });
   music.setIdleHandoff((guildId, channelId) => {
+    if (stopped) return;
     void handOffIdleToRadio(
       client,
       radio,
@@ -90,6 +103,7 @@ async function main(): Promise<void> {
       logger,
       guildId,
       channelId,
+      () => !stopped,
     ).catch((error) => logger.error('Idle → radio failed:', error));
   });
   const services: Services = {
@@ -113,7 +127,48 @@ async function main(): Promise<void> {
 
   registerEvents(client, commands, services);
 
+  const jobs: Cron[] = [];
+  let idle = false;
+  let stopLock = (): void => {};
+  // Cron jobs plus the voice sessions. Shutdown exits after this; going idle does not.
+  const release = () => {
+    for (const job of jobs) job.stop();
+    radio.stopAll();
+    music.stopAll();
+    quiz.stopAll();
+  };
+
+  // A newer boot shares data/ and would take the voice connection back and forth.
+  // Exiting here would let Docker restart this copy, and the two would take turns.
+  async function goDormant(other: NewerCopy): Promise<void> {
+    if (stopped) return;
+    stopped = true;
+    idle = true;
+    stopLock();
+    logger.warn(
+      `A newer copy is running on ${other.host} (pid ${other.pid}, started ${other.startedAt}).`,
+    );
+    release();
+    try {
+      await client.destroy();
+    } catch (error) {
+      logger.debug('Client destroy while going idle:', error);
+    }
+    logger.info('This copy is now idle; the newer one runs the bot.');
+    // An unref'd timer would let Node exit, and Docker would start this copy again.
+    setInterval(() => {}, 60 * 60_000);
+  }
+
+  const lock = claimInstance({
+    logger,
+    onNewer: (other) => {
+      void goDormant(other).catch((error) => logger.error('Could not go idle:', error));
+    },
+  });
+  stopLock = () => lock.stop();
+
   client.once(Events.ClientReady, () => {
+    if (stopped) return;
     const runSteam = (reason: string) =>
       steamService.poll().catch((error) => logger.error(`${reason} Steam poll failed:`, error));
     const runEpic = (reason: string) =>
@@ -121,11 +176,13 @@ async function main(): Promise<void> {
 
     const cronOpts = { timezone: config.timezone, protect: true as const };
     const steamJob = new Cron(config.steam.cron, cronOpts, () => void runSteam('Scheduled'));
+    jobs.push(steamJob);
     logger.info(
       `Steam deals: cron "${config.steam.cron}" (${config.timezone}), next ${steamJob.nextRun()?.toISOString() ?? '?'}.`,
     );
 
     const epicJob = new Cron(config.epic.cron, cronOpts, () => void runEpic('Scheduled'));
+    jobs.push(epicJob);
     logger.info(
       `Epic free games: cron "${config.epic.cron}" (${config.timezone}), next ${epicJob.nextRun()?.toISOString() ?? '?'}.`,
     );
@@ -133,21 +190,26 @@ async function main(): Promise<void> {
     kitchen.attach();
     presence.attach();
     void syncAboutMe(client, logger);
-    void resumeRadios(client, radio, kitchen, guildSettings, logger).catch((error) => {
-      logger.error('Radio resume failed:', error);
-    });
+    void resumeRadios(client, radio, kitchen, guildSettings, logger, () => !stopped).catch(
+      (error) => {
+        logger.error('Radio resume failed:', error);
+      },
+    );
     void Promise.all([runSteam('Initial'), runEpic('Initial')]).finally(() => {
       void kitchen.refreshAll().catch((error) => logger.error('Kitchen refresh failed:', error));
     });
 
     const radioNightJob = new Cron(RADIO_NIGHT_CRON, cronOpts, () => {
+      if (stopped) return;
       void kitchen.runRadioNights().catch((error) => logger.error('Radio Night failed:', error));
     });
     logger.info(
       `Radio Night: cron "${RADIO_NIGHT_CRON}" (${config.timezone}), next ${radioNightJob.nextRun()?.toISOString() ?? '?'}.`,
     );
+    jobs.push(radioNightJob);
 
     const chartJob = new Cron(KITCHEN_CHART_CRON, cronOpts, () => {
+      if (stopped) return;
       void kitchen
         .runWeeklyCharts(seen)
         .catch((error) => logger.error('Kitchen chart failed:', error));
@@ -155,6 +217,7 @@ async function main(): Promise<void> {
     logger.info(
       `Kitchen chart: cron "${KITCHEN_CHART_CRON}" (${config.timezone}), next ${chartJob.nextRun()?.toISOString() ?? '?'}.`,
     );
+    jobs.push(chartJob);
 
     // A YouTube check after each boot and each morning's update; each run also
     // lets yt-dlp save the cookies YouTube refreshed.
@@ -166,23 +229,28 @@ async function main(): Promise<void> {
     );
     void music.checkYouTube();
     const ytDlpJob = new Cron(YTDLP_UPDATE_CRON, cronOpts, () => {
+      if (stopped) return;
       void music.updateYtDlp().then(() => music.checkYouTube());
     });
+    jobs.push(ytDlpJob);
     logger.info(
       `yt-dlp update: cron "${YTDLP_UPDATE_CRON}" (${config.timezone}), next ${ytDlpJob.nextRun()?.toISOString() ?? '?'}.`,
     );
     logger.info(`Multi-server ready: in ${client.guilds.cache.size} guild(s).`);
   });
 
-  let shuttingDown = false;
   const shutdown = (signal: string) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    // Already idle: a stop signal still ends the container. Docker is not waiting on us.
+    if (idle) {
+      process.exit(0);
+      return;
+    }
+    if (stopped) return;
+    stopped = true;
+    lock.stop();
     logger.info(`${signal} received — leaving voice and shutting down.`);
     // Keep the saved radio channel so the next boot resumes the station.
-    radio.stopAll();
-    music.stopAll();
-    quiz.stopAll();
+    release();
     void client
       .destroy()
       .catch(() => {})
@@ -191,7 +259,14 @@ async function main(): Promise<void> {
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.once('SIGTERM', () => shutdown('SIGTERM'));
 
-  await client.login(DISCORD_TOKEN);
+  watchForTwin(client, logger, (text) => dmOwner(client, text, logger));
+  try {
+    await client.login(DISCORD_TOKEN);
+  } catch (error) {
+    // destroy() during login rejects it. Stay up; exiting would restart this copy.
+    if (idle) return;
+    throw error;
+  }
 }
 
 // One stray promise must not take music, radio, and deals down with it.
@@ -243,9 +318,11 @@ async function resumeRadios(
   kitchen: KitchenBoard,
   guildSettings: GuildSettingsStore,
   logger: Logger,
+  alive: () => boolean,
 ): Promise<void> {
   const rows = await guildSettings.all();
   for (const row of rows) {
+    if (!alive()) return;
     if (!row.idleRadioEnabled || !row.lastRadioChannelId || !row.lastRadioStation) continue;
     const station = getStation(row.lastRadioStation);
     if (!station) continue;
@@ -269,8 +346,13 @@ async function resumeRadios(
       continue;
     }
 
+    if (!alive()) return;
     try {
       await radio.play(raw, station);
+      if (!alive()) {
+        radio.stop(row.guildId);
+        return;
+      }
       logger.info(`Radio resume: ${station.name} in ${guild.name} (#${raw.name}).`);
       kitchen.refresh(row.guildId);
     } catch (error) {
@@ -287,6 +369,7 @@ async function handOffIdleToRadio(
   logger: Logger,
   guildId: string,
   channelId: string,
+  alive: () => boolean,
 ): Promise<void> {
   const settings = await guildSettings.get(guildId);
   if (!settings.idleRadioEnabled) return;
@@ -306,10 +389,14 @@ async function handOffIdleToRadio(
   }
 
   const station = getStation(settings.lastRadioStation ?? '') ?? getStation('beat');
-  if (!station) return;
+  if (!station || !alive()) return;
 
   try {
     await radio.play(raw, station);
+    if (!alive()) {
+      radio.stop(guildId);
+      return;
+    }
     logger.info(`Idle → radio: ${station.name} in ${guild.name} (#${raw.name}).`);
     kitchen.refresh(guildId);
   } catch (error) {

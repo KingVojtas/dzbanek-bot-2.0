@@ -236,6 +236,12 @@
       "Lights low, genre new. A short block of {genre}, opener {song}.",
       "The night gets its own block of {genre}. We open it with {song}.",
       "It's {time} and the cookie jar is still out. This short block: {genre}, starting with {song}."
+    ],
+    "dedication": [
+      "A message from {from} for {to}: \"{message}\". Here's {song}.",
+      "A message from {from} for {to}: \"{message}\".",
+      "{from} sends this: \"{message}\". Here's {song}.",
+      "{from} sends this: \"{message}\"."
     ]
   }
 }

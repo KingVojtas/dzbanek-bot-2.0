@@ -14,6 +14,7 @@ export const LINE_MOMENTS = {
   byCatch: { min: 15, words: 40, needs: ['by'] },
   newFind: { min: 15, words: 40, needs: [] },
   lateNight: { min: 40, words: 40, needs: ['genre', 'song'] },
+  dedication: { min: 3, words: 40, needs: ['from', 'message'] },
 } as const;
 
 export type Moment = keyof typeof LINE_MOMENTS;
@@ -29,6 +30,9 @@ export const LINE_BLANKS = [
   'by',
   'names',
   'station',
+  'from',
+  'to',
+  'message',
 ] as const;
 
 export type LineBlank = (typeof LINE_BLANKS)[number];
@@ -49,6 +53,12 @@ export interface LineSlots {
   by: string;
   names: string;
   station: string;
+  /** Who sent a dedication. Empty in a set line. */
+  from: string;
+  /** Who a dedication is for. Empty when it has no recipient. */
+  to: string;
+  /** The dedication itself, already cleaned. */
+  message: string;
 }
 
 const BLANK = /\{([a-z]+)\}/g;

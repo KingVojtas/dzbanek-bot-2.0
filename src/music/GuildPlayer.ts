@@ -87,6 +87,11 @@ export class GuildPlayer {
   private introPlaying = false;
   /** The track that last started: the DJ's "that was…", and no intro for a repeat of it. */
   private lastStarted: Track | null = null;
+  /** 🔥 on the song that is on. The card reads this; a press sets it before the lookup returns. */
+  private fireCount = 0;
+  private firesGeneration = 0;
+  private firesTouched = false;
+  private fireCountLoader: ((track: Track) => Promise<number>) | null = null;
 
   constructor(
     readonly connection: VoiceConnection,
@@ -149,7 +154,9 @@ export class GuildPlayer {
       positionSec,
       volume: this.volume,
       hasHistory: this.history.length > 0,
-      dj: this.station ? { line: this.djLine, vibe: this.station.vibeOf(track) } : undefined,
+      dj: this.station
+        ? { line: this.djLine, vibe: this.station.vibeOf(track), fires: this.fireCount }
+        : undefined,
     });
   }
 
@@ -166,12 +173,37 @@ export class GuildPlayer {
     if (!queuedNext || this.prefetched?.url !== queuedNext.url) this.invalidatePrefetch();
     if (!station) return;
     this.clearIdleTimer();
-    if (this.current) this.warmStation(this.current);
-    else void this.processQueue();
+    // The song already on counts as just played, before the first set is planned.
+    if (this.current) {
+      station.heard?.(this.current);
+      this.warmStation(this.current);
+    } else void this.processQueue();
   }
 
   get onAir(): boolean {
     return this.station !== null;
+  }
+
+  /** How many 🔥 the card should show. Called when the song that is on changes hands. */
+  setFireCountLoader(fn: (track: Track) => Promise<number>): void {
+    this.fireCountLoader = fn;
+  }
+
+  /** A 🔥 press already knows the new count. A lookup for this song must not overwrite it. */
+  noteFireCount(count: number): void {
+    this.fireCount = Math.max(0, count);
+    this.firesTouched = true;
+  }
+
+  /**
+   * The lookup for the song that just started. False when a newer song started,
+   * or someone already pressed 🔥, or the count is already on the card.
+   */
+  applyFireCount(generation: number, count: number): boolean {
+    if (generation !== this.firesGeneration || this.firesTouched) return false;
+    if (this.fireCount === count) return false;
+    this.fireCount = Math.max(0, count);
+    return true;
   }
 
   /** The DJ is speaking; Skip cuts the talk and starts the song. */
@@ -533,6 +565,10 @@ export class GuildPlayer {
     this.lastError = null;
     this.current = track;
     this.djLine = null;
+    this.firesGeneration += 1;
+    this.fireCount = 0;
+    this.firesTouched = false;
+    if (this.station) this.loadFireCount(track);
 
     try {
       this.logger.info(`Starting stream for: ${track.title} (${track.url})`);
@@ -603,6 +639,18 @@ export class GuildPlayer {
       this.logger.warn(`Skipping unplayable track "${track.title}" — continuing queue`);
       return false;
     }
+  }
+
+  /** The 🔥 count for the card. A press that landed first keeps its number. */
+  private loadFireCount(track: Track): void {
+    const generation = this.firesGeneration;
+    const load = this.fireCountLoader;
+    if (!load) return;
+    void load(track)
+      .then((count) => {
+        if (this.applyFireCount(generation, count)) void this.refreshNowPlaying();
+      })
+      .catch((error: unknown) => this.logger.debug('Kitchen FM reactions:', error));
   }
 
   /** The station's intro for `track`, if it is ready in time. A repeat gets none. */

@@ -80,6 +80,22 @@ export async function handleMusicButton(
     return;
   }
 
+  if (id === 'music:fire' || id === 'music:nope') {
+    if (!player.onAir) {
+      await interaction.deferUpdate();
+      return;
+    }
+    const fires = await services.fm.react(
+      guildId,
+      interaction.user.id,
+      player.current,
+      id === 'music:fire' ? 'fire' : 'nope',
+    );
+    player.noteFireCount(fires);
+    await updateCard(interaction, player.buildNowPlayingPanel());
+    return;
+  }
+
   if (id === 'music:pause') {
     player.pause();
   } else if (id === 'music:voldown' || id === 'music:volup') {

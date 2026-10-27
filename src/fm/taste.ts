@@ -1,5 +1,5 @@
 import type { GenreId } from './genres';
-import { SET_MAX, isSameSong, sampleCrate, songFits, type FmSong } from './script';
+import { SET_MAX, isSameSong, sampleCrate, sidelined, songFits, type FmSong } from './script';
 
 /** A play from 30 days ago weighs half of one from today. */
 export const TASTE_HALF_LIFE_MS = 30 * 86_400_000;
@@ -68,7 +68,9 @@ export function genreSongs<T extends FmSong>(
   rng: () => number = Math.random,
 ): T[] {
   const played = new Set(recent);
-  const fresh = pool.filter((song) => genreOf(song) === genre && !played.has(song.key));
+  const fresh = pool.filter(
+    (song) => genreOf(song) === genre && !played.has(song.key) && !sidelined(song),
+  );
   return sampleCrate(fresh, [], SET_MAX, rng);
 }
 
@@ -90,7 +92,7 @@ export function blockProfile<T extends FmSong>(
   const fresh = new Map<GenreId, number>();
   for (const song of pool) {
     const genre = genreOf(song);
-    if (!genre || played.has(song.key) || !songFits(song.durationSec)) continue;
+    if (!genre || played.has(song.key) || !songFits(song.durationSec) || sidelined(song)) continue;
     fresh.set(genre, (fresh.get(genre) ?? 0) + 1);
   }
   return new Map([...profile].filter(([genre]) => (fresh.get(genre) ?? 0) >= min));

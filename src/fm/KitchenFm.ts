@@ -3,12 +3,14 @@ import type { Config } from '../config';
 import type { Logger } from '../core/logger';
 import type { RadioCatchStore } from '../kitchen/catches';
 import type { MusicManager } from '../music/MusicManager';
+import type { Track } from '../core/types';
 import { dedupeSongs, songFromCatch, songFromTrack } from '../quiz/songs';
 import type { PlayedTrackStore } from '../quiz/stores';
 import { createCatalog, type FmCatalog } from './catalog';
 import { FmStation } from './FmStation';
 import { GenreBook, genreCachePath } from './GenreBook';
-import type { FmSong } from './script';
+import { playFromFire, type ReactionKind, type SongReactionStore } from './reactions';
+import type { DjLanguage, FmSong } from './script';
 import { DjVoice } from './voice';
 import { DjWriter } from './writer';
 
@@ -31,6 +33,7 @@ export class KitchenFm {
     private readonly music: MusicManager,
     private readonly played: PlayedTrackStore,
     private readonly catches: RadioCatchStore,
+    private readonly reactions: SongReactionStore,
     private readonly config: Config,
     private readonly logger: Logger,
   ) {
@@ -45,15 +48,21 @@ export class KitchenFm {
     return this.config.dj.discover > 0;
   }
 
+  /** The line book the DJ is speaking. Dedications use it for `{song}`. */
+  get language(): DjLanguage {
+    return this.config.dj.language;
+  }
+
   isOn(guildId: string): boolean {
     return this.stations.has(guildId);
   }
 
   /** Every song the kitchen played or caught, newest plays first. A play beats a catch of the same song. */
   async pool(guildId: string): Promise<FmSong[]> {
-    const [plays, caught] = await Promise.all([
+    const [plays, caught, tally] = await Promise.all([
       this.played.all(guildId),
       this.catches.between(guildId, new Date(0), new Date()),
+      this.reactions.tally(guildId),
     ]);
     return dedupeSongs<FmSong>([
       ...plays.map((row) => ({
@@ -76,7 +85,11 @@ export class KitchenFm {
         at: row.caughtAt,
         stationId: row.stationId,
       })),
-    ]);
+    ]).map((song) => {
+      const heat = tally.fires.get(song.key) ?? 0;
+      const nopes = tally.nopes.get(song.key) ?? 0;
+      return heat || nopes ? { ...song, heat, nopes } : song;
+    });
   }
 
   /**
@@ -112,6 +125,7 @@ export class KitchenFm {
         blockSets: this.config.dj.blockSets,
         genres: this.genres,
         catalog: this.catalog,
+        findBlocks: async () => (await this.reactions.tally(guild.id)).blocked,
         timezone: this.config.timezone,
         logger: this.logger,
       },
@@ -126,12 +140,85 @@ export class KitchenFm {
     return songs;
   }
 
+  /**
+   * Queue a dedication on the show that is on now. `track` null is read before
+   * the next song. The clip starts here, before that song does.
+   */
+  dedicate(
+    guildId: string,
+    input: {
+      userId: string;
+      from: string;
+      to: string;
+      message: string;
+      track: Track | null;
+      song: string;
+    },
+  ): 'off' | 'ok' | 'yours' | 'full' {
+    const station = this.stations.get(guildId);
+    if (!station) return 'off';
+    return station.dedicate(input);
+  }
+
+  /** Whether this person can send a dedication on the show that is on. */
+  dedicationBlock(guildId: string, userId: string): 'off' | 'ok' | 'yours' | 'full' {
+    const station = this.stations.get(guildId);
+    if (!station) return 'off';
+    return station.dedicationBlock(userId);
+  }
+
+  /** 🔥 or 👎 on the song that is on. Returns the 🔥 count after the press. */
+  async react(guildId: string, userId: string, track: Track, kind: ReactionKind): Promise<number> {
+    const song = songFromTrack(track, { kind: 'play' });
+    const result = await this.reactions.toggle(
+      guildId,
+      userId,
+      { songKey: song.key, url: track.url, title: song.title, artist: song.artist },
+      kind,
+    );
+    if (result.firstFire) {
+      const known = await this.knows(guildId, song.key);
+      const credit = playFromFire(track, userId, known, true);
+      if (credit) await this.played.record(guildId, credit);
+    }
+    return result.fires;
+  }
+
+  /** 🔥 on the song that is on, for the Now Playing card. */
+  async fires(guildId: string, track: Track): Promise<number> {
+    const key = songFromTrack(track, { kind: 'play' }).key;
+    if (!key || key === '|') return 0;
+    return this.reactions.fires(guildId, key);
+  }
+
   /** End the show and leave voice. False when Kitchen FM was not on. */
   stop(guildId: string): boolean {
     const player = this.music.get(guildId);
     if (!this.stations.has(guildId) || !player?.onAir) return false;
     player.stop();
     return true;
+  }
+
+  /** True when this song is already a kitchen play or a 🍪 catch. */
+  private async knows(guildId: string, key: string): Promise<boolean> {
+    const [plays, caught] = await Promise.all([
+      this.played.all(guildId),
+      this.catches.between(guildId, new Date(0), new Date()),
+    ]);
+    for (const row of plays) {
+      const song = songFromTrack(
+        {
+          title: row.title,
+          url: row.url,
+          uploader: row.uploader ?? undefined,
+          durationSec: row.durationSec,
+          thumbnail: row.thumbnail ?? undefined,
+        },
+        { kind: 'play' },
+      );
+      if (song.key === key) return true;
+    }
+    return caught.some((row) => songFromCatch(row).key === key);
   }
 
   /** People in the voice channel the bot is in now; someone may have moved it. */

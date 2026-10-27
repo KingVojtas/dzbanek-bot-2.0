@@ -236,6 +236,12 @@
       "Zhasnutá světla, nový žánr. Asi blok {genre}, otevírák {song}.",
       "Noc má vlastní blok {genre}. Otevíráme ji: {song}.",
       "Je {time} a sklenice se sušenkami je pořád venku. Krátký blok: {genre}, začínáme {song}."
+    ],
+    "dedication": [
+      "Máme tu vzkaz. Od: {from}, pro: {to}. „{message}“ A k tomu hraje {song}.",
+      "Máme tu vzkaz. Od: {from}, pro: {to}. „{message}“",
+      "Píše {from}: „{message}“ A k tomu hraje {song}.",
+      "Píše {from}: „{message}“"
     ]
   }
 }

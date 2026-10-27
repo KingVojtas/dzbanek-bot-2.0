@@ -337,6 +337,7 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
     'attachment://kitchen-hero.jpg',
     '### 🔊 In voice',
     'Nobody’s in a call right now',
+    '💛 Thanks to **Sunka**',
   ]);
   if (quiet.includes('radio:catch') || quiet.includes('kitchen:catch-play')) {
     fail('kitchen-quiet-buttons', 'quiet board grew radio buttons');
@@ -752,6 +753,9 @@ checkV2('steam-empty', () => buildSteamDealsDisplay([], new Map()), [
   const missing = [...ids, ...ids2].filter((id) => !json.includes(`"${id}"`));
   if (missing.length > 0) fail('now-playing-buttons', `missing ${missing.join(', ')}`);
   else ok('now-playing-buttons', 'transport row, then previous, volume, and queue');
+  if (json.includes('music:fire') || json.includes('music:nope')) {
+    fail('now-playing-reactions', 'a normal card grew Kitchen FM reactions');
+  } else ok('now-playing-reactions', 'reactions stay on Kitchen FM');
 
   checkEmbedCard(
     'now-playing-paused',
@@ -799,6 +803,19 @@ checkV2('steam-empty', () => buildSteamDealsDisplay([], new Map()), [
         dj: { line: null, vibe: null },
       }),
     ['🎙️ Kitchen FM · YouTube', 'Digital Love', 'Kitchen FM on air'],
+  );
+
+  checkEmbedCard(
+    'now-playing-kitchen-fm-reactions',
+    () =>
+      buildNowPlayingDisplay({
+        track: { ...track('Now'), stationPick: true },
+        queueLength: 0,
+        paused: false,
+        loopMode: 'off',
+        dj: { line: 'A message from Vojta: good luck tomorrow.', vibe: 'Czech rap', fires: 4 },
+      }),
+    ['music:fire', 'music:nope', '"label":"4"', 'Czech rap'],
   );
 
   const fresh = JSON.stringify(

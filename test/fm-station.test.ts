@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import type { Track } from '../src/core/types';
 import type { FmCatalog } from '../src/fm/catalog';
 import { FmStation } from '../src/fm/FmStation';
 import type { GenreId, GenreIndex } from '../src/fm/genres';
 import type { FmSong } from '../src/fm/script';
+import { songFromTrack } from '../src/quiz/songs';
 
 const START = Date.parse('2026-10-26T17:00:00Z');
 const SONG_MS = 200_000;
 
-function kitchenSong(genre: GenreId, n: number): FmSong {
+function kitchenSong(genre: GenreId, n: number, heat?: number): FmSong {
   return {
     key: `${genre}|${n}`,
     artist: `${genre} artist ${n}`,
@@ -19,6 +21,16 @@ function kitchenSong(genre: GenreId, n: number): FmSong {
     durationSec: SONG_MS / 1000,
     from: { kind: 'play', userId: 'u1' },
     at: new Date(START - n * 86_400_000),
+    heat,
+  };
+}
+
+function asTrack(song: Pick<FmSong, 'label' | 'url' | 'durationSec'>): Track {
+  return {
+    title: song.label,
+    url: song.url ?? 'https://youtu.be/none',
+    durationSec: song.durationSec,
+    requestedBy: 'Vojta',
   };
 }
 
@@ -31,10 +43,12 @@ function show(opts: {
   tops?: { title: string; artist: string; durationSec: number }[];
   topsFor?: (artistId: number) => { title: string; artist: string; durationSec: number }[];
   searchOne?: (query: string) => Promise<unknown>;
+  findBlocks?: () => Promise<readonly { artist: string; title: string }[]>;
   artistId?: (key: string) => number | undefined;
   blockSets?: number;
   /** False: genres are not known yet, so the station plans a themed set. */
   blocks?: boolean;
+  genreOf?: (key: string) => GenreId;
   planSet?: (discover: number) => {
     vibe: string;
     line: string;
@@ -43,7 +57,7 @@ function show(opts: {
 }) {
   const calls = { deezer: 0, youtube: 0 };
   const genres: GenreIndex = {
-    genreOf: (key) => key.split('|')[0] as GenreId,
+    genreOf: opts.genreOf ?? ((key) => key.split('|')[0] as GenreId),
     artistId: opts.artistId ?? (() => 1),
     ready: () => opts.blocks !== false,
     enqueue() {},
@@ -106,6 +120,7 @@ function show(opts: {
       blockSets: opts.blockSets ?? 2,
       genres,
       catalog,
+      findBlocks: opts.findBlocks,
       lines: null,
       now: () => clock,
       timezone: 'Europe/Prague',
@@ -115,6 +130,7 @@ function show(opts: {
   );
   return {
     calls,
+    station,
     /** Play `count` songs; stops early when the station has nothing. */
     async play(count: number): Promise<{ title: string; vibe: string | null }[]> {
       const played: { title: string; vibe: string | null }[] = [];
@@ -129,6 +145,54 @@ function show(opts: {
     },
   };
 }
+
+describe('FmStation just played', () => {
+  it('does not open the next set with a song a request just started', async () => {
+    const hot = kitchenSong('cz-rap', 0, 1_000_000_000);
+    const radio = show({
+      pool: [hot, ...Array.from({ length: 11 }, (_, n) => kitchenSong('cz-rap', n + 1))],
+    });
+    radio.station.starting(asTrack(hot));
+    const first = await radio.station.upNext();
+    assert.ok(first);
+    assert.notEqual(first.url, hot.url);
+  });
+
+  it('does not open the next set with the song already playing when it goes on air', async () => {
+    const playing: Track = {
+      title: 'Poet - Pribehy sny',
+      url: 'https://youtu.be/different-video',
+      durationSec: 200,
+      requestedBy: 'Vojta',
+    };
+    const caught: FmSong = {
+      key: songFromTrack(playing, { kind: 'play' }).key,
+      artist: 'Poet',
+      title: 'Pribehy sny',
+      label: 'Poet — Pribehy sny',
+      query: 'Poet - Pribehy sny',
+      durationSec: 200,
+      from: { kind: 'catch', userId: 'u1' },
+      at: new Date(START),
+      heat: 1_000_000_000,
+    };
+    const radio = show({
+      pool: [caught, ...Array.from({ length: 11 }, (_, n) => kitchenSong('cz-rap', n + 1))],
+      genreOf: () => 'cz-rap',
+      searchOne: async () => ({
+        title: 'CATCH HIT',
+        url: 'https://youtu.be/catch-hit',
+        durationSec: 200,
+        requestedBy: 'Kitchen FM',
+      }),
+    });
+    radio.station.heard(playing);
+    const first = await radio.station.upNext();
+    assert.ok(first);
+    assert.notEqual(first.url, 'https://youtu.be/catch-hit');
+    assert.equal(radio.calls.youtube, 0);
+  });
+});
 
 describe('FmStation genre blocks', () => {
   it('keeps playing when the YouTube search for a new find throws', async () => {
@@ -260,6 +324,26 @@ describe('FmStation genre blocks', () => {
     assert.ok(played.slice(0, 4).every((song) => !song.vibe?.includes('new find')));
     assert.deepEqual(played.slice(4).filter(kitchen), []);
     assert.ok(played.slice(4).every((song) => song.vibe?.includes('new find')));
+  });
+
+  it('does not suggest a new find someone marked 👎', async () => {
+    const radio = show({
+      pool: [1, 2, 3, 4].map((n) => kitchenSong('pop', n)),
+      related: [{ id: 7, name: 'Stranger' }],
+      tops: [{ title: 'Brand New', artist: 'Stranger', durationSec: 180 }],
+      findBlocks: async () => [{ artist: 'Stranger', title: 'Brand New' }],
+      searchOne: async (query) => ({
+        title: query,
+        url: `https://youtu.be/${encodeURIComponent(query)}`,
+        durationSec: 200,
+        uploader: query.split(' - ')[0] ?? '',
+        requestedBy: 'Kitchen FM',
+      }),
+    });
+    const played = await radio.play(8);
+    assert.ok(played.length >= 4);
+    assert.ok(played.every((song) => !song.title.includes('Brand New')));
+    assert.equal(radio.calls.youtube, 0);
   });
 
   it('plans the first set with no catalog or YouTube calls', async () => {

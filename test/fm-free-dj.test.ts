@@ -351,6 +351,9 @@ describe('line book', () => {
     by: 'Vojta',
     names: 'Ana and Ben',
     station: 'Kitchen FM',
+    from: '',
+    to: '',
+    message: '',
   };
 
   it('fills the blanks the way each language speaks', () => {

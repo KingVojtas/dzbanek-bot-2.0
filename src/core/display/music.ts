@@ -85,8 +85,8 @@ export interface NowPlayingDisplayOptions {
   hasHistory?: boolean;
   /** The track after this one, named on the card. */
   next?: Track | null;
-  /** Kitchen FM is on air: the set's vibe, and what the DJ said before this song. */
-  dj?: { line: string | null; vibe?: string | null };
+  /** Kitchen FM is on air: the set's vibe, what the DJ said, and how many 🔥 the song has. */
+  dj?: { line: string | null; vibe?: string | null; fires?: number };
 }
 
 /** Now Playing card, as on the website: who asked, the clock, the transport row. */
@@ -208,7 +208,24 @@ export function buildNowPlayingDisplay(opts: NowPlayingDisplayOptions): EmbedCar
       .setStyle(ButtonStyle.Secondary),
   );
 
-  return { embeds: [embed], components: [transport, extras] };
+  const rows = [transport, extras];
+  if (opts.dj) {
+    rows.push(
+      new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId('music:fire')
+          .setLabel(String(opts.dj.fires ?? 0))
+          .setEmoji('🔥')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId('music:nope')
+          .setEmoji('👎')
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    );
+  }
+
+  return { embeds: [embed], components: rows };
 }
 
 /** Page buttons on the queue card. `queue:page:0` is the first page. */

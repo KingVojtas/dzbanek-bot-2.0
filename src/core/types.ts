@@ -87,6 +87,11 @@ export interface PlayerStation {
   queued(): Track | null;
   /** The player is about to play `track`, a request or the station's pick. */
   starting(track: Track): void;
+  /**
+   * A song already playing when the station goes on air. It counts as just
+   * played, the same as `starting`, so the next set does not open with it.
+   */
+  heard?(track: Track): void;
   /** What the DJ says before `track`, if anything. Asked early to prepare it, then again to play it. */
   intro(track: Track): Promise<StationIntro | null>;
   /**
