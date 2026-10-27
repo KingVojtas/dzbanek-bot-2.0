@@ -215,6 +215,7 @@ async function main(): Promise<void> {
     kitchen.attach();
     presence.attach();
     void syncAboutMe(client, logger);
+    void syncServerBios(client, logger);
     void resumeRadios(client, radio, kitchen, guildSettings, logger, () => !stopped).catch(
       (error) => {
         logger.error('Radio resume failed:', error);
@@ -344,12 +345,15 @@ process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled promise rejection:', reason);
 });
 
-/** The bot profile's About Me. Discord caps it at 400 characters. */
+/**
+ * The bot profile's About Me, also used as its bio on each server. Discord caps the About Me
+ * at 400 characters and a server bio at 300.
+ */
 const ABOUT_ME =
-  '🍪 Dzbanek — the kitchen’s stereo. Plays YouTube & Spotify, streams live radio, and runs ' +
-  'Kitchen FM: your own station with a DJ who reads your dedications. 🔥 the songs you love, ' +
-  'name that tune in the Kitchen Quiz, and get a Kitchen Wrapped every month. Steam deals and ' +
-  'Epic freebies, too.\n\nType /help to see what’s cooking.';
+  '🍪 Dzbanek — the kitchen’s stereo. Plays YouTube, Spotify & live radio, and runs ' +
+  'Kitchen FM: your own station whose DJ reads your dedications. 🔥 the songs you love, ' +
+  'name that tune in the Kitchen Quiz, and get a monthly Kitchen Wrapped. Steam & Epic ' +
+  'deals, too.\n\nType /help to see what’s cooking.';
 
 /** Write the About Me only when it differs, so a restart does not spam the API. */
 async function syncAboutMe(client: Client, logger: Logger): Promise<void> {
@@ -360,6 +364,20 @@ async function syncAboutMe(client: Client, logger: Logger): Promise<void> {
     logger.info('About Me updated.');
   } catch (error) {
     logger.warn('Could not update About Me:', error);
+  }
+}
+
+/**
+ * Inside a server, Discord shows the bot's server bio instead of the About Me. The bot can't
+ * read that bio back, so it writes it on every start: one call per server.
+ */
+async function syncServerBios(client: Client, logger: Logger): Promise<void> {
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      await guild.members.editMe({ bio: ABOUT_ME });
+    } catch (error) {
+      logger.warn(`Could not update the server bio in ${guild.name}:`, error);
+    }
   }
 }
 
