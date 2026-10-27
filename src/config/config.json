@@ -7,7 +7,7 @@
   "music": {
     "idleTimeoutSec": 120,
     "maxQueueSize": 100,
-    "youtubeClients": "",
+    "youtubeClients": "tv_simply",
     "clientBenchmark": false
   },
   "steam": {
