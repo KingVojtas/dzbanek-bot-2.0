@@ -8,6 +8,7 @@
 import { MessageFlags } from 'discord.js';
 import { commandList } from '../src/commands';
 import { buildHelpDisplay } from '../src/commands/help';
+import { buildHelloDisplay } from '../src/greetings/hello';
 import {
   EPIC_SHELF_MARKER,
   buildEpicFreeGamesDisplay,
@@ -1312,9 +1313,11 @@ checkEmbedCard(
 {
   const commandsJson = commandList.map((command) => command.data.toJSON());
   const avatarUrl = 'https://cdn.example.com/avatar.png';
-  checkCard('help-all', () => buildHelpDisplay(commandsJson, { avatarUrl }));
+  const clientId = '923262419923513445';
+  checkCard('help-all', () => buildHelpDisplay(commandsJson, { avatarUrl, clientId }));
   checkCard('help-setup', () => buildHelpDisplay(commandsJson, { avatarUrl, focus: 'setup' }));
   checkCard('help-play', () => buildHelpDisplay(commandsJson, { focus: 'play' }));
+  checkCard('hello', () => buildHelloDisplay(avatarUrl));
 
   const helpJson = (display: { components: { toJSON: () => unknown }[] }): string =>
     JSON.stringify(display.components.map((component) => component.toJSON()));

@@ -44,6 +44,10 @@ export interface Config {
     discover: number;
     /** Sets in a genre block after the opener, from 1 to 4. The first block is one set. */
     blockSets: number;
+    /** Claude-planned sets a server gets per day. Past it the station plans its own. */
+    setsPerServerPerDay: number;
+    /** Claude-planned sets per day across every server, a ceiling on the API bill. */
+    setsPerDay: number;
   };
   embedColor: number;
 }
@@ -70,6 +74,12 @@ function requireString(value: unknown, name: string): string {
     throw new Error(`Invalid config: "${name}" must be a non-empty string.`);
   }
   return value;
+}
+
+/** A whole number from config, or null when it is missing or not a number. */
+function wholeAtLeastZero(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.round(value));
 }
 
 function optionalString(value: unknown): string | null {
@@ -142,6 +152,8 @@ function loadConfig(): Config {
         typeof dj.blockSets === 'number' && Number.isFinite(dj.blockSets)
           ? Math.min(4, Math.max(1, Math.round(dj.blockSets)))
           : 2,
+      setsPerServerPerDay: wholeAtLeastZero(dj.setsPerServerPerDay) ?? 20,
+      setsPerDay: wholeAtLeastZero(dj.setsPerDay) ?? 100,
     },
     embedColor: parseColor(raw.embedColor),
   };

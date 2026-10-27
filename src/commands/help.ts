@@ -11,6 +11,7 @@ import {
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from 'discord.js';
 import type { V2Display } from '../core/display/v2';
+import { shareRow } from '../core/links';
 import type { Command } from '../core/types';
 
 type CommandJSON = RESTPostAPIChatInputApplicationCommandsJSONBody;
@@ -37,8 +38,23 @@ const GROUPS: { title: string; names: string[]; note?: string }[] = [
 
 const INTRO =
   '## 🍪 What’s cooking\n' +
-  'Dzbanek plays YouTube and Spotify, streams live radio from Prague, London and California, posts Steam deals and Epic ' +
+  'Dzbanek streams seven live radio stations from Prague, London and California, and runs Kitchen FM, your ' +
+  'server’s own station with a DJ. It also plays YouTube and Spotify, hosts a song quiz, posts Steam deals and Epic ' +
   'freebies, pings you when your Steam wishlist goes on sale, and keeps the Kitchen Board up to date.';
+
+/**
+ * The kitchen words the commands use, for anyone new. Times are the bot's
+ * timezone (config.timezone), which is Prague.
+ */
+const KITCHEN_WORDS =
+  '### 🍪 Kitchen words\n' +
+  '**Kitchen** · your server. Dzbanek calls every server a kitchen.\n' +
+  '**Kitchen Board** · one live card in a channel you pick with `/setup kitchen`: what’s playing, today’s deals, the latest catch.\n' +
+  '**Kitchen FM** · your server’s own station, made from the songs you `/play` and catch, with a DJ between sets.\n' +
+  '**🍪 Catch** · the button on a radio card that saves the song on air, so you can play it later.\n' +
+  '**Radio Night** · a Friday vote for a station. The winner plays at 20:00 Prague time.\n' +
+  '**Chef of the week** · whoever brought the songs the kitchen 🔥 most that week.\n' +
+  '**Kitchen Wrapped** · last month in songs, posted on the 1st.';
 
 const FOOTER =
   '-# Pause, skip, previous, volume, loop and shuffle also live as buttons on the Now Playing card.';
@@ -84,7 +100,7 @@ function detailText(command: CommandJSON): string {
 /** The /help card. With `focus`, only that command, with its options spelled out. */
 export function buildHelpDisplay(
   commands: CommandJSON[],
-  opts: { avatarUrl?: string; focus?: string } = {},
+  opts: { avatarUrl?: string; focus?: string; clientId?: string } = {},
 ): V2Display {
   const container = new ContainerBuilder().setAccentColor(HELP_COLOR);
   const focused = opts.focus ? commands.find((command) => command.name === opts.focus) : undefined;
@@ -124,6 +140,9 @@ export function buildHelpDisplay(
         .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(body.slice(0, 1800)));
     }
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(new TextDisplayBuilder().setContent(KITCHEN_WORDS));
   }
 
   container
@@ -133,6 +152,7 @@ export function buildHelpDisplay(
         focused ? '-# Type `/help` on its own to see every command.' : FOOTER,
       ),
     );
+  if (opts.clientId) container.addActionRowComponents(shareRow(opts.clientId));
 
   return { components: [container], flags: MessageFlags.IsComponentsV2 };
 }
@@ -160,6 +180,7 @@ export function buildHelpCommand(list: () => Command[]): Command {
       const display = buildHelpDisplay(json(), {
         avatarUrl: interaction.client.user.displayAvatarURL({ size: 256 }),
         focus: focus || undefined,
+        clientId: interaction.client.user.id,
       });
       await interaction.reply({
         components: display.components,

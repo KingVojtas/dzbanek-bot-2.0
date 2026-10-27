@@ -231,14 +231,17 @@ OAuth2 scopes: `bot`, `applications.commands`
 
 Privileged intent: **Server Members Intent** (welcome / goodbye).
 
-| Feature            | Permissions                                                              |
-| ------------------ | ------------------------------------------------------------------------ |
-| 🎵 Music / Radio   | Connect, Speak, View Channel                                             |
-| 💸 Steam / Epic    | View Channel, Send Messages, Embed Links, Manage Messages, Add Reactions |
-| 👋 Welcome / leave | View Channel, Send Messages                                              |
-| 🚪 Rooms           | Manage Channels                                                          |
+| Feature            | Permissions                                                                   |
+| ------------------ | ----------------------------------------------------------------------------- |
+| 🎵 Music / Radio   | Connect, Speak, View Channel                                                  |
+| 💸 Steam / Epic    | View Channel, Send Messages, Embed Links, Read Message History, Add Reactions |
+| 🍪 Kitchen Board   | View Channel, Send Messages, Attach Files, Read Message History               |
+| 👋 Welcome / leave | View Channel, Send Messages                                                   |
+| 🚪 Rooms           | Manage Channels                                                               |
 
-**Manage Messages** lets Dzbanek clear the previous Now Playing card and the previous digest.
+The install link asks for exactly these: permissions `3263568` (`INSTALL_PERMISSIONS` in `src/core/links.ts`). **Read Message History** lets Dzbanek find its own Kitchen Board and last digest after a restart. It clears its old cards without Manage Messages: a bot may always delete its own messages.
+
+When Dzbanek joins a server, it posts one hello card in the system channel (or the first text channel it can write in) with the first commands to try, and logs the join.
 
 ---
 
@@ -306,6 +309,8 @@ ANTHROPIC_API_KEY=...
 
 Or save the key alone in `secrets/anthropic-api-key.txt`. `/update-dzbanek` ships it the same way as the cookies, so the server's `.env` stays untouched. The env var wins when both are set. Kitchen FM does not need it. The free DJ, the line book, and the genre blocks run with no key. A key is used only while the genre cache is still too thin to start blocks, and only to plan those early sets.
 
+Each server gets at most `dj.setsPerServerPerDay` sets planned by Claude a day (default 20), and all servers together `dj.setsPerDay` (default 100). Past either, the station plans its own sets until midnight, the same as without a key, and the log says so once. The count lives in memory, so a restart starts the day over. Set either to 0 to keep Claude out.
+
 ---
 
 ## ⚙️ Configuration
@@ -347,7 +352,9 @@ Everyday settings live in `src/config/config.json`. The one secret is `DISCORD_T
     "voice": "en-US-AndrewMultilingualNeural",
     "model": "claude-opus-5-5",
     "discover": 2,
-    "blockSets": 2
+    "blockSets": 2,
+    "setsPerServerPerDay": 20,
+    "setsPerDay": 100
   },
   "embedColor": "#5865F2"
 }

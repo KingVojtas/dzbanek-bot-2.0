@@ -48,6 +48,14 @@ function normalize(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+/**
+ * A short hint like "hi" must be the whole name: inside other words it would
+ * pick #chill or #archive on a stranger's server.
+ */
+export function matchesHint(name: string, hint: string): boolean {
+  return name === hint || (hint.length >= 4 && name.includes(hint));
+}
+
 export async function resolveGuildSendableChannel(
   client: Client,
   channelId: string,
@@ -75,7 +83,7 @@ export async function findChannelByNameHints(
     }
     if (!channel.isSendable()) continue;
     const name = normalize(channel.name);
-    if (!hints.some((hint) => name === hint || name.includes(hint))) continue;
+    if (!hints.some((hint) => matchesHint(name, hint))) continue;
     if (me) {
       const perms = channel.permissionsFor(me);
       if (

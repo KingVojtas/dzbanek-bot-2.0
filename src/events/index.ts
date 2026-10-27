@@ -1,5 +1,6 @@
 import { Events, type Client, type Collection } from 'discord.js';
 import type { Command, Services } from '../core/types';
+import { registerGuildJoinEvents } from './guildJoin';
 import { registerGuildMemberEvents } from './guildMembers';
 import { registerInteractionCreate } from './interactionCreate';
 
@@ -14,4 +15,5 @@ export function registerEvents(
 
   registerInteractionCreate(client, commands, services);
   registerGuildMemberEvents(client, services);
+  registerGuildJoinEvents(client, services);
 }

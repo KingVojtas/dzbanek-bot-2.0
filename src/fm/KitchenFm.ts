@@ -57,7 +57,11 @@ export class KitchenFm {
     private readonly config: Config,
     private readonly logger: Logger,
   ) {
-    this.writer = new DjWriter(config.dj.model, logger);
+    this.writer = new DjWriter(config.dj.model, logger, {
+      setsPerServerPerDay: config.dj.setsPerServerPerDay,
+      setsPerDay: config.dj.setsPerDay,
+      timezone: config.timezone,
+    });
     this.voice = new DjVoice(config.dj.voice, logger);
     this.catalog = createCatalog();
     this.genres = new GenreBook(genreCachePath(), this.catalog, logger);

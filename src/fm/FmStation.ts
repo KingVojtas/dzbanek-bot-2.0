@@ -483,25 +483,28 @@ export class FmStation implements PlayerStation {
     if (!this.deps.writer.ready) return null;
     const crateSongs = sampleCrate(pool, this.recent, CRATE_SIZE);
     const names = await this.namesOf(crateSongs);
-    const plan = await this.deps.writer.planSet({
-      language: this.deps.language,
-      server: this.deps.guild.name,
-      time,
-      ...base,
-      earlierVibes: this.vibes.slice(-VIBES_SHOWN),
-      playedThisShow: this.played.slice(-PLAYED_SHOWN),
-      listeners: listeners.map((member) => member.displayName),
-      discover: base.set === 1 ? 0 : this.deps.discover,
-      crate: crateSongs.map((song, i) => ({
-        n: i + 1,
-        artist: song.artist,
-        title: song.title,
-        by: names.get(song.from.userId ?? '') ?? null,
-        how: song.from.kind === 'catch' ? 'catch' : 'play',
-        when: relativeDay(song.at),
-        station: song.stationId ? (getStation(song.stationId)?.name ?? null) : null,
-      })),
-    });
+    const plan = await this.deps.writer.planSet(
+      {
+        language: this.deps.language,
+        server: this.deps.guild.name,
+        time,
+        ...base,
+        earlierVibes: this.vibes.slice(-VIBES_SHOWN),
+        playedThisShow: this.played.slice(-PLAYED_SHOWN),
+        listeners: listeners.map((member) => member.displayName),
+        discover: base.set === 1 ? 0 : this.deps.discover,
+        crate: crateSongs.map((song, i) => ({
+          n: i + 1,
+          artist: song.artist,
+          title: song.title,
+          by: names.get(song.from.userId ?? '') ?? null,
+          how: song.from.kind === 'catch' ? 'catch' : 'play',
+          when: relativeDay(song.at),
+          station: song.stationId ? (getStation(song.stationId)?.name ?? null) : null,
+        })),
+      },
+      this.deps.guild.id,
+    );
     if (!plan) return null;
 
     const loaded = await Promise.all(
