@@ -3,7 +3,11 @@ import { describe, it } from 'node:test';
 import {
   chartWeek,
   isRadioVoteOpen,
+  kitchenDateLabel,
+  monthToDate,
   nextRadioNight,
+  previousMonth,
+  previousYear,
   radioNightWeekKey,
   zonedDateTimeToUtc,
 } from '../src/kitchen/time';
@@ -97,5 +101,65 @@ describe('chartWeek', () => {
 
   it('labels a week that spans two months', () => {
     assert.equal(chartWeek(TZ, prague('2026-11-01', 12)).label, '26 Oct – 1 Nov');
+  });
+});
+
+describe('previousMonth', () => {
+  it('is October when November opens, across the clock change', () => {
+    const period = previousMonth(TZ, prague('2026-11-01', 12));
+    assert.equal(period.key, '2026-10');
+    assert.equal(period.label, 'October 2026');
+    assert.equal(period.startKey, '2026-10-01');
+    assert.equal(period.yearly, false);
+    assert.equal(period.from.toISOString(), '2026-09-30T22:00:00.000Z');
+    assert.equal(period.to.toISOString(), '2026-10-31T22:59:59.999Z');
+  });
+
+  it('is December of the previous year on 1 January', () => {
+    const period = previousMonth(TZ, prague('2026-01-01', 18));
+    assert.equal(period.key, '2025-12');
+    assert.equal(period.label, 'December 2025');
+    assert.equal(period.from.toISOString(), '2025-11-30T23:00:00.000Z');
+    assert.equal(period.to.toISOString(), '2025-12-31T22:59:59.999Z');
+  });
+
+  it('ends February on the 28th in a common year', () => {
+    const period = previousMonth(TZ, prague('2026-03-02', 9));
+    assert.equal(period.key, '2026-02');
+    assert.equal(period.label, 'February 2026');
+    assert.equal(period.to.toISOString(), '2026-02-28T22:59:59.999Z');
+  });
+});
+
+describe('previousYear', () => {
+  it('is the previous calendar year, midnight to the last millisecond', () => {
+    const period = previousYear(TZ, prague('2026-10-27', 15));
+    assert.equal(period.key, '2025');
+    assert.equal(period.label, '2025');
+    assert.equal(period.startKey, '2025-01-01');
+    assert.equal(period.yearly, true);
+    assert.equal(period.from.toISOString(), '2024-12-31T23:00:00.000Z');
+    assert.equal(period.to.toISOString(), '2025-12-31T22:59:59.999Z');
+  });
+});
+
+describe('monthToDate', () => {
+  it('runs from the 1st through the given instant', () => {
+    const now = prague('2026-10-27', 15, 30);
+    const period = monthToDate(TZ, now);
+    assert.equal(period.key, '2026-10');
+    assert.equal(period.label, 'October 2026');
+    assert.equal(period.startKey, '2026-10-01');
+    assert.equal(period.yearly, false);
+    assert.equal(period.from.toISOString(), '2026-09-30T22:00:00.000Z');
+    assert.equal(period.to.toISOString(), now.toISOString());
+  });
+});
+
+describe('kitchenDateLabel', () => {
+  it('names the Prague day, with the year only when asked', () => {
+    const instant = prague('2026-10-27', 0, 30);
+    assert.equal(kitchenDateLabel(TZ, instant, false), '27 October');
+    assert.equal(kitchenDateLabel(TZ, instant, true), '27 October 2026');
   });
 });

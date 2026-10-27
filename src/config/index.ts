@@ -13,6 +13,10 @@ export interface Config {
   music: {
     idleTimeoutSec: number;
     maxQueueSize: number;
+    /** yt-dlp `player_client` list. Null uses the built-in clients. */
+    youtubeClients: string | null;
+    /** Time YouTube client sets once after a passing startup check. */
+    clientBenchmark: boolean;
   };
   steam: {
     channelId: string | null;
@@ -105,6 +109,8 @@ function loadConfig(): Config {
     music: {
       idleTimeoutSec: typeof music.idleTimeoutSec === 'number' ? music.idleTimeoutSec : 120,
       maxQueueSize: typeof music.maxQueueSize === 'number' ? music.maxQueueSize : 100,
+      youtubeClients: optionalString(music.youtubeClients),
+      clientBenchmark: music.clientBenchmark === true,
     },
     steam: {
       channelId: optionalString(steam.channelId),

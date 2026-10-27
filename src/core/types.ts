@@ -87,6 +87,10 @@ export interface PlayerStation {
   queued(): Track | null;
   /** The player is about to play `track`, a request or the station's pick. */
   starting(track: Track): void;
+  /** `track` did not start: the stream failed, not a skip, stop, or a newer song. */
+  missed?(track: Track): void;
+  /** The DJ read the intro for `track`. A later `missed` leaves its dedication where it is. */
+  spoke?(track: Track): void;
   /**
    * A song already playing when the station goes on air. It counts as just
    * played, the same as `starting`, so the next set does not open with it.

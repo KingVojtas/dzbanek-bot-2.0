@@ -2,6 +2,8 @@ import type { LoopMode, Track } from '../core/types';
 
 /** A track that played less than this ended on a broken stream, not on its own. */
 export const INSTANT_END_MS = 800;
+/** Shorter than its length by more than this: the stream was cut off. */
+export const EARLY_BY_SEC = 20;
 export const HISTORY_MAX = 25;
 
 export interface TrackEnd {
@@ -25,6 +27,41 @@ export interface TrackEnd {
  * - `none`: nothing finished, or previous() already placed it.
  */
 export type AfterTrackEnds = 'retry' | 'give-up' | 'requeue' | 'history' | 'none';
+
+/** `m:ss`, or `h:mm:ss` past an hour. */
+function clock(totalSeconds: number): string {
+  const sec = Math.max(0, Math.floor(Number.isFinite(totalSeconds) ? totalSeconds : 0));
+  const hours = Math.floor(sec / 3600);
+  const minutes = Math.floor((sec % 3600) / 60);
+  const seconds = sec % 60;
+  const parts = hours > 0 ? [hours, minutes, seconds] : [minutes, seconds];
+  return parts
+    .map((value, i) => (i === 0 ? String(value) : String(value).padStart(2, '0')))
+    .join(':');
+}
+
+export interface EarlyEnd extends TrackEnd {
+  /** The bytes came from the prefetch, not a fresh stream. */
+  prefetched: boolean;
+  /** stop() tore the player down as this track ended. */
+  stopped: boolean;
+}
+
+/**
+ * A warn line when a song ends on its own well short of its length.
+ * Null for a skip, stop, previous, a retry, or a song that ran its course.
+ */
+export function earlyEndWarning(end: EarlyEnd): string | null {
+  if (end.stopped || end.skipRequested || end.goingBack) return null;
+  const how = afterTrackEnds(end);
+  if (how !== 'history' && how !== 'requeue') return null;
+  const durationSec = end.finished?.durationSec ?? 0;
+  if (!(durationSec > 0)) return null;
+  const playedSec = end.playedMs / 1000;
+  if (!(durationSec - playedSec > EARLY_BY_SEC)) return null;
+  const via = end.prefetched ? ' (prefetched)' : '';
+  return `Track "${end.finished?.title ?? ''}" ended early: played ${clock(playedSec)} of ${clock(durationSec)}${via}.`;
+}
 
 export function afterTrackEnds(end: TrackEnd): AfterTrackEnds {
   const { finished } = end;

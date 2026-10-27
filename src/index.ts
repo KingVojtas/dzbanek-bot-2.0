@@ -13,6 +13,7 @@ import { watchForTwin } from './core/twin-watch';
 import type { Services } from './core/types';
 import {
   ensureGuildSettingsColumns,
+  ensurePlayLogTable,
   ensureQuizTables,
   ensureSongReactionTable,
   ensureSteamLinkTable,
@@ -29,12 +30,13 @@ import { KitchenFm } from './fm/KitchenFm';
 import { SongReactionStore } from './fm/reactions';
 import { KitchenBoard } from './kitchen/KitchenBoard';
 import { KITCHEN_CHART_CRON } from './kitchen/chart';
+import { KITCHEN_WRAPPED_MONTH_CRON, KITCHEN_WRAPPED_YEAR_CRON } from './kitchen/wrapped';
 import { RADIO_NIGHT_CRON } from './kitchen/display';
 import { LorePresence } from './kitchen/presence';
 import { MusicManager } from './music/MusicManager';
 import { RadioCatchStore } from './kitchen/catches';
 import { QuizManager } from './quiz/QuizManager';
-import { PlayedTrackStore, QuizScoreStore } from './quiz/stores';
+import { PlayedTrackStore, PlayLogStore, QuizScoreStore } from './quiz/stores';
 import { RadioManager } from './radio/RadioManager';
 import { getStation } from './radio/station';
 
@@ -44,8 +46,10 @@ if (ffmpegPath && !process.env.FFMPEG_PATH) {
   process.env.FFMPEG_PATH = ffmpegPath;
 }
 
-/** Daily yt-dlp update, after the 03:33 Steam run. */
+/** Daily yt-dlp update, after the 03:33 Steam run. The play log is pruned on the same run. */
 const YTDLP_UPDATE_CRON = '15 4 * * *';
+/** Play-log rows older than this are dropped once a day. A year of Wrapped still fits. */
+const PLAY_LOG_KEEP_DAYS = 400;
 
 async function main(): Promise<void> {
   const client = createClient();
@@ -55,6 +59,7 @@ async function main(): Promise<void> {
   await ensureSteamLinkTable();
   await ensureQuizTables();
   await ensureSongReactionTable();
+  await ensurePlayLogTable();
   await migrateJsonStoresIfNeeded();
 
   const guildSettings = new GuildSettingsStore();
@@ -69,16 +74,34 @@ async function main(): Promise<void> {
   const kitchen = new KitchenBoard(client, music, radio, guildSettings, config, logger);
   const presence = new LorePresence(client, logger, config.timezone);
   const played = new PlayedTrackStore();
+  const playLog = new PlayLogStore();
   const catches = new RadioCatchStore();
   const quiz = new QuizManager(music, radio, played, catches, new QuizScoreStore(), logger);
   const fm = new KitchenFm(music, played, catches, new SongReactionStore(), config, logger);
+  kitchen.setGenreOf((songKey) => fm.genreOf(songKey));
   music.setFireCounts((guildId, track) => fm.fires(guildId, track));
   music.setOnTrackStart((guildId, track) => {
     // Kitchen FM's own picks are already kitchen songs; replaying one is not a new /play.
-    if (track.stationPick) return;
-    void played.record(guildId, track).catch((error) => {
-      logger.debug('Failed to remember a played track:', error);
-    });
+    if (!track.stationPick) {
+      void played.record(guildId, track).catch((error) => {
+        logger.debug('Failed to remember a played track:', error);
+      });
+    }
+    const noted = fm.describe(guildId, track);
+    void playLog
+      .add({
+        guildId,
+        url: track.url,
+        title: noted.title,
+        artist: noted.artist,
+        songKey: noted.key,
+        requestedById: track.requestedById ?? null,
+        kind: noted.kind,
+        durationSec: track.durationSec,
+      })
+      .catch((error) => {
+        logger.debug('Failed to log a play:', error);
+      });
   });
   kitchen.setBusy((guildId) => quiz.isActive(guildId));
   radio.setOnStation((guildId, station, channelId) => {
@@ -130,6 +153,7 @@ async function main(): Promise<void> {
   const jobs: Cron[] = [];
   let idle = false;
   let stopLock = (): void => {};
+  const stopBenchmark = new AbortController();
   // Cron jobs plus the voice sessions. Shutdown exits after this; going idle does not.
   const release = () => {
     for (const job of jobs) job.stop();
@@ -144,6 +168,7 @@ async function main(): Promise<void> {
     if (stopped) return;
     stopped = true;
     idle = true;
+    stopBenchmark.abort();
     stopLock();
     logger.warn(
       `A newer copy is running on ${other.host} (pid ${other.pid}, started ${other.startedAt}).`,
@@ -219,6 +244,35 @@ async function main(): Promise<void> {
     );
     jobs.push(chartJob);
 
+    // Month and year share one chain so 1 January posts the month, then the year.
+    let wrappedChain: Promise<void> = Promise.resolve();
+    const runWrapped = (kinds: Array<'month' | 'year'>) => {
+      if (stopped) return;
+      wrappedChain = wrappedChain
+        .then(async () => {
+          if (stopped) return;
+          for (const kind of kinds) {
+            if (stopped) return;
+            await kitchen.runKitchenWrapped(seen, kind);
+          }
+        })
+        .catch((error) => logger.error('Kitchen Wrapped failed:', error));
+    };
+    const wrappedMonthJob = new Cron(KITCHEN_WRAPPED_MONTH_CRON, cronOpts, () =>
+      runWrapped(['month']),
+    );
+    logger.info(
+      `Kitchen Wrapped month: cron "${KITCHEN_WRAPPED_MONTH_CRON}" (${config.timezone}), next ${wrappedMonthJob.nextRun()?.toISOString() ?? '?'}.`,
+    );
+    jobs.push(wrappedMonthJob);
+    const wrappedYearJob = new Cron(KITCHEN_WRAPPED_YEAR_CRON, cronOpts, () =>
+      runWrapped(['month', 'year']),
+    );
+    logger.info(
+      `Kitchen Wrapped year: cron "${KITCHEN_WRAPPED_YEAR_CRON}" (${config.timezone}), next ${wrappedYearJob.nextRun()?.toISOString() ?? '?'}.`,
+    );
+    jobs.push(wrappedYearJob);
+
     // A YouTube check after each boot and each morning's update; each run also
     // lets yt-dlp save the cookies YouTube refreshed.
     music.setYouTubeAlert((text) => dmOwner(client, text, logger));
@@ -227,10 +281,25 @@ async function main(): Promise<void> {
         logger.info(user ? `YouTube alerts DM ${user.username}.` : 'YouTube alerts: no bot owner.'),
       (error: unknown) => logger.warn('Could not look up the bot owner:', error),
     );
-    void music.checkYouTube();
+    void music.checkYouTube().then(
+      (passed) => {
+        if (!passed || stopped) return;
+        music.benchmarkYouTubeClients(stopBenchmark.signal);
+      },
+      (error: unknown) => logger.warn('YouTube check failed:', error),
+    );
     const ytDlpJob = new Cron(YTDLP_UPDATE_CRON, cronOpts, () => {
       if (stopped) return;
       void music.updateYtDlp().then(() => music.checkYouTube());
+      const cutoff = new Date(Date.now() - PLAY_LOG_KEEP_DAYS * 86_400_000);
+      void playLog
+        .prune(cutoff)
+        .then((removed) => {
+          if (removed > 0) {
+            logger.info(`Play log: pruned ${removed} rows older than ${PLAY_LOG_KEEP_DAYS} days.`);
+          }
+        })
+        .catch((error) => logger.warn('Play log prune failed:', error));
     });
     jobs.push(ytDlpJob);
     logger.info(
@@ -240,6 +309,7 @@ async function main(): Promise<void> {
   });
 
   const shutdown = (signal: string) => {
+    stopBenchmark.abort();
     // Already idle: a stop signal still ends the container. Docker is not waiting on us.
     if (idle) {
       process.exit(0);
@@ -276,9 +346,10 @@ process.on('unhandledRejection', (reason) => {
 
 /** The bot profile's About Me. Discord caps it at 400 characters. */
 const ABOUT_ME =
-  '🍪 Dzbanek — the kitchen’s stereo. Plays YouTube & Spotify, streams Czech, London & California radio live, ' +
-  'posts Steam deals every morning and Epic freebies when they drop, and keeps a cookie warm for ' +
-  'whoever walks in.\n\nType /help to see what’s cooking.';
+  '🍪 Dzbanek — the kitchen’s stereo. Plays YouTube & Spotify, streams live radio, and runs ' +
+  'Kitchen FM: your own station with a DJ who reads your dedications. 🔥 the songs you love, ' +
+  'name that tune in the Kitchen Quiz, and get a Kitchen Wrapped every month. Steam deals and ' +
+  'Epic freebies, too.\n\nType /help to see what’s cooking.';
 
 /** Write the About Me only when it differs, so a restart does not spam the API. */
 async function syncAboutMe(client: Client, logger: Logger): Promise<void> {

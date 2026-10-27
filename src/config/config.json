@@ -6,7 +6,9 @@
   "timezone": "Europe/Prague",
   "music": {
     "idleTimeoutSec": 120,
-    "maxQueueSize": 100
+    "maxQueueSize": 100,
+    "youtubeClients": "",
+    "clientBenchmark": false
   },
   "steam": {
     "channelId": "1518054940268826624",

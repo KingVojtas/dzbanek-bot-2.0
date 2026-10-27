@@ -175,6 +175,11 @@ export class DedicationQueue {
     return this.waiting.splice(index, 1)[0] ?? null;
   }
 
+  /** Back at the front, read before the next song (`track` should be null). */
+  returnFront(dedication: WaitingDedication): void {
+    this.waiting.unshift(dedication);
+  }
+
   clear(): void {
     this.waiting = [];
   }

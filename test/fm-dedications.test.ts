@@ -220,6 +220,35 @@ describe('dedication limits', () => {
     assert.equal(queue.take(request('Other'))?.message, undefined);
     assert.equal(queue.take(bound)?.message, 'bound');
   });
+
+  it('returnFront is read before an older dedication', () => {
+    const queue = new DedicationQueue();
+    const failed = request('Gone');
+    queue.add({
+      userId: 'a',
+      from: 'A',
+      to: '',
+      message: 'older',
+      track: null,
+      song: '',
+      text: 'older',
+      speech: Promise.resolve(null),
+    });
+    queue.add({
+      userId: 'b',
+      from: 'B',
+      to: '',
+      message: 'bound',
+      track: failed,
+      song: 'Gone',
+      text: 'bound',
+      speech: Promise.resolve(null),
+    });
+    const taken = queue.take(failed);
+    assert.ok(taken);
+    queue.returnFront({ ...taken, track: null });
+    assert.equal(queue.take(request('Next'))?.message, 'bound');
+  });
 });
 
 describe('dedication playback', () => {
@@ -298,5 +327,85 @@ describe('dedication playback', () => {
     assert.equal(live?.pcm?.[0], 1);
     assert.equal(live?.pcm?.[live.pcm.length - 1], 2);
     assert.equal(live?.pcm?.length, 4 + silenceMs(DEDICATION_GAP_MS).length + 4);
+  });
+
+  it('puts a dedication back when its song never starts', async () => {
+    const heard = voice();
+    const station = show(heard.speak);
+    const first = await station.upNext();
+    assert.ok(first);
+    // Planning the set already speaks its opener.
+    const before = heard.spoken.length;
+    station.dedicate({
+      userId: 'u1',
+      from: 'Vojta',
+      to: '',
+      message: 'good luck',
+      track: first,
+      song: '',
+    });
+    const clip = heard.spoken.at(-1) ?? '';
+    assert.equal(heard.spoken.length, before + 1);
+    assert.match(clip, /good luck/);
+    station.starting(first);
+    station.missed(first);
+    assert.equal(heard.spoken.length, before + 1);
+    assert.equal(heard.spoken.at(-1), clip);
+    assert.equal(station.pendingDedications(), 1);
+    const next = await station.upNext();
+    assert.ok(next);
+    station.starting(next);
+    const read = await station.intro(next);
+    assert.match(read?.text ?? '', /good luck/);
+    assert.equal(read?.text.includes("Here's"), false);
+    assert.equal(read?.pcm?.[0], 1);
+  });
+
+  it('drops the failed song from a dedication that named it', async () => {
+    const heard = voice();
+    const station = show(heard.speak);
+    const first = await station.upNext();
+    assert.ok(first);
+    const before = heard.spoken.length;
+    station.dedicate({
+      userId: 'u1',
+      from: 'Vojta',
+      to: '',
+      message: 'good luck',
+      track: first,
+      song: 'Lavazza by Viktor Sheen',
+    });
+    assert.match(heard.spoken.at(-1) ?? '', /Here's Lavazza by Viktor Sheen/);
+    station.starting(first);
+    station.missed(first);
+    assert.equal(heard.spoken.length, before + 2);
+    const rebuilt = heard.spoken.at(-1) ?? '';
+    assert.equal(rebuilt.includes('Lavazza'), false);
+    assert.match(rebuilt, /good luck/);
+    const next = await station.upNext();
+    assert.ok(next);
+    station.starting(next);
+    const read = await station.intro(next);
+    assert.match(read?.text ?? '', /good luck/);
+    assert.equal((read?.text ?? '').includes('Lavazza'), false);
+    assert.equal(read?.pcm?.[0], 1);
+  });
+
+  it('leaves a dedication the DJ already read', async () => {
+    const station = show(voice().speak);
+    const first = await station.upNext();
+    assert.ok(first);
+    station.dedicate({
+      userId: 'u1',
+      from: 'Vojta',
+      to: '',
+      message: 'good luck',
+      track: first,
+      song: '',
+    });
+    station.starting(first);
+    station.spoke(first);
+    station.missed(first);
+    assert.equal(station.pendingDedications(), 0);
   });
 });

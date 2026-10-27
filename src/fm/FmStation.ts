@@ -142,6 +142,10 @@ export class FmStation implements PlayerStation {
   private readonly played: string[] = [];
   private readonly setOf = new WeakMap<Track, FmSet>();
   private readonly about = new WeakMap<Track, OpenerSong>();
+  /** Pool key for a song this station handed out. A catch keeps its catch key. */
+  private readonly songKeys = new WeakMap<Track, string>();
+  /** The DJ already read this track's intro, so a failed start does not repeat it. */
+  private readonly spoken = new WeakSet<Track>();
   private readonly intros = new WeakMap<FmSet, Promise<StationIntro | null>>();
   private readonly dedications = new DedicationQueue();
   /** Handed over in `starting`, so an early `intro` cannot spend it. */
@@ -192,6 +196,32 @@ export class FmStation implements PlayerStation {
     const current = this.current;
     if (current && current.next < current.tracks.length) return current.tracks[current.next]!;
     return this.pending?.tracks[0] ?? null;
+  }
+
+  /** The pool key for a song this station handed out. Null for a request. */
+  keyOf(track: Track): string | null {
+    return this.songKeys.get(track) ?? null;
+  }
+
+  /**
+   * Names the station has for `track`, and whether a dedication is bound to it.
+   * Null when this station did not plan the track and has nothing to say over it.
+   */
+  aboutTrack(track: Track): {
+    artist: string;
+    title: string;
+    how: 'play' | 'catch' | 'new';
+    dedicated: boolean;
+  } | null {
+    const about = this.about.get(track);
+    const dedicated = this.dedicationOf.has(track);
+    if (!about && !dedicated) return null;
+    return {
+      artist: about?.artist ?? '',
+      title: about?.title ?? '',
+      how: about?.how ?? 'play',
+      dedicated,
+    };
   }
 
   /**
@@ -247,6 +277,38 @@ export class FmStation implements PlayerStation {
     if (set !== this.current || set.tracks[set.next] !== track) return;
     set.next += 1;
     this.peeking = null;
+  }
+
+  /** The DJ read `track`'s intro. `missed` will not hand its dedication back. */
+  spoke(track: Track): void {
+    this.spoken.add(track);
+  }
+
+  /**
+   * `track` never started. A dedication it had not read goes back in front,
+   * for whatever song comes next. One that names this song is read without it.
+   */
+  missed(track: Track): void {
+    if (this.ended || this.spoken.has(track)) return;
+    const dedication = this.dedicationOf.get(track);
+    if (!dedication) return;
+    this.dedicationOf.delete(track);
+    this.combined.delete(track);
+    const song = dedication.song.trim();
+    if (song && dedication.text.includes(song)) {
+      const text = dedicationText(
+        this.lineBook?.of('dedication') ?? [],
+        { from: dedication.from, to: dedication.to, message: dedication.message, song: '' },
+        this.deps.language,
+      );
+      const speech = this.deps.voice.speak(text).catch((error: unknown) => {
+        this.deps.logger.warn('Kitchen FM dedication failed:', error);
+        return null;
+      });
+      this.dedications.returnFront({ ...dedication, track: null, song: '', text, speech });
+      return;
+    }
+    this.dedications.returnFront({ ...dedication, track: null });
   }
 
   intro(track: Track): Promise<StationIntro | null> {
@@ -740,6 +802,7 @@ export class FmStation implements PlayerStation {
         this.deps.logger.info(`Kitchen FM: new find "${pick.artist} - ${pick.title}".`);
         hit.stationPick = true;
         this.about.set(hit, { artist: pick.artist, title: pick.title, by: null, how: 'new' });
+        this.rememberFind(hit);
         blocked.push({ artist: pick.artist, title: pick.title });
         found.push(hit);
         fromSeed += 1;
@@ -823,7 +886,17 @@ export class FmStation implements PlayerStation {
     }
     hit.stationPick = true;
     this.about.set(hit, { artist: song.artist, title: song.title, by: null, how: 'new' });
+    this.rememberFind(hit);
     return hit;
+  }
+
+  /** A 🔥 records this hit as a play, and `knows()` reads that play back with this key. */
+  private rememberFind(hit: Track): void {
+    this.remember(hit, songFromTrack(hit, { kind: 'play' }).key);
+  }
+
+  private remember(track: Track, key: string): void {
+    if (key && key !== '|') this.songKeys.set(track, key);
   }
 
   /** Top a short set up toward five songs. Stops rather than repeat a song from the last few. */
@@ -881,6 +954,7 @@ export class FmStation implements PlayerStation {
         stationPick: true,
       };
       this.about.set(track, about);
+      this.remember(track, song.key);
       return track;
     }
     const hit = await this.deps.source.youtube
@@ -894,6 +968,7 @@ export class FmStation implements PlayerStation {
     hit.stationPick = true;
     hit.thumbnail ??= song.thumbnail;
     this.about.set(hit, about);
+    this.remember(hit, song.key);
     return hit;
   }
 

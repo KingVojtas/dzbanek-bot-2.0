@@ -50,6 +50,35 @@ export function radioNightWeekKey(timeZone: string, date = new Date()): string {
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTHS_LONG = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/** A calendar span in `timeZone`: a month, a year, or the month so far. */
+export interface KitchenPeriod {
+  /** Dedup key: `YYYY-MM` for a month, `YYYY` for a year. */
+  key: string;
+  /** "October 2026" or "2026". */
+  label: string;
+  /** First civil day, `YYYY-MM-DD`. */
+  startKey: string;
+  /** Inclusive start, 00:00 on `startKey`. */
+  from: Date;
+  /** Inclusive end. A finished month stops one millisecond before the next one. */
+  to: Date;
+  yearly: boolean;
+}
 
 /** The coming Friday's vote opening and Radio Night start; today's while 20:00 is still ahead. */
 export function nextRadioNight(
@@ -94,6 +123,62 @@ export function chartWeek(timeZone: string, date = new Date()): ChartWeek {
     to: zonedDateTimeToUtc(timeZone, sundayKey, 18, 0),
     label: weekLabel(mondayKey, sundayKey),
   };
+}
+
+/** The calendar month before `date`, midnight to the last millisecond. */
+export function previousMonth(timeZone: string, date = new Date()): KitchenPeriod {
+  const { year, month } = splitKey(zonedParts(timeZone, date).dateKey);
+  return month === 1 ? monthPeriod(timeZone, year - 1, 12) : monthPeriod(timeZone, year, month - 1);
+}
+
+/** The calendar year before `date`. */
+export function previousYear(timeZone: string, date = new Date()): KitchenPeriod {
+  const { year } = splitKey(zonedParts(timeZone, date).dateKey);
+  return yearPeriod(timeZone, year - 1);
+}
+
+/** This month, from the 1st at 00:00 through `date`. The Wrapped preview uses it. */
+export function monthToDate(timeZone: string, date = new Date()): KitchenPeriod {
+  const { year, month } = splitKey(zonedParts(timeZone, date).dateKey);
+  return monthPeriod(timeZone, year, month, date);
+}
+
+/** "27 October", or "27 October 2026" when the year belongs in the label. */
+export function kitchenDateLabel(timeZone: string, date: Date, withYear: boolean): string {
+  const { year, month, day } = splitKey(zonedParts(timeZone, date).dateKey);
+  const name = MONTHS_LONG[month - 1] ?? '';
+  return withYear ? `${day} ${name} ${year}` : `${day} ${name}`;
+}
+
+function monthPeriod(timeZone: string, year: number, month: number, to?: Date): KitchenPeriod {
+  const startKey = `${year}-${pad(month)}-01`;
+  const next = month === 12 ? { year: year + 1, month: 1 } : { year, month: month + 1 };
+  const nextStart = zonedDateTimeToUtc(timeZone, `${next.year}-${pad(next.month)}-01`, 0, 0);
+  return {
+    key: `${year}-${pad(month)}`,
+    label: `${MONTHS_LONG[month - 1] ?? ''} ${year}`,
+    startKey,
+    from: zonedDateTimeToUtc(timeZone, startKey, 0, 0),
+    to: to ?? new Date(nextStart.getTime() - 1),
+    yearly: false,
+  };
+}
+
+function yearPeriod(timeZone: string, year: number): KitchenPeriod {
+  const startKey = `${year}-01-01`;
+  const nextStart = zonedDateTimeToUtc(timeZone, `${year + 1}-01-01`, 0, 0);
+  return {
+    key: String(year),
+    label: String(year),
+    startKey,
+    from: zonedDateTimeToUtc(timeZone, startKey, 0, 0),
+    to: new Date(nextStart.getTime() - 1),
+    yearly: true,
+  };
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, '0');
 }
 
 function addCalendarDays(dateKey: string, days: number): string {

@@ -58,6 +58,71 @@ export class PlayedTrackStore {
   }
 }
 
+export type PlayLogKind = 'play' | 'fm' | 'find' | 'dedication';
+
+export interface PlayLogInput {
+  guildId: string;
+  url: string;
+  title: string;
+  artist: string;
+  songKey: string;
+  requestedById: string | null;
+  kind: PlayLogKind;
+  durationSec: number;
+}
+
+export interface PlayLogRow {
+  url: string;
+  title: string;
+  artist: string;
+  songKey: string;
+  requestedById: string | null;
+  kind: string;
+  durationSec: number;
+  playedAt: Date;
+}
+
+/** Every track start. Rows accumulate; `prune` drops what is past a year and a bit. */
+export class PlayLogStore {
+  async add(input: PlayLogInput): Promise<void> {
+    await prisma.playLog.create({
+      data: {
+        guildId: input.guildId,
+        url: input.url,
+        title: input.title.slice(0, 300),
+        artist: input.artist.slice(0, 200),
+        songKey: input.songKey.slice(0, 300),
+        requestedById: input.requestedById,
+        kind: input.kind,
+        durationSec: Math.max(0, Math.round(input.durationSec || 0)),
+      },
+    });
+  }
+
+  async between(guildId: string, from: Date, to: Date): Promise<PlayLogRow[]> {
+    return prisma.playLog.findMany({
+      where: { guildId, playedAt: { gte: from, lte: to } },
+      orderBy: { playedAt: 'asc' },
+      select: {
+        url: true,
+        title: true,
+        artist: true,
+        songKey: true,
+        requestedById: true,
+        kind: true,
+        durationSec: true,
+        playedAt: true,
+      },
+    });
+  }
+
+  /** Delete rows strictly older than `olderThan`. Returns how many went. */
+  async prune(olderThan: Date): Promise<number> {
+    const result = await prisma.playLog.deleteMany({ where: { playedAt: { lt: olderThan } } });
+    return result.count;
+  }
+}
+
 export interface QuizChampion {
   userId: string;
   score: number;

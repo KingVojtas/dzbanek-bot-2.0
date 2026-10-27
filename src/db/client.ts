@@ -73,6 +73,24 @@ export async function ensureQuizTables(): Promise<void> {
   );
 }
 
+/** Every track start, including repeats and Kitchen FM. Counts and hours live here. */
+export async function ensurePlayLogTable(): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    'CREATE TABLE IF NOT EXISTS "PlayLog" (' +
+      '"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, ' +
+      '"guildId" TEXT NOT NULL, "url" TEXT NOT NULL, "title" TEXT NOT NULL, ' +
+      '"artist" TEXT NOT NULL DEFAULT \'\', "songKey" TEXT NOT NULL, "requestedById" TEXT, ' +
+      '"kind" TEXT NOT NULL, "durationSec" INTEGER NOT NULL DEFAULT 0, ' +
+      '"playedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "PlayLog_guildId_playedAt_idx" ON "PlayLog"("guildId", "playedAt")',
+  );
+  await prisma.$executeRawUnsafe(
+    'CREATE INDEX IF NOT EXISTS "PlayLog_guildId_songKey_idx" ON "PlayLog"("guildId", "songKey")',
+  );
+}
+
 /** 🔥 and 👎 on Kitchen FM songs. One row per person per song. */
 export async function ensureSongReactionTable(): Promise<void> {
   await prisma.$executeRawUnsafe(

@@ -27,7 +27,7 @@ const RECOVERED_ALERT = '✅ YouTube works again. Songs play from YouTube as usu
  */
 export class YouTubeHealth {
   private current: YouTubeState = 'unknown';
-  private running: Promise<void> | null = null;
+  private running: Promise<boolean> | null = null;
   private lastSuspect = -Infinity;
   private alert: YouTubeAlert | null = null;
 
@@ -46,8 +46,8 @@ export class YouTubeHealth {
     this.alert = fn;
   }
 
-  /** Probe YouTube now. A check already under way is shared, not repeated. */
-  check(): Promise<void> {
+  /** Probe YouTube now. A check already under way is shared, not repeated. True when it played. */
+  check(): Promise<boolean> {
     this.running ??= this.runCheck().finally(() => {
       this.running = null;
     });
@@ -71,7 +71,7 @@ export class YouTubeHealth {
     void this.check();
   }
 
-  private async runCheck(): Promise<void> {
+  private async runCheck(): Promise<boolean> {
     let reason: string | null;
     try {
       reason = await this.probe();
@@ -81,17 +81,18 @@ export class YouTubeHealth {
     if (!reason) {
       this.logger.info('YouTube check: ok.');
       await this.working();
-      return;
+      return true;
     }
     // A network blip or a yt-dlp break is no reason to renew the sign-in.
     if (!isBotCheck(reason)) {
       this.logger.warn(`YouTube check failed: ${reason}`);
-      return;
+      return false;
     }
     this.logger.warn(`YouTube check: blocked — ${reason}`);
-    if (this.current === 'blocked') return;
+    if (this.current === 'blocked') return false;
     this.current = 'blocked';
     await this.notify(blockedAlert(reason));
+    return false;
   }
 
   private async notify(text: string): Promise<void> {

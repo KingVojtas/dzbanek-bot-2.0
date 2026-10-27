@@ -83,13 +83,17 @@ A restart puts that station back on if idle-radio is still on and people are sti
 
 - **The stereo**, in the color of what’s playing. Radio shows a 🔴 LIVE badge with the station’s slogan, the song and artist, the album cover (or the station logo), and who’s listening, with **🍪 Catch**, **⏹️ Stop**, and **🌐 Website**. Music shows the video art as a banner, the length, who asked for it, and how many are up next, with **Pause / Resume**, **Skip**, **Queue**, and **Stop** right on the board. When nothing is on, the kitchen photo hangs there instead.
 - **The Pantry**, in amber. The Steam deal of the day with its cover, `−75%` chip, struck price, what you save, Steam’s review label, and a countdown to the end of the sale, plus how many more wait in the Steam channel. Under it, this week’s Epic freebie with its countdown, or the next one when nothing is free.
-- **The room**, when there’s news: the latest catch with its cover and a **▶️ Play it** button, today’s cookies, and Radio Night. Friday from **12:00 to 20:00** the vote sits here, with tally bars, a 👑 for the leader, a live countdown to 20:00, and a button for each station (💋 🎸 🥁 1️⃣ ❤️ 🎤 🌴) that shows the count.
+- **The room**, when there’s news: the latest catch with its cover and a **▶️ Play it** button, today’s cookies, Radio Night, and who is chef of the week so far when anyone has points. Friday from **12:00 to 20:00** the vote sits here, with tally bars, a 👑 for the leader, a live countdown to 20:00, and a button for each station (💋 🎸 🥁 1️⃣ ❤️ 🎤 🌴) that shows the count.
 
 The last card is always a small 💛 Thanks to **Sunka**.
 
 Discord presence is the well. Each hour in Europe/Prague the three lines play once, twenty minutes each, in a new order: Purifying the source, Analyzing bacteria levels, Pouring fresh drops.
 
-On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for the week 📬, with the kitchen photo on top: the songs people caught, with 🥇🥈🥉 and who caught them, and Friday’s Radio Night tally and winner when anyone voted. The living board stays the live stereo.
+On Sunday at **18:00 Europe/Prague** the kitchen channel gets one postcard for the week 📬, with the kitchen photo on top: the songs people caught, with 🥇🥈🥉 and who caught them, Friday’s Radio Night tally and winner when anyone voted, the quiz champion, Chef of the week, and the 🔥 song of the week. The living board stays the live stereo. Its room card names the chef so far.
+
+### 🎁 Kitchen Wrapped
+
+On the **1st** at **18:00 Europe/Prague** every kitchen channel gets last month: songs and hours, the top songs, who brought the most, the favourite genre, the 🔥 song, the quiz champion, the station people caught most, and new finds a 🔥 kept. On **1 January** the year is posted right after the month. `/setup wrapped-preview` shows the month so far, only to you. The first month can say “since 27 October” when the log starts after the 1st.
 
 ### 🌙 Radio Night
 
@@ -204,6 +208,7 @@ Music and radio already keep a separate pot per server. Deals and greetings are 
 | `/setup welcome <channel>`   | Where join messages land.                                          |
 | `/setup goodbye <channel>`   | Where leave messages land.                                         |
 | `/setup kitchen <channel>`   | Where the Kitchen Board hangs.                                     |
+| `/setup wrapped-preview`     | This month’s Kitchen Wrapped so far, only for you.                 |
 | `/setup idle-radio <on/off>` | Fade into radio when the music queue goes quiet.                   |
 | `/setup status`              | Show this server’s channels.                                       |
 | `/setup disable …`           | Pause one feed, a greeting, the board, Radio Night, or idle radio. |
@@ -316,7 +321,9 @@ Everyday settings live in `src/config/config.json`. The one secret is `DISCORD_T
   "timezone": "Europe/Prague",
   "music": {
     "idleTimeoutSec": 120,
-    "maxQueueSize": 100
+    "maxQueueSize": 100,
+    "youtubeClients": "",
+    "clientBenchmark": false
   },
   "steam": {
     "channelId": "YOUR_STEAM_CHANNEL_ID",
@@ -348,6 +355,10 @@ Everyday settings live in `src/config/config.json`. The one secret is `DISCORD_T
 
 Cron expressions use `timezone` (Europe/Prague). `postOnFirstRun` decides whether the first poll after startup may post.
 
+`music.youtubeClients` lists the YouTube player clients a stream asks for, comma-separated, the same way as yt-dlp's `player_client`. Empty, which is the default, means `android_vr,tv_simply,mweb,web,web_embedded`. When the list is different and a song fails without a bot check, the bot tries that song once with the default list and logs the first retry of each hour.
+
+`music.clientBenchmark` is false unless you turn it on. On a boot where the YouTube check passed, the bot waits 30 seconds and then times a few client lists for real: two starts on the check's short video and two on one music video, one start at a time, 20 seconds apart. It logs the fastest list that worked all four times; a bot check stops the rest, and this copy going idle stops the run between starts.
+
 ---
 
 ## 🗂️ Project structure
@@ -367,7 +378,7 @@ src/
   rooms/                   Emoji prefixes for new channel names
   events/                  ready, interactions, member join/leave
   greetings/               Welcome / goodbye copy and channel resolve
-  kitchen/                 Kitchen Board, Radio Night votes, catches, presence
+  kitchen/                 Kitchen Board, Radio Night, Wrapped, catches, presence
   music/                   Voice queue, Now Playing, YouTube + Spotify
   radio/                   Icecast session, station catalog, now-playing poll
   fm/                      Kitchen FM: genre blocks, the line book, Deezer, MusicBrainz, voice (Edge)

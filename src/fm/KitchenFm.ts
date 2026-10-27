@@ -5,17 +5,37 @@ import type { RadioCatchStore } from '../kitchen/catches';
 import type { MusicManager } from '../music/MusicManager';
 import type { Track } from '../core/types';
 import { dedupeSongs, songFromCatch, songFromTrack } from '../quiz/songs';
-import type { PlayedTrackStore } from '../quiz/stores';
+import type { PlayLogKind, PlayedTrackStore } from '../quiz/stores';
 import { createCatalog, type FmCatalog } from './catalog';
 import { FmStation } from './FmStation';
 import { GenreBook, genreCachePath } from './GenreBook';
-import { playFromFire, type ReactionKind, type SongReactionStore } from './reactions';
+import { genreName } from './genres';
+import {
+  playFromFire,
+  reactionSongKey,
+  type ReactionKind,
+  type SongReactionStore,
+} from './reactions';
 import type { DjLanguage, FmSong } from './script';
 import { DjVoice } from './voice';
 import { DjWriter } from './writer';
 
 /** Fewer kitchen songs than this and the station would repeat itself at once. */
 export const FM_MIN_SONGS = 3;
+
+/**
+ * How a track start is filed. A new find wins over a plain station pick.
+ * A dedication is a request the DJ was asked to introduce, not a station song.
+ */
+export function playLogKind(
+  track: { stationPick?: boolean },
+  about: { how: 'play' | 'catch' | 'new'; dedicated: boolean } | null,
+): PlayLogKind {
+  if (about?.how === 'new') return 'find';
+  if (track.stationPick) return 'fm';
+  if (about?.dedicated) return 'dedication';
+  return 'play';
+}
 
 /**
  * Kitchen FM: the server's own station. It plays the kitchen's songs (every
@@ -51,6 +71,33 @@ export class KitchenFm {
   /** The line book the DJ is speaking. Dedications use it for `{song}`. */
   get language(): DjLanguage {
     return this.config.dj.language;
+  }
+
+  /** English genre name for a song key, when the cache knows it. */
+  genreOf(songKey: string): string | undefined {
+    const id = this.genres.genreOf(songKey);
+    return id ? genreName(id, 'en') : undefined;
+  }
+
+  /**
+   * What the play log should store for a track that just started.
+   * The station's pool key wins when the show handed the track out.
+   */
+  describe(
+    guildId: string,
+    track: Track,
+  ): { key: string; kind: PlayLogKind; artist: string; title: string } {
+    const song = songFromTrack(track, { kind: 'play' });
+    const station = this.stations.get(guildId);
+    const about = station?.aboutTrack(track) ?? null;
+    const artist = (about?.artist.trim() ? about.artist : song.artist).slice(0, 200);
+    const title = (about?.title.trim() ? about.title : song.title).slice(0, 300);
+    return {
+      key: station?.keyOf(track) || song.key,
+      kind: playLogKind(track, about),
+      artist,
+      title,
+    };
   }
 
   isOn(guildId: string): boolean {
@@ -170,14 +217,15 @@ export class KitchenFm {
   /** 🔥 or 👎 on the song that is on. Returns the 🔥 count after the press. */
   async react(guildId: string, userId: string, track: Track, kind: ReactionKind): Promise<number> {
     const song = songFromTrack(track, { kind: 'play' });
+    const key = this.songKey(guildId, track);
     const result = await this.reactions.toggle(
       guildId,
       userId,
-      { songKey: song.key, url: track.url, title: song.title, artist: song.artist },
+      { songKey: key, url: track.url, title: song.title, artist: song.artist },
       kind,
     );
     if (result.firstFire) {
-      const known = await this.knows(guildId, song.key);
+      const known = await this.knows(guildId, key);
       const credit = playFromFire(track, userId, known, true);
       if (credit) await this.played.record(guildId, credit);
     }
@@ -186,9 +234,14 @@ export class KitchenFm {
 
   /** 🔥 on the song that is on, for the Now Playing card. */
   async fires(guildId: string, track: Track): Promise<number> {
-    const key = songFromTrack(track, { kind: 'play' }).key;
+    const key = this.songKey(guildId, track);
     if (!key || key === '|') return 0;
     return this.reactions.fires(guildId, key);
+  }
+
+  /** The station's pool key when it handed this track out, otherwise the track's own. */
+  private songKey(guildId: string, track: Track): string {
+    return reactionSongKey(track, this.stations.get(guildId)?.keyOf(track) ?? null);
   }
 
   /** End the show and leave voice. False when Kitchen FM was not on. */

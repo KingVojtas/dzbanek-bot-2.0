@@ -5,6 +5,13 @@ import type { Track, TrackSource } from '../../core/types';
 import { bufferStream } from '../buffer-stream';
 import { logger } from '../../core/logger';
 import { isBotCheck, ytDlpCookieFlags } from '../ytdlp-cookies';
+import {
+  DEFAULT_YOUTUBE_CLIENTS,
+  playerClientArg,
+  resolveYouTubeClients,
+  shouldWarnFallback,
+  type ClientTiming,
+} from '../youtube-clients';
 import { findSoundCloudStandIn } from './soundcloud';
 
 const YTDLP_CACHE = join(process.cwd(), 'data', 'yt-dlp-cache');
@@ -17,7 +24,10 @@ const RESOLVE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 /** A warm stream nobody claims is killed after this. */
 const WARM_TTL_MS = 30_000;
 /** "Me at the zoo": 19 s, never age-gated. The health check's test song. */
-const PROBE_URL = 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+export const PROBE_URL = 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+/** A normal music video, timed beside the health-check song. */
+export const CLIENT_BENCHMARK_SONG = 'https://www.youtube.com/watch?v=o_2t4TrXPvs';
+export const CLIENT_BENCHMARK_URLS = [PROBE_URL, CLIENT_BENCHMARK_SONG] as const;
 
 /** `watch?v=`, `youtu.be/`, `/shorts/`, `/live/`, `/embed/` → the 11-char id. */
 export function youTubeVideoId(input: string): string | null {
@@ -81,14 +91,19 @@ function resolveFlags(): Record<string, unknown> {
   };
 }
 
-/** Streaming: Deno + several clients so at least one format list is usable. */
-function streamFlags(): Record<string, unknown> {
-  return {
+/**
+ * Streaming flags. `clients` is the player_client list; blank uses today's.
+ * Null omits player_client so yt-dlp uses its own default.
+ */
+function streamFlags(clients?: string | null): Record<string, unknown> {
+  const flags: Record<string, unknown> = {
     ...baseFlags(),
     jsRuntimes: 'deno',
     remoteComponents: 'ejs:github',
-    extractorArgs: 'youtube:player_client=android_vr,tv_simply,mweb,web,web_embedded',
   };
+  const extractorArgs = playerClientArg(clients);
+  if (extractorArgs == null) return flags;
+  return { ...flags, extractorArgs };
 }
 
 /** yt-dlp's own `ERROR:` line (e.g. YouTube's bot check) rather than "exit code 1". */
@@ -107,6 +122,9 @@ interface SpawnedStream {
   /** Video id yt-dlp prints before it downloads, when asked. Null if it never says. */
   videoId: Promise<string | null>;
 }
+
+/** `clients` null omits player_client. */
+type OpenAudio = (url: string, printId: boolean, clients: string | null) => SpawnedStream;
 
 function pickThumbnail(info: YtDlpJson): string | undefined {
   if (info.thumbnail) return info.thumbnail;
@@ -211,6 +229,13 @@ function slim(info: YtDlpJson): YtDlpJson {
 }
 
 export class YouTubeSource implements TrackSource {
+  /** Player clients for new streams. Today's list when the setting is blank. */
+  private readonly clients: string;
+  private readonly openAudio: OpenAudio;
+  private readonly warn: (message: string) => void;
+  /** Last time the hourly fallback warning was logged. */
+  private lastFallbackWarn = -Infinity;
+
   /** Query or URL → slim metadata, oldest first (Map keeps insertion order). */
   private readonly resolved = new Map<string, { at: number; entries: YtDlpJson[] }>();
   private readonly warmed = new Map<string, WarmEntry>();
@@ -219,6 +244,12 @@ export class YouTubeSource implements TrackSource {
 
   /** Told when YouTube streams a song (true) or refuses with a bot check (false). */
   onYouTube: ((ok: boolean) => void) | null = null;
+
+  constructor(clients?: string | null, openAudio?: OpenAudio, warn?: (message: string) => void) {
+    this.clients = resolveYouTubeClients(clients);
+    this.openAudio = openAudio ?? openYouTubeStream;
+    this.warn = warn ?? ((message) => logger.warn(message));
+  }
 
   async resolve(input: string, requestedBy: string): Promise<Track[]> {
     const trimmed = input.trim();
@@ -324,7 +355,7 @@ export class YouTubeSource implements TrackSource {
       const standIn = await findSoundCloudStandIn(track).catch(() => null);
       if (!standIn) throw error;
       logger.warn(`YouTube bot check on "${track.title}" — playing ${standIn} instead.`);
-      const fallback = this.spawnStream(standIn);
+      const fallback = this.spawnStream(standIn, false, DEFAULT_YOUTUBE_CLIENTS);
       await fallback.ready;
       return fallback.audio;
     }
@@ -340,7 +371,7 @@ export class YouTubeSource implements TrackSource {
         getUrl: true,
         format: 'bestaudio/best',
         noPlaylist: true,
-        ...streamFlags(),
+        ...streamFlags(this.clients),
       } as Parameters<typeof youtubeDl>[1]);
       return null;
     } catch (err) {
@@ -365,16 +396,55 @@ export class YouTubeSource implements TrackSource {
     if (warm && !warm.stream.destroyed) {
       const printed = warm.expectId ? await warm.expectId : id;
       if (printed === id) {
-        // yt-dlp's own error (a bot check) goes to stream(), which tries SoundCloud.
-        await warm.ready;
-        if (!warm.stream.destroyed) return warm.stream;
+        // A failed warm download errors the buffer. Hold that until `ready` rejects,
+        // or it escapes as an uncaught error before the fallback can run.
+        const ignoreError = () => {};
+        warm.stream.once('error', ignoreError);
+        try {
+          // A bot check rejects ready and still reaches stream(), which tries SoundCloud.
+          await warm.ready;
+          warm.stream.removeListener('error', ignoreError);
+          if (!warm.stream.destroyed) return warm.stream;
+        } catch (error) {
+          warm.stream.removeListener('error', ignoreError);
+          if (!warm.stream.destroyed) warm.stream.destroy();
+          return this.retryOrThrow(track, error);
+        }
       } else {
         warm.stream.destroy();
       }
     }
-    const fresh = this.spawnStream(track.url);
-    await fresh.ready;
-    return fresh.audio;
+    try {
+      return await this.playFresh(track.url);
+    } catch (error) {
+      return this.retryOrThrow(track, error);
+    }
+  }
+
+  /**
+   * The configured list failed. One retry with today's list, unless this
+   * already is that list or YouTube asked for a sign-in.
+   */
+  private async retryOrThrow(track: Track, error: unknown): Promise<Readable> {
+    const message = error instanceof Error ? error.message : String(error);
+    if (this.clients === DEFAULT_YOUTUBE_CLIENTS || isBotCheck(message)) {
+      throw error instanceof Error ? error : new Error(message);
+    }
+    this.noteFallback(track.title);
+    return this.playFresh(track.url, DEFAULT_YOUTUBE_CLIENTS);
+  }
+
+  private noteFallback(title: string): void {
+    const now = Date.now();
+    if (!shouldWarnFallback(this.lastFallbackWarn, now)) return;
+    this.lastFallbackWarn = now;
+    this.warn(`YouTube clients "${this.clients}" failed for "${title}"; used the default list.`);
+  }
+
+  private async playFresh(url: string, clients?: string): Promise<Readable> {
+    const spawned = this.spawnStream(url, false, clients);
+    await spawned.ready;
+    return spawned.audio;
   }
 
   /** Move a search download onto its video id, or drop it when the search missed. */
@@ -443,81 +513,116 @@ export class YouTubeSource implements TrackSource {
   }
 
   /**
-   * yt-dlp's audio on a stream. When YouTube refuses (bot check), stdout just
+   * yt-dlp's audio on a stream. `clients` defaults to the configured list;
+   * null omits player_client. When YouTube refuses (bot check), stdout just
    * ends empty, so `ready` waits for real bytes and otherwise carries the error.
    */
-  private spawnStream(url: string, printId = false): SpawnedStream {
-    const subprocess = youtubeDl.exec(
-      url,
-      {
-        output: '-',
-        format: 'bestaudio/best',
-        noPlaylist: true,
-        quiet: true,
-        // The id is printed on stderr. Audio stays on stdout (`-o -`).
-        ...(printId ? { print: 'before_dl:%(id)s', noSimulate: true } : {}),
-        ...streamFlags(),
-      } as Parameters<typeof youtubeDl.exec>[1],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-
-    const stdout = subprocess.stdout;
-    if (!stdout) {
-      throw new Error('yt-dlp produced no audio stream.');
-    }
-
-    let started = (): void => {};
-    let failed = (_error: Error): void => {};
-    const ready = new Promise<void>((resolve, reject) => {
-      started = resolve;
-      failed = reject;
-    });
-    // A warm stream nobody claims has nobody awaiting it.
-    ready.catch(() => {});
-
-    // Passes audio through untouched; the first chunk marks the stream as live.
-    const audio = new Transform({
-      transform(chunk: Buffer, _encoding, done) {
-        started();
-        done(null, chunk);
-      },
-    });
-    stdout.pipe(audio);
-
-    // youtube-dl-exec's ChildProcess is also a Promise that rejects on non-zero
-    // exit — swallow that so it becomes a stream error instead of a crash. Its
-    // error carries yt-dlp's stderr as a string.
-    Promise.resolve(subprocess).then(
-      () => failed(new Error('yt-dlp produced no audio.')),
-      (err: unknown) => {
-        const stderr = (err as { stderr?: unknown }).stderr;
-        const error = ytDlpError(
-          typeof stderr === 'string' ? stderr : '',
-          err instanceof Error ? err.message : String(err),
-        );
-        failed(error);
-        if (!audio.destroyed) audio.destroy(error);
-      },
-    );
-
-    // Destroying the audio (skip, shuffle) must also end yt-dlp.
-    const kill = () => {
-      try {
-        subprocess.kill();
-      } catch {
-        /* already dead */
-      }
-      if (!stdout.destroyed) stdout.destroy();
-    };
-    audio.once('close', kill);
-    audio.once('error', kill);
-
-    const videoId = printId ? printedVideoId(subprocess.stderr, ready) : Promise.resolve(null);
-    // Drain stderr so a full pipe cannot stall yt-dlp. The id listener is already on.
-    subprocess.stderr?.resume();
-
-    return { audio, ready, videoId };
+  private spawnStream(url: string, printId = false, clients?: string | null): SpawnedStream {
+    return this.openAudio(url, printId, clients === undefined ? this.clients : clients);
   }
+}
+
+/**
+ * Time until the first audio bytes, then destroy the stream.
+ * Its close handler kills yt-dlp. Null `clients` omits player_client.
+ */
+export async function timeYouTubeClient(
+  url: string,
+  clients: string | null,
+  open: OpenAudio = openYouTubeStream,
+): Promise<ClientTiming> {
+  const started = Date.now();
+  let opened: SpawnedStream | undefined;
+  try {
+    opened = open(url, false, clients);
+    await opened.ready;
+    return { ok: true, seconds: (Date.now() - started) / 1000 };
+  } catch (error) {
+    return {
+      ok: false,
+      seconds: (Date.now() - started) / 1000,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    if (opened && !opened.audio.destroyed) opened.audio.destroy();
+  }
+}
+
+/**
+ * yt-dlp's audio on a stream. When YouTube refuses (bot check), stdout just
+ * ends empty, so `ready` waits for real bytes and otherwise carries the error.
+ */
+function openYouTubeStream(url: string, printId: boolean, clients: string | null): SpawnedStream {
+  const subprocess = youtubeDl.exec(
+    url,
+    {
+      output: '-',
+      format: 'bestaudio/best',
+      noPlaylist: true,
+      quiet: true,
+      // The id is printed on stderr. Audio stays on stdout (`-o -`).
+      ...(printId ? { print: 'before_dl:%(id)s', noSimulate: true } : {}),
+      ...streamFlags(clients),
+    } as Parameters<typeof youtubeDl.exec>[1],
+    { stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+
+  const stdout = subprocess.stdout;
+  if (!stdout) {
+    throw new Error('yt-dlp produced no audio stream.');
+  }
+
+  let started = (): void => {};
+  let failed = (_error: Error): void => {};
+  const ready = new Promise<void>((resolve, reject) => {
+    started = resolve;
+    failed = reject;
+  });
+  // A warm stream nobody claims has nobody awaiting it.
+  ready.catch(() => {});
+
+  // Passes audio through untouched; the first chunk marks the stream as live.
+  const audio = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      started();
+      done(null, chunk);
+    },
+  });
+  stdout.pipe(audio);
+
+  // youtube-dl-exec's ChildProcess is also a Promise that rejects on non-zero
+  // exit — swallow that so it becomes a stream error instead of a crash. Its
+  // error carries yt-dlp's stderr as a string.
+  Promise.resolve(subprocess).then(
+    () => failed(new Error('yt-dlp produced no audio.')),
+    (err: unknown) => {
+      const stderr = (err as { stderr?: unknown }).stderr;
+      const error = ytDlpError(
+        typeof stderr === 'string' ? stderr : '',
+        err instanceof Error ? err.message : String(err),
+      );
+      failed(error);
+      if (!audio.destroyed) audio.destroy(error);
+    },
+  );
+
+  // Destroying the audio (skip, shuffle) must also end yt-dlp.
+  const kill = () => {
+    try {
+      subprocess.kill();
+    } catch {
+      /* already dead */
+    }
+    if (!stdout.destroyed) stdout.destroy();
+  };
+  audio.once('close', kill);
+  audio.once('error', kill);
+
+  const videoId = printId ? printedVideoId(subprocess.stderr, ready) : Promise.resolve(null);
+  // Drain stderr so a full pipe cannot stall yt-dlp. The id listener is already on.
+  subprocess.stderr?.resume();
+
+  return { audio, ready, videoId };
 }
 
 interface WarmEntry {

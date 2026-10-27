@@ -92,6 +92,10 @@ export function buildKitchenChartDisplay(view: {
   night?: ChartNight;
   /** The week's Kitchen Quiz champion, by points over every game. */
   quiz?: { name: string; score: number; games: number };
+  /** Top of the week, and up to two runners-up. Left out when nobody scored. */
+  chef?: { name: string; points: number; runners: { name: string; points: number }[] };
+  /** The song with the most 🔥, and who brought it when we know. */
+  songOfWeek?: { title: string; artist: string; by?: string };
 }): KitchenDisplay {
   const files = new KitchenFiles();
   const container = new ContainerBuilder().setAccentColor(KITCHEN_COLOR);
@@ -151,6 +155,31 @@ export function buildKitchenChartDisplay(view: {
       );
   }
 
+  if (view.chef) {
+    const lines = [
+      '### 👑 Chef of the week',
+      `👑 **${plain(view.chef.name, 40)}** · ${pointsLabel(view.chef.points)}`,
+    ];
+    if (view.chef.runners.length > 0) {
+      lines.push(
+        `-# ${view.chef.runners.map((row) => `${plain(row.name, 32)} · ${pointsLabel(row.points)}`).join(' · ')}`,
+      );
+    }
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(text(lines));
+  }
+
+  if (view.songOfWeek) {
+    const song = view.songOfWeek;
+    const artist = plain(song.artist, 60);
+    const title = `**${plain(song.title, 80)}**${artist ? ` — ${artist}` : ''}`;
+    const by = song.by ? ` · brought in by **${plain(song.by, 80)}**` : '';
+    container
+      .addSeparatorComponents(new SeparatorBuilder().setDivider(true))
+      .addTextDisplayComponents(text(['### 🔥 Song of the week', `${title}${by}`]));
+  }
+
   container.addTextDisplayComponents(text(['-# 🍪 The Kitchen · see you next week']));
   return { components: [container], flags: MessageFlags.IsComponentsV2, files: files.list() };
 }
@@ -185,6 +214,10 @@ export async function radioNightPlayedStation(
   if (!row) return null;
   const stationId = row.itemId.slice(fridayKey.length + 1);
   return stationId || null;
+}
+
+function pointsLabel(points: number): string {
+  return points === 1 ? '1 pt' : `${points} pts`;
 }
 
 function formatNames(names: string[]): string {

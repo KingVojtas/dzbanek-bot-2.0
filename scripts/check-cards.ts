@@ -1,7 +1,7 @@
 /**
  * Serializes every card the bot posts. Music and radio are classic embeds:
  * Discord rejects an embed past its text limits and a row with more than five
- * buttons. The Kitchen Board, Steam, Epic, the Sunday postcard, and /help are
+ * buttons. The Kitchen Board, Steam, Epic, the Sunday postcard, Kitchen Wrapped, and /help are
  * Components V2: a section without a thumbnail or button throws, and a message
  * may hold at most 40 components and 4000 characters of text.
  */
@@ -31,6 +31,7 @@ import {
 import {
   V2_COMPONENT_MAX,
   V2_TEXT_MAX,
+  countV2Components,
   v2TextLength,
   type V2Display,
 } from '../src/core/display/v2';
@@ -71,6 +72,7 @@ import {
   type WishlistScan,
 } from '../src/deals/steam/WishlistRadar';
 import { buildKitchenChartDisplay } from '../src/kitchen/chart';
+import { buildKitchenWrappedDisplay, type KitchenWrappedView } from '../src/kitchen/wrapped';
 import {
   KITCHEN_BUTTON_SUFFIX,
   buildKitchenBoardDisplay,
@@ -204,6 +206,7 @@ function checkV2(
   name: string,
   build: () => V2Display & { files?: unknown[] },
   wants: string[] = [],
+  maxComponents = V2_COMPONENT_MAX,
 ): string {
   let display: V2Display;
   try {
@@ -219,7 +222,13 @@ function checkV2(
   const chars = v2TextLength(display.components);
   const problems: string[] = [];
   if (display.flags !== MessageFlags.IsComponentsV2) problems.push('not flagged as Components V2');
-  if (nodes.length > V2_COMPONENT_MAX) problems.push(`${nodes.length} components (max 40)`);
+  if (nodes.length > maxComponents) {
+    const cap =
+      maxComponents === V2_COMPONENT_MAX
+        ? `max ${V2_COMPONENT_MAX}`
+        : `${V2_COMPONENT_MAX - nodes.length} free, need ${V2_COMPONENT_MAX - maxComponents}`;
+    problems.push(`${nodes.length} components (${cap})`);
+  }
   if (chars > V2_TEXT_MAX) problems.push(`${chars} characters of text (max ${V2_TEXT_MAX})`);
   const bare = nodes.filter(
     (node) =>
@@ -466,6 +475,7 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
           by: 'Vojta',
           stationName: 'Kiss Radio',
         },
+        chef: { name: 'Vojta', points: 12 },
         stereo: {
           kind: 'radio',
           title: 'Song',
@@ -491,6 +501,7 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
       '+9 more in <#123>',
       'Cocoon',
       '🍪 **3** cookies out of the jar today',
+      '👑 **Vojta** is chef of the week so far · 12 pts',
       '🌙 Radio Night · voting closes <t:1900000000:R>',
       '**5** 👑',
       '🎣 LATEST CATCH · off Kiss Radio',
@@ -504,9 +515,24 @@ function review(scoreDesc: string, score: number): SteamReviewInfo {
       'radio:catch',
       'cover.jpg',
     ],
+    V2_COMPONENT_MAX - 6,
   );
   if (!json.includes('▰')) fail('kitchen-tally', 'the vote has no tally bars');
   else ok('kitchen-tally', 'the vote draws a tally');
+  const chefNodes = countV2Components(
+    buildKitchenBoardDisplay({
+      ...rockView(),
+      joinsToday: 3,
+      chef: { name: 'Vojta', points: 12 },
+    }).components,
+  );
+  const plainNodes = countV2Components(
+    buildKitchenBoardDisplay({ ...rockView(), joinsToday: 3 }).components,
+  );
+  if (chefNodes !== plainNodes) {
+    fail('kitchen-chef-components', `chef line added a component (${plainNodes} → ${chefNodes})`);
+  } else
+    ok('kitchen-chef-components', 'the chef line stays inside the text that was already there');
   if (json.includes('Radio Night** · Friday 20:00')) {
     fail('kitchen-night-twice', 'Radio Night is listed twice while the vote is open');
   } else ok('kitchen-night-twice', 'the open vote replaces the Radio Night line');
@@ -541,12 +567,26 @@ if (!looksLikeKitchenBoard('**Quiet** · The Kitchen\n### Oven’s off\n-# Jar�
       counts: { kiss: 1, rock: 4, beat: 2, frekvence1: 0, heart: 3, capital: 1, paradise: 0 },
       winnerName: 'Rock Radio',
     },
+    chef: {
+      name: 'Vojta',
+      points: 12,
+      runners: [
+        { name: 'Anna', points: 8 },
+        { name: 'Petr', points: 5 },
+      ],
+    },
+    songOfWeek: { title: 'Numb', artist: 'Linkin Park', by: 'Anna' },
   });
   checkV2('kitchen-postcard', () => postcard, [
     '📬 The week in the kitchen',
     '🥇 **Song** — Artist',
     'caught 2×',
     '🏆 **Rock Radio** took the night',
+    '### 👑 Chef of the week',
+    '👑 **Vojta** · 12 pts',
+    'Anna · 8 pts · Petr · 5 pts',
+    '### 🔥 Song of the week',
+    '**Numb** — Linkin Park · brought in by **Anna**',
     'attachment://kitchen-hero.jpg',
   ]);
   const empty = buildKitchenChartDisplay({ weekLabel: '19–25 Oct', songs: [] });
@@ -556,6 +596,9 @@ if (!looksLikeKitchenBoard('**Quiet** · The Kitchen\n### Oven’s off\n-# Jar�
   ) {
     fail('kitchen-chart', 'the Sunday postcard matched the living board');
   } else ok('kitchen-chart', 'the Sunday postcard stays separate');
+  if (v2MessageText(empty).includes('Chef of the week')) {
+    fail('kitchen-chef-empty', 'an empty week still crowned a chef');
+  } else ok('kitchen-chef-empty', 'no chef, no crown');
 }
 
 {
@@ -578,6 +621,107 @@ if (!looksLikeKitchenBoard('**Quiet** · The Kitchen\n### Oven’s off\n-# Jar�
   if (kitchenViewKey(rockView()) !== kitchenViewKey(rockView())) {
     fail('kitchen-key-stable', 'the same view produced two keys');
   } else ok('kitchen-key-stable', 'the same view keeps one key');
+
+  const quiet = quietView();
+  if (kitchenViewKey(quiet) === kitchenViewKey({ ...quiet, chef: { name: 'Vojta', points: 12 } })) {
+    fail('kitchen-key-chef', 'a new chef would not redraw the board');
+  } else ok('kitchen-key-chef', 'a new chef redraws the board');
+}
+
+/* ---------- Kitchen Wrapped ---------- */
+
+{
+  const full: KitchenWrappedView = {
+    label: 'October 2026',
+    yearly: false,
+    songs: 128,
+    durationSec: 18 * 3600,
+    topSongs: [
+      { title: 'Numb', artist: 'Linkin Park', plays: 6 },
+      { title: 'Song Two', artist: 'Artist Two', plays: 5 },
+      { title: 'Song Three', artist: 'Artist Three', plays: 4 },
+      { title: 'Song Four', artist: 'Artist Four', plays: 3 },
+      { title: 'Song Five', artist: 'Artist Five', plays: 2 },
+    ],
+    people: [
+      { name: 'Vojta', songs: 14 },
+      { name: 'Anna', songs: 9 },
+      { name: 'Petr', songs: 4 },
+    ],
+    genre: { name: 'Czech rap', share: 42 },
+    fire: { title: 'Numb', artist: 'Linkin Park', fires: 6 },
+    quiz: { name: 'Vojta', score: 1240, games: 3 },
+    station: { name: 'Radio Beat', catches: 8 },
+    finds: { count: 2, songs: [{ title: 'New Song', artist: 'New Artist' }] },
+  };
+  const month = buildKitchenWrappedDisplay(full);
+  checkV2('kitchen-wrapped-month', () => month, [
+    '## 🎁 Kitchen Wrapped · October 2026',
+    '**128 songs** · **18 hours** of music',
+    '🥇 **Numb** — Linkin Park · 6 plays',
+    '5. **Song Five** — Artist Five · 2 plays',
+    '🥇 **Vojta** · 14 songs',
+    '**Czech rap** · 42% of plays with a genre',
+    '**Numb** — Linkin Park · 6 🔥',
+    '1,240 points over 3 games',
+    '**Radio Beat** · 8 catches',
+    '**2 new finds stayed**',
+    '**New Song** — New Artist',
+    'See you next month',
+    'attachment://kitchen-hero.jpg',
+  ]);
+
+  const since = buildKitchenWrappedDisplay({
+    ...full,
+    since: '27 October',
+    topSongs: full.topSongs.slice(0, 1),
+    people: full.people.slice(0, 1),
+    finds: undefined,
+    genre: undefined,
+  });
+  checkV2('kitchen-wrapped-since', () => since, [
+    '## 🎁 Kitchen Wrapped · October 2026',
+    '-# since 27 October',
+    '**128 songs** · **18 hours** of music',
+  ]);
+
+  const quiet = buildKitchenWrappedDisplay({
+    label: 'October 2026',
+    yearly: false,
+    songs: 0,
+    durationSec: 0,
+    topSongs: [],
+    people: [],
+    genre: { name: 'Czech rap', share: 100 },
+  });
+  const quietText = checkV2('kitchen-wrapped-empty', () => quiet, [
+    '## 🎁 Kitchen Wrapped · October 2026',
+    'A quiet month. Nobody played a song, so there is nothing to wrap.',
+    'attachment://kitchen-hero.jpg',
+  ]);
+  if (quietText.includes('Czech rap') || quietText.includes('On repeat')) {
+    fail('kitchen-wrapped-empty-sections', 'an empty month still drew sections');
+  } else ok('kitchen-wrapped-empty-sections', 'an empty month is one line');
+
+  const year = buildKitchenWrappedDisplay({
+    label: '2026',
+    yearly: true,
+    since: '27 October 2025',
+    songs: 400,
+    durationSec: 90 * 3600,
+    topSongs: [{ title: 'Numb', artist: 'Linkin Park', plays: 20 }],
+    people: [{ name: 'Vojta', songs: 40 }],
+  });
+  checkV2('kitchen-wrapped-year', () => year, [
+    '## 🎁 Kitchen Wrapped · 2026',
+    '-# since 27 October 2025',
+    '**400 songs** · **90 hours** of music',
+    'See you next year',
+  ]);
+
+  if ([month, since, quiet, year].some((card) => looksLikeKitchenBoard(v2MessageText(card)))) {
+    fail('kitchen-wrapped-board', 'Wrapped matched the living board');
+  } else ok('kitchen-wrapped-board', 'Wrapped stays off the living board');
 }
 
 /* ---------- Steam ---------- */

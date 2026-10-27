@@ -16,7 +16,7 @@ import { buildNowPlayingDisplay } from '../core/display/music';
 import { upcomingQueue, type EmbedCard } from '../core/embeds';
 import type { Logger } from '../core/logger';
 import type { LoopMode, PlayerStation, StationIntro, Track, TrackSource } from '../core/types';
-import { afterTrackEnds, pushHistory, takeNext } from './queue-rules';
+import { afterTrackEnds, earlyEndWarning, pushHistory, takeNext } from './queue-rules';
 
 const VOLUME_MIN = 0.25;
 const VOLUME_MAX = 1.5;
@@ -29,6 +29,8 @@ const INTRO_WAIT_MS = 12_000;
 const INTRO_MAX_MS = 60_000;
 /** Station picks that fail in a row before the show stops trying (YouTube is down). */
 const STATION_MISSES = 3;
+/** Whole song, so yt-dlp exits and closes YouTube. Songs are 3–8 MB; a 12-minute cap stays under 16 MB. */
+const PREFETCH_BYTES = 16 * 1024 * 1024;
 
 /**
  * Owns the voice connection, audio player, and queue for a single guild.
@@ -77,6 +79,8 @@ export class GuildPlayer {
   private idleAdvanceScheduled = false;
   /** URL already retried once after ending instantly. */
   private retriedUrl: string | null = null;
+  /** The current track's bytes came from the prefetch. */
+  private currentPrefetched = false;
   /** Set by previous(): the finished track is already back in the queue. */
   private goingBack = false;
   private volume = 1;
@@ -479,14 +483,18 @@ export class GuildPlayer {
     if (this.player.state.status !== AudioPlayerStatus.Idle) return;
 
     const finished = this.current;
-    const next = afterTrackEnds({
+    const playedMs = this.currentResource?.playbackDuration ?? 0;
+    const end = {
       finished,
-      playedMs: this.currentResource?.playbackDuration ?? 0,
+      playedMs,
       skipRequested: this.skipRequested,
       goingBack: this.goingBack,
       loopMode: this.loopMode,
       retriedUrl: this.retriedUrl,
-    });
+    };
+    const early = earlyEndWarning({ ...end, prefetched: this.currentPrefetched, stopped: false });
+    if (early) this.logger.warn(early);
+    const next = afterTrackEnds(end);
 
     if (finished && next === 'retry') {
       this.retriedUrl = finished.url;
@@ -565,6 +573,7 @@ export class GuildPlayer {
     this.lastError = null;
     this.current = track;
     this.djLine = null;
+    this.currentPrefetched = false;
     this.firesGeneration += 1;
     this.fireCount = 0;
     this.firesTouched = false;
@@ -577,6 +586,7 @@ export class GuildPlayer {
       const streamStarted = Date.now();
       let prefetchedHit = false;
       let streamReadyMs = 0;
+      let streamFailed = false;
       const opening = this.openStream(track, gen).then(async (opened) => {
         if (!opened) return null;
         prefetchedHit = opened.prefetched;
@@ -588,12 +598,18 @@ export class GuildPlayer {
         }
         return probed;
       });
-      opening.catch(() => {});
+      opening.catch(() => {
+        streamFailed = true;
+      });
       const intro = await this.stationIntro(track, previous);
-      if (intro) {
+      // A song that already failed keeps its dedication for the next one (`missed` below).
+      if (intro && !streamFailed) {
         this.djLine = intro.text;
         if (!this.destroyed) void this.publishFreshNowPlaying(track).catch(() => {});
-        if (intro.pcm) await this.playIntro(intro.pcm, gen);
+        if (intro.pcm) {
+          this.station?.spoke?.(track);
+          await this.playIntro(intro.pcm, gen);
+        }
       }
       if (this.destroyed || gen !== this.playGeneration) {
         void opening.then(
@@ -603,7 +619,10 @@ export class GuildPlayer {
         return false;
       }
       const probed = await opening;
-      if (!probed) return false;
+      if (!probed) {
+        if (!this.destroyed && gen === this.playGeneration) this.station?.missed?.(track);
+        return false;
+      }
 
       const resource = createAudioResource(probed.stream, {
         inputType: probed.type,
@@ -612,6 +631,7 @@ export class GuildPlayer {
       resource.volume?.setVolume(this.volume);
       this.current = track;
       this.currentResource = resource;
+      this.currentPrefetched = prefetchedHit;
       this.player.play(resource);
       const readySec = (streamReadyMs / 1000).toFixed(1);
       const via = prefetchedHit ? ', prefetched' : '';
@@ -631,6 +651,7 @@ export class GuildPlayer {
       this.warmStation(track);
       return true;
     } catch (error) {
+      if (!this.destroyed && gen === this.playGeneration) this.station?.missed?.(track);
       const lastMsg = error instanceof Error ? error.message : String(error);
       this.lastError = lastMsg;
       this.current = null;
@@ -796,7 +817,7 @@ export class GuildPlayer {
           return;
         }
         // Destroying the buffer (skip, shuffle) also ends yt-dlp.
-        slot.stream = bufferStream(raw);
+        slot.stream = bufferStream(raw, PREFETCH_BYTES);
       })
       .catch(() => {
         if (this.prefetched === slot) this.prefetched = null;

@@ -1,7 +1,16 @@
 import type { Track } from '../core/types';
 import { prisma } from '../db/client';
+import { songFromTrack } from '../quiz/songs';
 
 export type ReactionKind = 'fire' | 'nope';
+
+/**
+ * The key a 🔥 or 👎 is stored under. A station pick keeps the pool key
+ * (a catch's key, not the YouTube title). Anything else uses the track.
+ */
+export function reactionSongKey(track: Track, remembered: string | null): string {
+  return remembered || songFromTrack(track, { kind: 'play' }).key;
+}
 
 export interface ReactionSong {
   songKey: string;
@@ -160,6 +169,22 @@ export class SongReactionStore {
 
   async fires(guildId: string, songKey: string): Promise<number> {
     return prisma.songReaction.count({ where: { guildId, songKey, kind: 'fire' } });
+  }
+
+  /** Reactions created in the window, oldest first. */
+  async between(
+    guildId: string,
+    from: Date,
+    to: Date,
+  ): Promise<Array<ReactionRow & { createdAt: Date }>> {
+    const rows = await prisma.songReaction.findMany({
+      where: { guildId, createdAt: { gte: from, lte: to } },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.flatMap((row) => {
+      const mapped = toRow(row);
+      return mapped ? [{ ...mapped, createdAt: row.createdAt }] : [];
+    });
   }
 
   async tally(guildId: string): Promise<ReactionTally> {

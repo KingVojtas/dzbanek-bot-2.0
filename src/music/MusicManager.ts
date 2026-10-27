@@ -12,6 +12,8 @@ import type { Logger } from '../core/logger';
 import type { Track } from '../core/types';
 import { GuildPlayer } from './GuildPlayer';
 import { CompositeTrackSource } from './sources';
+import { CLIENT_BENCHMARK_URLS, timeYouTubeClient } from './sources/youtube';
+import { BENCHMARK_DELAY_MS, pause, runYouTubeClientBenchmark } from './youtube-clients';
 import { YouTubeHealth, type YouTubeAlert } from './youtube-health';
 import { ensureYtDlpCookies } from './ytdlp-cookies';
 
@@ -21,7 +23,7 @@ const JOIN_TIMEOUT_MS = 20_000;
 export class MusicManager {
   private readonly subscriptions = new Map<string, GuildPlayer>();
   private readonly pendingJoins = new Map<string, Promise<GuildPlayer>>();
-  private readonly source = new CompositeTrackSource();
+  private readonly source: CompositeTrackSource;
   private preemptRadio: ((guildId: string) => void) | null = null;
   private onQueueIdle: ((guildId: string, channelId: string) => void) | null = null;
   private onTrackStart: ((guildId: string, track: Track) => void) | null = null;
@@ -34,6 +36,7 @@ export class MusicManager {
     private readonly config: Config,
     private readonly logger: Logger,
   ) {
+    this.source = new CompositeTrackSource(config.music.youtubeClients);
     ensureYtDlpCookies(this.logger);
     this.firstUpdate = this.updateYtDlp();
     this.youtubeHealth = new YouTubeHealth(() => this.source.youtube.probe(), this.logger);
@@ -48,10 +51,34 @@ export class MusicManager {
     this.youtubeHealth.setAlert(fn);
   }
 
-  /** Probe YouTube once the startup yt-dlp update is through. */
-  async checkYouTube(): Promise<void> {
+  /** Probe YouTube once the startup yt-dlp update is through. True when it played. */
+  async checkYouTube(): Promise<boolean> {
     await this.firstUpdate;
-    await this.youtubeHealth.check();
+    return this.youtubeHealth.check();
+  }
+
+  /**
+   * Time client lists once, 30 s after a YouTube check that passed.
+   * No-op unless `music.clientBenchmark` is set. `signal` stops it between runs.
+   */
+  benchmarkYouTubeClients(signal: AbortSignal): void {
+    if (!this.config.music.clientBenchmark) return;
+    void this.runClientBenchmark(signal);
+  }
+
+  private async runClientBenchmark(signal: AbortSignal): Promise<void> {
+    await pause(BENCHMARK_DELAY_MS, signal);
+    if (signal.aborted) return;
+    try {
+      await runYouTubeClientBenchmark({
+        signal,
+        log: this.logger,
+        urls: CLIENT_BENCHMARK_URLS,
+        spawn: ({ url, clients }) => timeYouTubeClient(url, clients),
+      });
+    } catch (error) {
+      this.logger.warn('YouTube client benchmark failed:', error);
+    }
   }
 
   /**

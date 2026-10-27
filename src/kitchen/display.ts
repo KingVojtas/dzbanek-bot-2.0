@@ -114,6 +114,8 @@ export interface KitchenBoardView {
     coverUrl?: string;
     stationName?: string;
   };
+  /** Who leads the chart week so far. Left out until someone has points. */
+  chef?: { name: string; points: number };
 }
 
 export const CATCH_PLAY_PREFIX = 'kitchen:catch-play';
@@ -123,7 +125,7 @@ export interface KitchenDisplay extends V2Display {
 }
 
 /** Bump when the layout changes so every board redraws once. */
-const BOARD_LAYOUT = 'cards-thanks';
+const BOARD_LAYOUT = 'cards-room';
 
 /** Pads the tally labels so the bars line up. */
 export const VOTE_NAME_WIDTH = Math.max(...STATION_LIST.map((station) => station.voteName.length));
@@ -275,7 +277,7 @@ function radioStereo(view: KitchenBoardView): ContainerBuilder {
         .setURL(stereo.websiteUrl),
     );
   }
-  container.addSeparatorComponents(divider()).addActionRowComponents(row(...buttons));
+  container.addActionRowComponents(row(...buttons));
   return container;
 }
 
@@ -401,7 +403,6 @@ function pantryCard(view: KitchenBoardView): ContainerBuilder {
   } else {
     container.addTextDisplayComponents(textBlock(['-# 💸 Steam · the shelf is clear']));
   }
-  container.addSeparatorComponents(divider());
   if (view.epic) {
     addArtBlock(container, teaserLines(view.epic), view.epic.image, view.epic.title);
   } else {
@@ -464,46 +465,47 @@ function roomStatus(view: KitchenBoardView): string[] {
       `🌙 **Radio Night** · ${RADIO_NIGHT_LABEL} · ${plain(view.radioNight.stationName, 40)}${where}`,
     );
   }
+  if (view.chef && view.chef.points > 0 && view.chef.name.trim()) {
+    const pts = view.chef.points === 1 ? '1 pt' : `${view.chef.points} pts`;
+    lines.push(`👑 **${plain(view.chef.name, 32)}** is chef of the week so far · ${pts}`);
+  }
   return lines;
 }
 
-/** Bottom card. Left out when nobody caught a song, voted, joined, or set Radio Night. */
+/** Bottom card. Left out when the room has no catch, vote, cookies, chef, or Radio Night. */
 function roomCard(view: KitchenBoardView, files: KitchenFiles): ContainerBuilder | null {
   const status = roomStatus(view);
   if (!view.latestCatch && !view.radioVote && status.length === 0) return null;
   const container = new ContainerBuilder().setAccentColor(KITCHEN_COLOR);
-  let filled = false;
 
   if (view.latestCatch) {
     const caught = view.latestCatch;
     const title = plain(caught.title, 100);
     const artist = plain(caught.artist, 80);
     const station = caught.stationName ? ` · off ${plain(caught.stationName, 30)}` : '';
+    const lines = [
+      `-# 🎣 LATEST CATCH${station}`,
+      `### ${title}`,
+      artist && artist !== title ? `*${artist}*` : '',
+      `-# caught by **${plain(caught.by, 32)}** · only they can press Play`,
+    ];
+    // A blank line where the divider between the catch and these lines was.
+    if (status.length > 0) lines.push(`\n${status.join('\n')}`);
     addArtBlock(
       container,
-      [
-        `-# 🎣 LATEST CATCH${station}`,
-        `### ${title}`,
-        artist && artist !== title ? `*${artist}*` : '',
-        `-# caught by **${plain(caught.by, 32)}** · only they can press Play`,
-      ],
+      lines,
       caught.coverUrl ?? files.url(THUMB_FILE),
       artist ? `${artist} — ${title}` : title,
     );
     container.addActionRowComponents(
       row(button(CATCH_PLAY_PREFIX, 'Play it', '▶️', ButtonStyle.Primary)),
     );
-    filled = true;
-  }
-
-  if (status.length > 0) {
-    if (filled) container.addSeparatorComponents(divider());
+  } else if (status.length > 0) {
     container.addTextDisplayComponents(textBlock(status));
-    filled = true;
   }
 
   if (view.radioVote) {
-    if (filled) container.addSeparatorComponents(divider());
+    // The vote heading is the break. A divider here put the full board over the cap.
     container.addTextDisplayComponents(textBlock(voteLines(view.radioVote)));
     container.addActionRowComponents(...voteButtons(view.radioVote.counts));
   }

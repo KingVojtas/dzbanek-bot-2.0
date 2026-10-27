@@ -100,6 +100,24 @@ model PlayedTrack {
   @@index([guildId, playedAt])
 }
 
+/// One row every time a track starts. Repeats stay, so counts and hours survive.
+model PlayLog {
+  id            Int      @id @default(autoincrement())
+  guildId       String
+  url           String
+  title         String
+  artist        String   @default("")
+  songKey       String
+  requestedById String?
+  /// `play`, `fm`, `find`, or `dedication`.
+  kind          String
+  durationSec   Int      @default(0)
+  playedAt      DateTime @default(now())
+
+  @@index([guildId, playedAt])
+  @@index([guildId, songKey])
+}
+
 /// One player's result in one Kitchen Quiz game.
 model QuizScore {
   id       Int      @id @default(autoincrement())

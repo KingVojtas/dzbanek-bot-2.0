@@ -28,8 +28,8 @@ function setup(answers: (string | null)[]) {
 describe('YouTubeHealth', () => {
   it('DMs once when the sign-in runs out, not on every check after', async () => {
     const { health, sent } = setup([BOT_CHECK]);
-    await health.check();
-    await health.check();
+    assert.equal(await health.check(), false);
+    assert.equal(await health.check(), false);
     assert.equal(health.state, 'blocked');
     assert.equal(sent.length, 1);
     assert.match(sent[0], /fresh sign-in/);
@@ -38,8 +38,8 @@ describe('YouTubeHealth', () => {
 
   it('DMs again when YouTube works, whether a check or a song says so', async () => {
     const viaCheck = setup([BOT_CHECK, null]);
-    await viaCheck.health.check();
-    await viaCheck.health.check();
+    assert.equal(await viaCheck.health.check(), false);
+    assert.equal(await viaCheck.health.check(), true);
     assert.equal(viaCheck.health.state, 'ok');
     assert.equal(viaCheck.sent.length, 2);
     assert.match(viaCheck.sent[0], /fresh sign-in/);
@@ -55,7 +55,7 @@ describe('YouTubeHealth', () => {
   it('sends nothing when a song is blocked but the test song plays', async () => {
     const { health, sent } = setup([null]);
     health.suspect();
-    await health.check();
+    assert.equal(await health.check(), true);
     assert.equal(health.state, 'ok');
     assert.equal(sent.length, 0);
   });
@@ -82,7 +82,7 @@ describe('YouTubeHealth', () => {
 
   it('does not blame the sign-in for a network failure', async () => {
     const { health, sent } = setup(['Unable to download webpage: timed out']);
-    await health.check();
+    assert.equal(await health.check(), false);
     assert.equal(health.state, 'unknown');
     assert.equal(sent.length, 0);
   });

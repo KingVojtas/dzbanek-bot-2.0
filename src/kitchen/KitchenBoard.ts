@@ -30,9 +30,12 @@ import type { SeenStore } from '../deals/seen-store';
 import { resolveGuildSendableChannel } from '../deals/targets';
 import type { GuildSettingsStore } from '../deals/guild-settings';
 import type { MusicManager } from '../music/MusicManager';
-import { QuizScoreStore } from '../quiz/stores';
+import { SongReactionStore } from '../fm/reactions';
+import { PlayLogStore, PlayedTrackStore, QuizScoreStore } from '../quiz/stores';
+import { songFromCatch, songFromTrack } from '../quiz/songs';
 import type { RadioManager } from '../radio/RadioManager';
 import { getStation, type RadioStation, type StationId } from '../radio/station';
+import { chefOfTheWeek, songOfTheWeek, type ChefStanding, type WeekSong } from './chef';
 import {
   buildKitchenChartDisplay,
   markRadioNightRan,
@@ -46,6 +49,7 @@ import {
   looksLikeKitchenBoard,
   type KitchenBoardView,
   type KitchenDealTeaser,
+  type KitchenDisplay,
   type KitchenVoiceRoom,
 } from './display';
 import { RadioCatchStore } from './catches';
@@ -53,14 +57,21 @@ import {
   RADIO_VOTE_END_HOUR,
   chartWeek,
   isRadioVoteOpen,
+  monthToDate,
+  previousMonth,
+  previousYear,
   radioNightWeekKey,
   zonedDateTimeToUtc,
+  type KitchenPeriod,
 } from './time';
+import { buildKitchenWrappedDisplay, kitchenWrapped, type WrappedWhen } from './wrapped';
 import { isStationId, voteTally, voteTotal, type VoteCounts } from './vote-tally';
 import { RadioNightVoteStore } from './votes';
 
 const TICK_MS = 20_000;
 const DEBOUNCE_MS = 1_200;
+/** The room card's chef line. Recomputed on this cadence, not on every redraw. */
+const CHEF_CACHE_MS = 10 * 60_000;
 
 interface SteamSnapshot {
   items: SteamDealItem[];
@@ -93,6 +104,14 @@ export class KitchenBoard {
   private readonly votes = new RadioNightVoteStore();
   private readonly catches = new RadioCatchStore();
   private readonly quizScores = new QuizScoreStore();
+  private readonly playLog = new PlayLogStore();
+  private readonly playedTracks = new PlayedTrackStore();
+  private readonly reactions = new SongReactionStore();
+  private readonly chefCache = new Map<
+    string,
+    { at: number; chef?: { name: string; points: number } }
+  >();
+  private genreOf: (songKey: string) => string | undefined = () => undefined;
   /** Voice channel id → when its first person sat down. Unknown for calls older than the bot. */
   private readonly callStarted = new Map<string, number>();
   private busy: ((guildId: string) => boolean) | null = null;
@@ -145,6 +164,11 @@ export class KitchenBoard {
   /** Radio Night waits out anything else that holds the speaker, such as a quiz. */
   setBusy(fn: (guildId: string) => boolean): void {
     this.busy = fn;
+  }
+
+  /** English genre names from Kitchen FM's cache, for Wrapped. */
+  setGenreOf(fn: (songKey: string) => string | undefined): void {
+    this.genreOf = fn;
   }
 
   recordSteam(
@@ -279,7 +303,36 @@ export class KitchenBoard {
           ? { name: displayName(championMember), score: champion.score, games: champion.games }
           : undefined;
 
-      const display = buildKitchenChartDisplay({ weekLabel: week.label, songs, night, quiz });
+      const highlights = await this.weekHighlights(guild, week.from, week.to);
+      const named = highlights.chefs.filter((person) => person.name.trim());
+      const winner = named[0];
+      const chef = winner
+        ? {
+            name: winner.name,
+            points: winner.points,
+            runners: named
+              .slice(1, 3)
+              .map((person) => ({ name: person.name, points: person.points })),
+          }
+        : undefined;
+      const hottest = highlights.song;
+      const songOfWeek =
+        hottest && hottest.title.trim()
+          ? {
+              title: hottest.title,
+              artist: hottest.artist,
+              by: hottest.broughtBy.slice(0, 3).join(' · ') || undefined,
+            }
+          : undefined;
+
+      const display = buildKitchenChartDisplay({
+        weekLabel: week.label,
+        songs,
+        night,
+        quiz,
+        chef,
+        songOfWeek,
+      });
       try {
         await channel.send({
           components: display.components,
@@ -519,6 +572,153 @@ export class KitchenBoard {
             stationName: getStation(caught.stationId)?.name,
           }
         : undefined,
+      chef: await this.chefSoFar(guild),
+    };
+  }
+
+  /** Last month, or last year, into each kitchen channel. SeenStore stops a second post. */
+  async runKitchenWrapped(seen: SeenStore, kind: WrappedWhen): Promise<void> {
+    const period =
+      kind === 'year' ? previousYear(this.config.timezone) : previousMonth(this.config.timezone);
+    const rows = await this.guildSettings.all();
+    for (const row of rows) {
+      if (!row.kitchenEnabled || !row.kitchenChannelId) continue;
+      const scope = `kitchen-wrapped:${row.guildId}`;
+      if (await seen.has(scope, period.key)) continue;
+
+      const guild =
+        this.client.guilds.cache.get(row.guildId) ??
+        (await this.client.guilds.fetch(row.guildId).catch(() => null));
+      if (!guild) continue;
+      const channel = await resolveGuildSendableChannel(
+        this.client,
+        row.kitchenChannelId,
+        row.guildId,
+      );
+      if (!channel) {
+        this.logger.warn(`Kitchen Wrapped: channel missing in ${guild.name}.`);
+        continue;
+      }
+
+      const display = buildKitchenWrappedDisplay(await this.wrappedStats(guild, period));
+      try {
+        await channel.send({
+          components: display.components,
+          flags: display.flags,
+          files: display.files,
+        });
+        await seen.add(scope, [period.key]);
+        this.logger.info(`Kitchen Wrapped ${period.label} posted in ${guild.name}.`);
+      } catch (error) {
+        this.logger.error(`Kitchen Wrapped failed in ${guild.name}:`, error);
+      }
+    }
+  }
+
+  /** Month-to-date Wrapped for `/setup wrapped-preview`. Nothing is posted. */
+  async wrappedPreview(guild: Guild): Promise<KitchenDisplay> {
+    const period = monthToDate(this.config.timezone);
+    return buildKitchenWrappedDisplay(await this.wrappedStats(guild, period));
+  }
+
+  private async wrappedStats(guild: Guild, period: KitchenPeriod) {
+    const [plays, caught, reactions, champion] = await Promise.all([
+      this.playLog.between(guild.id, period.from, period.to),
+      this.catches.between(guild.id, period.from, period.to),
+      this.reactions.between(guild.id, period.from, period.to),
+      this.quizScores.champion(guild.id, period.from, period.to),
+    ]);
+    const member = champion ? guild.members.cache.get(champion.userId) : undefined;
+    return kitchenWrapped({
+      period,
+      timeZone: this.config.timezone,
+      plays,
+      catches: caught,
+      reactions,
+      champion:
+        champion && member
+          ? { name: displayName(member), score: champion.score, games: champion.games }
+          : null,
+      genreOf: (songKey) => this.genreOf(songKey),
+      nameOf: (userId) => {
+        const person = guild.members.cache.get(userId);
+        return person ? displayName(person) : '';
+      },
+      stationName: (stationId) => getStation(stationId)?.name,
+    });
+  }
+
+  /** Chef of the week so far. Cached so a board tick does not read the log every time. */
+  private async chefSoFar(guild: Guild): Promise<{ name: string; points: number } | undefined> {
+    const cached = this.chefCache.get(guild.id);
+    const now = Date.now();
+    if (cached && now - cached.at < CHEF_CACHE_MS) return cached.chef;
+    let chef: { name: string; points: number } | undefined;
+    try {
+      const week = chartWeek(this.config.timezone);
+      const highlights = await this.weekHighlights(guild, week.from, week.to);
+      const winner = highlights.chefs.find((person) => person.name.trim());
+      if (winner) chef = { name: winner.name, points: winner.points };
+    } catch (error) {
+      this.logger.debug(`Chef of the week failed in ${guild.name}:`, error);
+    }
+    this.chefCache.set(guild.id, { at: now, chef });
+    return chef;
+  }
+
+  /** Scores and the 🔥 song for one window. Bringers are the whole kitchen, not just the window. */
+  private async weekHighlights(
+    guild: Guild,
+    from: Date,
+    to: Date,
+  ): Promise<{ chefs: ChefStanding[]; song: WeekSong | null }> {
+    const [log, reactions, played, caught, champion] = await Promise.all([
+      this.playLog.between(guild.id, from, to),
+      this.reactions.between(guild.id, from, to),
+      this.playedTracks.all(guild.id),
+      this.catches.between(guild.id, new Date(0), to),
+      this.quizScores.champion(guild.id, from, to),
+    ]);
+    const nameOf = (userId: string) => {
+      const member = guild.members.cache.get(userId);
+      return member ? displayName(member) : '';
+    };
+    const bringers = [
+      ...played.flatMap((row) => {
+        if (!row.requestedById) return [];
+        return [
+          {
+            userId: row.requestedById,
+            songKey: songFromTrack(
+              {
+                title: row.title,
+                url: row.url,
+                uploader: row.uploader ?? undefined,
+                durationSec: row.durationSec,
+              },
+              { kind: 'play' },
+            ).key,
+            url: row.url,
+          },
+        ];
+      }),
+      ...caught.map((row) => ({ userId: row.userId, songKey: songFromCatch(row).key })),
+    ];
+    const fires = reactions.filter((row) => row.kind === 'fire');
+    return {
+      chefs: chefOfTheWeek({
+        fires,
+        bringers,
+        plays: log.map((row) => ({
+          userId: row.requestedById,
+          songKey: row.songKey,
+          kind: row.kind,
+        })),
+        catches: caught.filter((row) => row.caughtAt >= from),
+        championUserId: champion?.userId ?? null,
+        nameOf,
+      }),
+      song: songOfTheWeek({ fires, bringers, nameOf }),
     };
   }
 

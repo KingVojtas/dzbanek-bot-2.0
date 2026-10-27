@@ -8,8 +8,13 @@ import { YouTubeSource, isYouTubeUrl } from './youtube';
  * (Spotify is metadata-only).
  */
 export class CompositeTrackSource implements TrackSource {
-  readonly youtube = new YouTubeSource();
-  readonly spotify = new SpotifySource(this.youtube);
+  readonly youtube: YouTubeSource;
+  readonly spotify: SpotifySource;
+
+  constructor(youtubeClients?: string | null) {
+    this.youtube = new YouTubeSource(youtubeClients);
+    this.spotify = new SpotifySource(this.youtube);
+  }
 
   async resolve(input: string, requestedBy: string): Promise<Track[]> {
     if (isSpotifyUrl(input)) {

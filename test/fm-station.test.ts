@@ -4,8 +4,9 @@ import type { Track } from '../src/core/types';
 import type { FmCatalog } from '../src/fm/catalog';
 import { FmStation } from '../src/fm/FmStation';
 import type { GenreId, GenreIndex } from '../src/fm/genres';
-import type { FmSong } from '../src/fm/script';
-import { songFromTrack } from '../src/quiz/songs';
+import { reactionSongKey, tallyReactions, toggleReaction } from '../src/fm/reactions';
+import { sidelined, type FmSong } from '../src/fm/script';
+import { songFromCatch, songFromTrack } from '../src/quiz/songs';
 
 const START = Date.parse('2026-10-26T17:00:00Z');
 const SONG_MS = 200_000;
@@ -400,5 +401,77 @@ describe('FmStation genre blocks', () => {
     assert.equal(claude.calls.deezer, 0);
     assert.equal(claude.calls.youtube, 0);
     assert.equal(first[0]?.vibe?.includes('new find'), false);
+  });
+});
+
+describe('FmStation song keys', () => {
+  it('stores a 🔥 and a 👎 on a catch under the catch key, and a 👎 sidelines it', async () => {
+    const caught = songFromCatch({ artist: 'Viktor Sheen', title: 'Lavazza', userId: 'u1' });
+    const pool: FmSong[] = ['Lavazza', 'Pribehy', 'Kids'].map((title, n) => {
+      const song = n === 0 ? caught : songFromCatch({ artist: 'Poet', title, userId: 'u1' });
+      return {
+        ...song,
+        durationSec: 200,
+        at: new Date(START),
+      };
+    });
+    const radio = show({
+      pool,
+      blocks: false,
+      searchOne: async (query) => ({
+        title: 'Untitled clip',
+        url: `https://youtu.be/${encodeURIComponent(query)}`,
+        durationSec: 200,
+        uploader: 'Various Artists - Topic',
+        requestedBy: 'Kitchen FM',
+      }),
+    });
+    const track = await radio.station.upNext();
+    assert.ok(track);
+    const song = pool.find((item) => track.url.endsWith(encodeURIComponent(item.query)));
+    assert.ok(song);
+    const youtubeKey = songFromTrack(track, { kind: 'play' }).key;
+    assert.notEqual(youtubeKey, song.key);
+    assert.equal(radio.station.keyOf(track), song.key);
+
+    const key = reactionSongKey(track, radio.station.keyOf(track));
+    const target = { songKey: key, url: track.url, title: song.title, artist: song.artist };
+    const fire = toggleReaction([], 'listener', target, 'fire');
+    assert.equal(fire.rows[0]?.songKey, song.key);
+    assert.equal(fire.result.firstFire, true);
+    const nope = toggleReaction([], 'listener', target, 'nope');
+    assert.equal(nope.rows[0]?.songKey, song.key);
+    const tally = tallyReactions(nope.rows);
+    assert.equal(
+      sidelined({ heat: tally.fires.get(song.key) ?? 0, nopes: tally.nopes.get(song.key) ?? 0 }),
+      true,
+    );
+    assert.equal(tally.nopes.has(youtubeKey), false);
+  });
+
+  it('remembers a new find under the key a play of that hit would get', async () => {
+    const hit = {
+      title: 'Stranger - Brand New (Official Video)',
+      url: 'https://youtu.be/brand-new',
+      durationSec: 180,
+      uploader: 'StrangerVEVO',
+      requestedBy: 'Kitchen FM',
+    };
+    const radio = show({
+      pool: [1, 2, 3, 4].map((n) => kitchenSong('pop', n)),
+      related: [{ id: 7, name: 'Stranger' }],
+      tops: [{ title: 'Brand New', artist: 'Stranger', durationSec: 180 }],
+      searchOne: async () => ({ ...hit }),
+    });
+    for (let i = 0; i < 10; i += 1) {
+      const track = await radio.station.upNext();
+      assert.ok(track);
+      if (track.url === hit.url) {
+        assert.equal(radio.station.keyOf(track), songFromTrack(track, { kind: 'play' }).key);
+        return;
+      }
+      radio.station.starting(track);
+    }
+    assert.fail('the new find never played');
   });
 });

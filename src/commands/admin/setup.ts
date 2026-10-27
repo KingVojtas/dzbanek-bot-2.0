@@ -114,6 +114,11 @@ export const setup: Command = {
     )
     .addSubcommand((sub) =>
       sub.setName('status').setDescription('Show deal-channel settings for this server.'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('wrapped-preview')
+        .setDescription('See Kitchen Wrapped for this month so far. Only you can see it.'),
     ),
 
   async execute(interaction, services) {
@@ -291,6 +296,39 @@ export const setup: Command = {
           ),
         ],
       });
+      return;
+    }
+
+    if (sub === 'wrapped-preview') {
+      const guild =
+        interaction.guild ?? (await interaction.client.guilds.fetch(guildId).catch(() => null));
+      if (!guild) {
+        await interaction.reply({
+          embeds: [buildReplyEmbed('warn', 'This command can only be used in a server.')],
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      try {
+        const display = await services.kitchen.wrappedPreview(guild);
+        await interaction.reply({
+          components: display.components,
+          flags: display.flags | MessageFlags.Ephemeral,
+          files: display.files,
+        });
+      } catch (error) {
+        services.logger.error('Kitchen Wrapped preview failed:', error);
+        if (interaction.replied || interaction.deferred) return;
+        await interaction.reply({
+          embeds: [
+            buildReplyEmbed(
+              'error',
+              'Kitchen Wrapped is not ready just now. Try again in a moment.',
+            ),
+          ],
+          flags: MessageFlags.Ephemeral,
+        });
+      }
       return;
     }
 
