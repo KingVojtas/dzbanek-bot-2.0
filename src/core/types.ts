@@ -103,6 +103,11 @@ export interface PlayerStation {
    * synthesized cold and may take longer. Omitted means the usual wait.
    */
   introWaitMs?(track: Track): number | undefined;
+  /**
+   * The whole audio of `track`, downloaded before the show, so the first song
+   * starts without waiting for YouTube. Handed over once; null after that.
+   */
+  preloadedAudio?(track: Track): Buffer | null;
   /** The vibe of the set `track` belongs to, for the card. */
   vibeOf(track: Track): string | null;
   /** The player left voice, or the station was switched off. */

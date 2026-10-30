@@ -467,6 +467,22 @@ describe('line book', () => {
   it('fills the blanks the way each language speaks', () => {
     assert.equal(songPhrase('Linkin Park', 'Numb', 'en'), 'Numb by Linkin Park');
     assert.equal(songPhrase('Linkin Park', 'Numb', 'cs'), 'Numb – Linkin Park');
+    // The live log of 30 Oct 2026: the DJ read the whole venue and date out loud.
+    assert.equal(
+      songPhrase(
+        'Journey',
+        'Wheel in the Sky (Live at The Summit, Houston, Texas, November 5, 1981)',
+        'en',
+      ),
+      'Wheel in the Sky by Journey',
+    );
+    assert.equal(
+      songPhrase('Jethro Tull', 'Bourée (2016 Steven Wilson Remix)', 'en'),
+      'Bourée by Jethro Tull',
+    );
+    assert.equal(songPhrase('Yes', 'Roundabout - 2003 Remaster', 'en'), 'Roundabout by Yes');
+    assert.equal(songPhrase('Who', "Don't Stop [Live]", 'cs'), "Don't Stop – Who");
+    assert.equal(songPhrase('', '(Intro)', 'en'), '(Intro)');
     assert.equal(lineTime(18, 0, 'en'), '6 PM');
     assert.equal(lineTime(18, 4, 'en'), '6:04 PM');
     assert.equal(lineTime(18, 4, 'cs'), '18:04');

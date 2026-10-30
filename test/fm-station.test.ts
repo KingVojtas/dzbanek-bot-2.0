@@ -1391,51 +1391,41 @@ describe('FmStation prepared opener', () => {
     assert.deepEqual(speaks, []);
   });
 
-  it('plays id-main ahead of the opening line', async () => {
+  it('puts the prepared song on air at once, even when its genre still needs finds', async () => {
+    // The live start of 30 Oct 2026 waited 8 s: one kitchen song, so the station
+    // proved the genre with five finds before it used the opener it already had.
+    const songs = [kitchenSong('cz-rap', 0)];
+    const opener = preparedFor(songs[0]!);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const radio = show({
+      pool: songs,
+      prepared: opener,
+      genreList: async () =>
+        [1, 2, 3, 4, 5].map((n) => ({ title: `Far ${n}`, artist: `Away ${n}`, durationSec: 200 })),
+      searchOne: async () => {
+        await gate;
+        return null;
+      },
+    });
+    const first = await Promise.race([
+      radio.station.upNext(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
+    ]);
+    assert.equal(first?.url, opener.track.url);
+    release();
+    radio.station.end();
+  });
+
+  it('opens with the line alone, no jingle in front, so the first song comes sooner', async () => {
     const songs = pool();
     const opener = preparedFor(songs[0]!);
     const { lib, calls } = memJingles([
       { name: 'id-main.mp3', pcm: tone(0.2, 8_000) },
       { name: 'id-jazz.mp3', pcm: tone(0.2, 1_000) },
     ]);
-    const speaks: string[] = [];
-    const radio = show({
-      pool: songs,
-      prepared: opener,
-      jingles: lib,
-      speak: async (text) => {
-        speaks.push(text);
-        return Buffer.from('live');
-      },
-      searchOne: async () => {
-        throw new Error('YouTube should not be asked');
-      },
-    });
-    await radio.play(1);
-    const intro = await radio.station.intro(opener.track);
-    const lead = await lib.clip({ kind: 'id', id: 'main', file: 'mem://id-main.mp3' });
-    assert.ok(lead);
-    assert.equal(intro?.text, opener.line);
-    assert.deepEqual(speaks, []);
-    assert.equal(opener.pcm?.equals(Buffer.from('clip')), true);
-    assert.ok(intro?.pcm);
-    assert.ok(intro.pcm.subarray(0, lead.length).equals(lead));
-    const gap = silenceMs(JINGLE_GAP_MS);
-    assert.ok(intro.pcm.subarray(lead.length, lead.length + gap.length).equals(gap));
-    assert.ok(intro.pcm.subarray(lead.length + gap.length).equals(opener.pcm ?? Buffer.alloc(0)));
-    assert.deepEqual(calls, ['mem://id-main.mp3']);
-  });
-
-  it('plays the opening line alone when id-main will not decode', async () => {
-    const songs = pool();
-    const opener = preparedFor(songs[0]!);
-    const { lib, calls } = memJingles(
-      [
-        { name: 'id-main.mp3', pcm: tone(0.2, 8_000) },
-        { name: 'id-jazz.mp3', pcm: tone(0.2, 1_000) },
-      ],
-      new Set(['mem://id-main.mp3']),
-    );
     const radio = show({
       pool: songs,
       prepared: opener,
@@ -1448,7 +1438,25 @@ describe('FmStation prepared opener', () => {
     const intro = await radio.station.intro(opener.track);
     assert.equal(intro?.text, opener.line);
     assert.equal(intro?.pcm, opener.pcm);
-    assert.deepEqual(calls, ['mem://id-main.mp3']);
+    assert.deepEqual(calls, []);
+  });
+
+  it("hands the prepared song's downloaded audio to the player once", async () => {
+    const songs = pool();
+    const audio = Buffer.from('whole song');
+    const opener = preparedFor(songs[0]!, { audio });
+    const radio = show({
+      pool: songs,
+      prepared: opener,
+      searchOne: async () => {
+        throw new Error('YouTube should not be asked');
+      },
+    });
+    const first = await radio.station.upNext();
+    assert.equal(first?.url, opener.track.url);
+    assert.equal(radio.station.preloadedAudio(asTrack(songs[1]!)), null);
+    assert.equal(radio.station.preloadedAudio(first!), audio);
+    assert.equal(radio.station.preloadedAudio(first!), null);
   });
 
   it('uses the prepared song and synthesizes the line when the clip is missing', async () => {

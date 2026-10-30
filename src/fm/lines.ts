@@ -63,10 +63,25 @@ export interface LineSlots {
 
 const BLANK = /\{([a-z]+)\}/g;
 
-/** "Numb by Linkin Park", or "Numb – Linkin Park" in Czech. */
+/**
+ * The title as a DJ says it: no "(Live at The Summit, Houston, Texas, November 5,
+ * 1981)", "[2022 Remaster]", or " - 2016 Steven Wilson Remix". A title that is
+ * nothing but brackets is kept as it is.
+ */
+export function spokenTitle(title: string): string {
+  const spoken = title
+    .replace(/\s*[([][^)\]]*[)\]]/g, '')
+    .replace(/\s+[-–—]\s+.*$/, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return spoken || title.trim();
+}
+
+/** "Numb by Linkin Park", or "Numb – Linkin Park" in Czech. Brackets are not read out. */
 export function songPhrase(artist: string, title: string, language: DjLanguage): string {
-  if (!artist) return title;
-  return language === 'cs' ? `${title} – ${artist}` : `${title} by ${artist}`;
+  const said = spokenTitle(title);
+  if (!artist) return said;
+  return language === 'cs' ? `${said} – ${artist}` : `${said} by ${artist}`;
 }
 
 /** "6 PM" or "6:04 PM" in English. "18:04" in Czech. */

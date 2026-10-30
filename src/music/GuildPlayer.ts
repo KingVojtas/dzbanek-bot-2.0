@@ -812,6 +812,12 @@ export class GuildPlayer {
       }
     }
 
+    // The show's prepared opener arrives with its audio already downloaded.
+    const preloaded = this.station?.preloadedAudio?.(track);
+    if (preloaded?.length) {
+      return { stream: Readable.from([preloaded], { objectMode: false }), prefetched: true };
+    }
+
     const fresh = await this.source.stream(track);
     if (this.destroyed || gen !== this.playGeneration) {
       fresh.destroy();

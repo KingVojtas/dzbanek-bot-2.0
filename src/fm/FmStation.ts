@@ -35,7 +35,6 @@ import {
   JINGLE_GAP_MS,
   JingleLibrary,
   genreJingle,
-  mainIdJingle,
   namedJingle,
   pickJingle,
   playNewFindJingle,
@@ -100,8 +99,13 @@ import {
 const STALE_MS = 20 * 60_000;
 /** Tries to top up a set whose songs would not load. */
 const FILL_TRIES = 4;
-/** The show's first line is synthesized cold, so the player may wait this long. */
-const OPENER_WAIT_MS = 25_000;
+/**
+ * The show's first line, when it was not prepared ahead. The music waits no
+ * longer than this for it: a slow voice leaves the line on the card as text.
+ */
+const OPENER_WAIT_MS = 8_000;
+/** A dedication is read whatever it costs: its clip starts when it is accepted. */
+const DEDICATION_WAIT_MS = 25_000;
 /** A between-blocks break is built ahead. The player still waits this long for it. */
 const BREAK_WAIT_MS = 60_000;
 /** Once the player is waiting, a break whose tail is still missing goes out with its head. */
@@ -325,6 +329,8 @@ export class FmStation implements PlayerStation {
   /** Line and clip for the prepared song, applied when that song publishes the set. */
   private heldLine: string | null = null;
   private heldClip?: Buffer;
+  /** The prepared opener's audio, until the player asks for it. */
+  private preloaded: { url: string; audio: Buffer } | null = null;
   /**
    * Finding the next show's first song, not playing it. Stops after one song
    * and does not speak. Listeners are not required.
@@ -575,9 +581,17 @@ export class FmStation implements PlayerStation {
       set.breakDue?.();
       return BREAK_WAIT_MS;
     }
-    if (this.dedicationOf.get(track)) return OPENER_WAIT_MS;
+    if (this.dedicationOf.get(track)) return DEDICATION_WAIT_MS;
     if (set?.opener && set.tracks[0] === track) return OPENER_WAIT_MS;
     return undefined;
+  }
+
+  /** The prepared opener's downloaded audio, once, for that song only. */
+  preloadedAudio(track: Track): Buffer | null {
+    const held = this.preloaded;
+    if (!held || held.url !== track.url) return null;
+    this.preloaded = null;
+    return held.audio;
   }
 
   vibeOf(track: Track): string | null {
@@ -591,6 +605,7 @@ export class FmStation implements PlayerStation {
   end(): void {
     if (this.ended) return;
     this.ended = true;
+    this.preloaded = null;
     if (this.live) this.live.ignore = true;
     this.rememberRotation();
     this.current?.wake?.();
@@ -692,6 +707,7 @@ export class FmStation implements PlayerStation {
     if (opener.key && opener.key !== '|') this.recent.push(opener.key);
     this.heldLine = opener.line;
     this.heldClip = opener.pcm?.length ? opener.pcm : undefined;
+    this.preloaded = opener.audio?.length ? { url: track.url, audio: opener.audio } : null;
     const name = genreName(opener.genre, this.deps.language);
     this.deps.logger.info(
       `Kitchen FM in ${this.deps.guild.name}: using the prepared opener "${opener.artist} - ${opener.title}" (${name}).`,
@@ -769,7 +785,11 @@ export class FmStation implements PlayerStation {
       });
   }
 
-  /** `id-main` before the opener, or `new-find` once in a later set of the block. */
+  /**
+   * `new-find` once in a later set of the block. The opener has no jingle: the
+   * show should get to its first song as fast as it can, and `id-main` plays in
+   * the breaks.
+   */
   private stationLead(set: FmSet): Promise<Buffer | null> {
     const lib = this.deps.jingles;
     if (!lib) return Promise.resolve(null);
@@ -780,13 +800,7 @@ export class FmStation implements PlayerStation {
   }
 
   private async loadLead(set: FmSet, lib: JingleLibrary): Promise<Buffer | null> {
-    if (set.opener) {
-      const file = mainIdJingle(lib.files());
-      const pcm = await lib.clip(file);
-      if (!pcm?.length || !file) return null;
-      this.jingleUsed.ids.add(file.id);
-      return pcm;
-    }
+    if (set.opener) return null;
     const first = set.tracks[0];
     const how = (first && this.about.get(first)?.how) || 'play';
     if (
@@ -1519,9 +1533,13 @@ export class FmStation implements PlayerStation {
       this.startBreakHead();
     }
 
+    // A show with a prepared opener starts at its genre: the preparation already
+    // skipped the genres before it that had nothing to play.
     let genre = this.rotation
       ? rotationAfter(this.rotation.genre)
-      : rotationAfter(this.deps.rotationCursor?.genre ?? null);
+      : this.prepared && !this.preparingOpener
+        ? this.prepared.genre
+        : rotationAfter(this.deps.rotationCursor?.genre ?? null);
     const seen = new Set<GenreId>();
     for (let step = 0; step < GENRE_ROTATION.length; step += 1) {
       if (this.ended) return null;
@@ -1577,6 +1595,26 @@ export class FmStation implements PlayerStation {
     const take = Math.min(SET_MAX, Math.max(1, cap));
     const fresh = this.freshFor(genre, open, index);
     const vibe = genreName(genre, this.deps.language);
+
+    // The prepared opener proved this genre when it was made. Put it on air now and
+    // fill the set behind it, instead of proving the genre a second time first.
+    if (
+      this.prepared?.genre === genre &&
+      !this.preparingOpener &&
+      this.live &&
+      !this.live.set &&
+      !this.ended
+    ) {
+      const tracks: Track[] = [];
+      this.claim(tracks, vibe, newBlock, genre);
+      this.leadWithPrepared(tracks, genre);
+      if (this.live.set) {
+        await this.gatherRotation(genre, pool, fresh, listenerIds, index, tracks, 1, take);
+        if (tracks.length > take) this.dropTracks(tracks.splice(take));
+        return this.sealed(base, vibe, newBlock, tracks, holdLine, genre);
+      }
+      this.release(tracks);
+    }
 
     if (genre !== 'other' && fresh.length < required) {
       const gathered: Track[] = [];

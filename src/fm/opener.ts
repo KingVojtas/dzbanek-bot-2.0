@@ -29,9 +29,50 @@ export interface PreparedOpener {
   line: string;
   /** PCM of `line`. Null when the voice failed; the show synthesizes it then. */
   pcm: Buffer | null;
+  /**
+   * The song's whole audio as the source streams it, so the show does not wait
+   * for YouTube. Missing when the download failed or the song is too big.
+   */
+  audio?: Buffer | null;
   preparedAt: number;
   language: DjLanguage;
   voice: string;
+}
+
+/**
+ * Read `stream` to its end. Null when it holds more than `maxBytes`, takes
+ * longer than `timeoutMs`, or fails; the stream is destroyed then.
+ */
+export function readWhole(
+  stream: NodeJS.ReadableStream & { destroy?: (error?: Error) => void },
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let done = false;
+    const finish = (value: Buffer | null): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (value === null) stream.destroy?.();
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    timer.unref?.();
+    stream.on('data', (chunk: Buffer | string) => {
+      const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+      size += bytes.length;
+      if (size > maxBytes) {
+        finish(null);
+        return;
+      }
+      chunks.push(bytes);
+    });
+    stream.once('end', () => finish(size > 0 ? Buffer.concat(chunks) : null));
+    stream.once('error', () => finish(null));
+  });
 }
 
 /** What the show knows when it decides whether a prepared opener is still good. */

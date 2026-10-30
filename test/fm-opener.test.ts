@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 import { describe, it } from 'node:test';
 import type { VoiceBasedChannel } from 'discord.js';
 import type { Config } from '../src/config';
@@ -14,6 +15,7 @@ import {
   openerDropReason,
   openerIsBlocked,
   preparedShowLine,
+  readWhole,
   timelessLines,
   timelessOpener,
   type OpenerCheck,
@@ -169,7 +171,7 @@ function harness(jingles: JingleLibrary | null = null) {
   const searches = { n: 0 };
   const poolEntered = { n: 0 };
   const rows = new Map<string, PlayedTrackRow[]>();
-  const flags = { holdPool: null as Promise<void> | null, holdSpeak: false };
+  const flags = { holdPool: null as Promise<void> | null, holdSpeak: false, failVoice: 0 };
   let releaseSpeak: (pcm: Buffer | null) => void = () => {};
   const players = new Map<
     string,
@@ -194,6 +196,10 @@ function harness(jingles: JingleLibrary | null = null) {
   const voice = {
     speak: async (text: string) => {
       speaks.push(text);
+      if (flags.failVoice > 0) {
+        flags.failVoice -= 1;
+        return null;
+      }
       if (!flags.holdSpeak) return Buffer.alloc(48_000 * 2 * 2);
       return new Promise<Buffer | null>((resolve) => {
         releaseSpeak = resolve;
@@ -212,6 +218,7 @@ function harness(jingles: JingleLibrary | null = null) {
   } as unknown as Logger;
   const music = {
     trackSource: {
+      stream: async () => Readable.from([Buffer.alloc(100)], { objectMode: false }),
       youtube: {
         searchOne: async () => {
           searches.n += 1;
@@ -271,7 +278,7 @@ function harness(jingles: JingleLibrary | null = null) {
     } as unknown as PlayLogStore,
     config,
     logger,
-    { now: () => clock.now, catalog, genres, voice, jingles },
+    { now: () => clock.now, catalog, genres, voice, jingles, voiceRetryMs: 5 },
   );
 
   return {
@@ -320,6 +327,9 @@ function harness(jingles: JingleLibrary | null = null) {
     holdSpeak() {
       flags.holdSpeak = true;
     },
+    failVoice(times: number) {
+      flags.failVoice = times;
+    },
     releaseSpeak(pcm: Buffer | null) {
       flags.holdSpeak = false;
       releaseSpeak(pcm);
@@ -346,6 +356,26 @@ async function waitFor(ready: () => boolean, ms = 2_000): Promise<void> {
   }
 }
 
+describe('readWhole', () => {
+  it('reads a stream to its end', async () => {
+    const whole = await readWhole(Readable.from([Buffer.from('ab'), Buffer.from('cd')]), 10, 1_000);
+    assert.equal(whole?.toString(), 'abcd');
+  });
+
+  it('gives up on a stream that is too big, fails, or never ends', async () => {
+    assert.equal(await readWhole(Readable.from([Buffer.alloc(11)]), 10, 1_000), null);
+    const broken = new Readable({
+      read() {
+        this.destroy(new Error('gone'));
+      },
+    });
+    assert.equal(await readWhole(broken, 10, 1_000), null);
+    const stuck = new Readable({ read() {} });
+    assert.equal(await readWhole(stuck, 10, 20), null);
+    assert.equal(stuck.destroyed, true);
+  });
+});
+
 describe('KitchenFm prepares the next opener', () => {
   it('stores a voiced opener and does not write the play log', async () => {
     const h = harness();
@@ -359,6 +389,7 @@ describe('KitchenFm prepares the next opener', () => {
     assert.equal(stored.language, 'en');
     assert.equal(stored.voice, VOICE);
     assert.equal(stored.pcm?.length, 48_000 * 2 * 2);
+    assert.equal(stored.audio?.length, 100);
     assert.equal(/\{(time|daypart)\}/.test(stored.line), false);
     assert.equal(stored.line.includes('12 AM'), false);
     assert.equal(stored.line.includes('late night'), false);
@@ -366,7 +397,7 @@ describe('KitchenFm prepares the next opener', () => {
     assert.equal(h.searches.n, 0);
     assert.ok(
       h.infos.some((line) =>
-        /Kitchen FM in Kitchen: next opener ready: "Band g1 \d - Song \d" \(Czech rap\), clip 1\.0 s\./.test(
+        /Kitchen FM in Kitchen: next opener ready: "Band g1 \d - Song \d" \(Czech rap\), clip 1.0 s, song 0.0 MB./.test(
           line,
         ),
       ),
@@ -383,6 +414,32 @@ describe('KitchenFm prepares the next opener', () => {
     h.setRows('g1', 5);
     await h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
     assert.ok(h.fm.openerFor('g1'));
+  });
+
+  it('asks Edge again for a prepared line it dropped, a few times', async () => {
+    const h = harness();
+    h.setRows('g1', 5);
+    h.failVoice(2);
+    await h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
+    const stored = h.fm.openerFor('g1');
+    assert.ok(stored);
+    assert.equal(stored.pcm, null);
+    await waitFor(() => Boolean(h.fm.openerFor('g1')?.pcm?.length));
+    assert.equal(h.speaks.length, 3);
+    assert.ok(h.infos.some((line) => line.includes('line is voiced now (try 3)')));
+    h.close();
+  });
+
+  it('gives up on the prepared line after three more tries', async () => {
+    const h = harness();
+    h.setRows('g1', 5);
+    h.failVoice(10);
+    await h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
+    await waitFor(() => h.speaks.length === 4);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(h.speaks.length, 4);
+    assert.equal(h.fm.openerFor('g1')?.pcm, null);
+    h.close();
   });
 
   it('keeps the previous opener when a later preparation fails', async () => {

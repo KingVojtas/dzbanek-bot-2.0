@@ -12,7 +12,7 @@ import { GenreBook, genreCachePath } from './GenreBook';
 import { JingleLibrary } from './jingles';
 import { genreName, genreQuery, playlistFits, type GenreId, type GenreIndex } from './genres';
 import { GENRE_LIST_MS, rememberList, rotationAfter, type RotationCursor } from './rotation';
-import type { PreparedOpener } from './opener';
+import { readWhole, type PreparedOpener } from './opener';
 import {
   playFromFire,
   reactionSongKey,
@@ -33,6 +33,14 @@ const BOOT_DELAY_MS = 30_000;
 const PREPARE_GAP_MS = 3_000;
 /** Openers prepared on boot. The rest wait until a show on that server ends. */
 const BOOT_SERVERS = 10;
+/** A prepared line Edge dropped is asked for again this many times, this far apart. */
+const OPENER_VOICE_RETRIES = 3;
+const OPENER_VOICE_RETRY_MS = 2 * 60_000;
+/** A prepared song bigger than this is not kept in memory: the player's own prefetch cap. */
+const PRELOAD_MAX_BYTES = 16 * 1024 * 1024;
+/** Prepared songs across every server stay under this. */
+const PRELOAD_TOTAL_BYTES = 64 * 1024 * 1024;
+const PRELOAD_TIMEOUT_MS = 90_000;
 
 /** Stand-ins for the catalog, the genre cache, the voice, and the clock. */
 export interface KitchenFmOptions {
@@ -47,6 +55,8 @@ export interface KitchenFmOptions {
    * The file is joined when a clip is played, not when an opener is prepared.
    */
   jingles?: JingleLibrary | null;
+  /** How long to wait before asking Edge again for a prepared line it dropped. */
+  voiceRetryMs?: number;
 }
 
 /**
@@ -90,6 +100,7 @@ export class KitchenFm {
   private bootTimer: ReturnType<typeof setTimeout> | null = null;
   private backgroundStopped = false;
   private gapMs = PREPARE_GAP_MS;
+  private readonly voiceRetryMs: number;
 
   constructor(
     private readonly music: MusicManager,
@@ -107,6 +118,7 @@ export class KitchenFm {
       timezone: config.timezone,
     });
     this.voice = options.voice ?? new DjVoice(config.dj.voice, logger);
+    this.voiceRetryMs = options.voiceRetryMs ?? OPENER_VOICE_RETRY_MS;
     this.jingle =
       options.jingle ?? new DjVoice(config.dj.jingleVoice ?? 'en-GB-RyanNeural', logger);
     this.jingles =
@@ -363,17 +375,19 @@ export class KitchenFm {
         this.logger.warn(`Kitchen FM in ${guild.name}: could not prepare the next opener.`);
         return;
       }
-      let pcm: Buffer | null = null;
-      try {
-        pcm = await this.voice.speak(found.line);
-      } catch (error: unknown) {
-        this.logger.warn('Kitchen FM intro failed:', error);
-        pcm = null;
-      }
+      // The line and the song's audio are fetched side by side.
+      const [pcm, audio] = await Promise.all([
+        this.voice.speak(found.line).catch((error: unknown) => {
+          this.logger.warn('Kitchen FM intro failed:', error);
+          return null;
+        }),
+        this.preloadAudio(guild, found.track),
+      ]);
       if (this.backgroundStopped || this.stations.has(guild.id)) return;
       const opener: PreparedOpener = {
         ...found,
         pcm,
+        audio,
         preparedAt: this.clock(),
         language: this.config.dj.language,
         voice: this.config.dj.voice,
@@ -382,12 +396,75 @@ export class KitchenFm {
       const seconds = opener.pcm?.length
         ? (opener.pcm.length / (48_000 * 2 * 2)).toFixed(1)
         : '0.0';
+      const song = audio?.length
+        ? `${(audio.length / 1024 / 1024).toFixed(1)} MB`
+        : 'not downloaded';
       this.logger.info(
-        `Kitchen FM in ${guild.name}: next opener ready: "${opener.artist} - ${opener.title}" (${genreName(opener.genre, this.config.dj.language)}), clip ${seconds} s.`,
+        `Kitchen FM in ${guild.name}: next opener ready: "${opener.artist} - ${opener.title}" (${genreName(opener.genre, this.config.dj.language)}), clip ${seconds} s, song ${song}.`,
       );
+      if (!opener.pcm?.length) this.retryOpenerVoice(guild, opener, 1);
     } catch (error: unknown) {
       this.logger.warn(`Kitchen FM in ${guild.name}: could not prepare the next opener:`, error);
     }
+  }
+
+  /**
+   * The opener's whole song, downloaded now so the show does not wait about
+   * five seconds for YouTube. Null when it fails, is too big, or the other
+   * servers' openers already hold enough memory.
+   */
+  private async preloadAudio(
+    guild: { id: string; name: string },
+    track: Track,
+  ): Promise<Buffer | null> {
+    let held = 0;
+    for (const [id, opener] of this.prepared) {
+      if (id !== guild.id) held += opener.audio?.length ?? 0;
+    }
+    if (held + PRELOAD_MAX_BYTES > PRELOAD_TOTAL_BYTES) return null;
+    try {
+      const stream = await this.music.trackSource.stream(track);
+      return await readWhole(stream, PRELOAD_MAX_BYTES, PRELOAD_TIMEOUT_MS);
+    } catch (error: unknown) {
+      this.logger.warn(`Kitchen FM in ${guild.name}: could not download the next opener:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Edge dropped the prepared line. There is usually no hurry before the next
+   * show, so ask again a little later, a few times. A show that starts first
+   * synthesizes the line itself, as before.
+   */
+  private retryOpenerVoice(
+    guild: { id: string; name: string },
+    opener: PreparedOpener,
+    attempt: number,
+  ): void {
+    if (attempt > OPENER_VOICE_RETRIES) return;
+    const timer = setTimeout(() => {
+      const current = (): boolean =>
+        !this.backgroundStopped &&
+        this.prepared.get(guild.id) === opener &&
+        !this.stations.has(guild.id);
+      if (!current()) return;
+      void this.voice
+        .speak(opener.line)
+        .catch(() => null)
+        .then((pcm) => {
+          if (!current()) return;
+          if (!pcm?.length) {
+            this.retryOpenerVoice(guild, opener, attempt + 1);
+            return;
+          }
+          opener.pcm = pcm;
+          const seconds = (pcm.length / (48_000 * 2 * 2)).toFixed(1);
+          this.logger.info(
+            `Kitchen FM in ${guild.name}: the next opener's line is voiced now (try ${attempt + 1}), clip ${seconds} s.`,
+          );
+        });
+    }, this.voiceRetryMs);
+    timer.unref?.();
   }
 
   private async prepareAtBoot(guilds: () => Iterable<{ id: string; name: string }>): Promise<void> {
