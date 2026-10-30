@@ -1,15 +1,28 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Track } from '../src/core/types';
-import type { FmCatalog } from '../src/fm/catalog';
+import type { DeezerTop, FmCatalog } from '../src/fm/catalog';
+import { silenceMs } from '../src/fm/dedications';
 import { FmStation } from '../src/fm/FmStation';
+import {
+  JINGLE_GAP_MS,
+  JingleLibrary,
+  classifyJingleName,
+  namedJingle,
+  type JingleFile,
+} from '../src/fm/jingles';
 import type { GenreId, GenreIndex } from '../src/fm/genres';
+import type { RotationCursor } from '../src/fm/rotation';
+import type { DjVoice } from '../src/fm/voice';
+import { LINE_MOMENTS, LineBook, type LineFile, type Moment } from '../src/fm/lines';
+import { OPENER_MAX_AGE_MS, type PreparedOpener } from '../src/fm/opener';
 import { reactionSongKey, tallyReactions, toggleReaction } from '../src/fm/reactions';
 import { sidelined, type FmSong } from '../src/fm/script';
 import { songFromCatch, songFromTrack } from '../src/quiz/songs';
 import type { AiredSong } from '../src/quiz/stores';
 
 const START = Date.parse('2026-10-26T17:00:00Z');
+const VOICE = 'en-US-AndrewMultilingualNeural';
 const SONG_MS = 200_000;
 
 function kitchenSong(genre: GenreId, n: number, heat?: number): FmSong {
@@ -36,6 +49,34 @@ function asTrack(song: Pick<FmSong, 'label' | 'url' | 'durationSec'>): Track {
   };
 }
 
+/** A prepared opener for `song`, valid at `START` unless `over` says otherwise. */
+function preparedFor(song: FmSong, over: Partial<PreparedOpener> = {}): PreparedOpener {
+  return {
+    track: asTrack(song),
+    artist: song.artist,
+    title: song.title,
+    how: 'play',
+    by: 'Vojta',
+    key: song.key,
+    genre: 'cz-rap',
+    after: null,
+    line: `Welcome in, Kitchen. First up, ${song.title} by ${song.artist}.`,
+    pcm: Buffer.from('clip'),
+    preparedAt: START,
+    language: 'en',
+    voice: VOICE,
+    ...over,
+  };
+}
+
+/** A line book with only the showOpen lines under test. */
+function showOpenBook(showOpen: string[]): LineBook {
+  const lines = {} as LineFile['lines'];
+  for (const moment of Object.keys(LINE_MOMENTS) as Moment[]) lines[moment] = [];
+  lines.showOpen = showOpen;
+  return new LineBook({ version: 1, lines });
+}
+
 /** A show with fake Discord, Deezer, and YouTube, and a clock that moves one song at a time. */
 function show(opts: {
   pool: FmSong[];
@@ -48,6 +89,24 @@ function show(opts: {
   aired?: () => Promise<readonly AiredSong[]>;
   /** Lines `logger.warn` was given. */
   warns?: string[];
+  /** Lines `logger.info` was given. */
+  infos?: string[];
+  /** Missed find queries, shared by every show built with this array. */
+  deadFinds?: { artist: string; title: string }[];
+  /** Playlist tracks for a rotation genre. Omitted means the station has none. */
+  genreList?: (genre: GenreId) => Promise<DeezerTop[]>;
+  /** Genre the previous show on this server ended on. */
+  rotationCursor?: RotationCursor;
+  /** Station songs per rotation block. Omitted uses the default, 15. */
+  blockSongs?: number;
+  /** Break between blocks, in seconds. Omitted uses the default, 180. */
+  breakSeconds?: number;
+  /** Station IDs and promos. Omitted means those parts are left out. */
+  jingle?: DjVoice;
+  /** Sung jingles. Omitted means the show has none. */
+  jingles?: JingleLibrary | null;
+  /** Clock start. The default is 18:00 in Prague on 2026-10-26. */
+  start?: number;
   artistId?: (key: string) => number | undefined;
   blockSets?: number;
   /** False: genres are not known yet, so the station plans a themed set. */
@@ -59,6 +118,12 @@ function show(opts: {
     songs: { crate: number | null; artist: string; title: string }[];
   } | null;
   speak?: (text: string) => Promise<Buffer | null>;
+  language?: 'en' | 'cs';
+  voiceName?: string;
+  prepared?: PreparedOpener | null;
+  onConsume?: () => void;
+  /** Undefined keeps the built-in template, so older tests do not load the line book. */
+  lines?: LineBook | null;
 }) {
   const calls = { deezer: 0, youtube: 0 };
   const genres: GenreIndex = {
@@ -86,6 +151,7 @@ function show(opts: {
       if (opts.topsFor) return opts.topsFor(artistId);
       return opts.tops ?? [{ title: 'Brand New', artist: 'Stranger', durationSec: 200 }];
     },
+    genreTracks: async () => [],
     artistCountry: async () => {
       calls.deezer += 1;
       return { ok: true, value: { country: null, tags: [] } };
@@ -95,7 +161,7 @@ function show(opts: {
       return { ok: true, value: { country: null, parents: [] } };
     },
   };
-  let clock = START;
+  const clock = { now: opts.start ?? START };
   const members = [{ id: 'u1', displayName: 'Vojta' }];
   const station = new FmStation(
     {
@@ -120,19 +186,31 @@ function show(opts: {
           }
         : { ready: false }) as never,
       voice: { speak: opts.speak ?? (async () => null) } as never,
-      language: 'en',
+      language: opts.language ?? 'en',
+      voiceName: opts.voiceName ?? VOICE,
       discover: 2,
       blockSets: opts.blockSets ?? 2,
+      blockSongs: opts.blockSongs,
+      breakSeconds: opts.breakSeconds,
+      jingle: opts.jingle,
+      jingles: opts.jingles,
       genres,
       catalog,
       findBlocks: opts.findBlocks,
       aired: opts.aired,
-      lines: null,
-      now: () => clock,
+      deadFinds: opts.deadFinds,
+      rotationCursor: opts.rotationCursor,
+      genreTracks: opts.genreList,
+      lines: opts.lines === undefined ? null : opts.lines,
+      prepared: opts.prepared,
+      consumeOpener: opts.onConsume,
+      now: () => clock.now,
       timezone: 'Europe/Prague',
       logger: {
         debug() {},
-        info() {},
+        info(...args: unknown[]) {
+          opts.infos?.push(args.map((part) => String(part)).join(' '));
+        },
         warn(...args: unknown[]) {
           opts.warns?.push(args.map((part) => String(part)).join(' '));
         },
@@ -144,6 +222,9 @@ function show(opts: {
   return {
     calls,
     station,
+    setClock(value: number) {
+      clock.now = value;
+    },
     /** Play `count` songs; stops early when the station has nothing. */
     async play(count: number): Promise<{ title: string; url: string; vibe: string | null }[]> {
       const played: { title: string; url: string; vibe: string | null }[] = [];
@@ -152,7 +233,7 @@ function show(opts: {
         if (!track) break;
         station.starting(track);
         played.push({ title: track.title, url: track.url, vibe: station.vibeOf(track) });
-        clock += SONG_MS;
+        clock.now += SONG_MS;
       }
       return played;
     },
@@ -247,13 +328,12 @@ describe('FmStation genre blocks', () => {
     }
   });
 
-  it('searches one dead find, spends the finds-only Deezer cap, and still plays the kitchen', async () => {
-    // Twelve songs: the opening set keeps five, and seven unaired is under the
-    // small-kitchen line, so the next set is finds only (allowance 5). The cap
-    // is 5*4+4 Deezer calls. Every stranger shares one top, so YouTube is asked
-    // once and that miss blocks the rest.
+  it("plays a pop block from the kitchen's own pop before it looks for finds", async () => {
+    // Twelve pop songs: rock, rap, EDM and Czech rap have nothing, so the
+    // rotation lands on pop. Its first two sets are the kitchen's own songs,
+    // so neither YouTube nor Deezer is asked for a find yet.
     const radio = show({
-      pool: Array.from({ length: 12 }, (_, n) => kitchenSong('cz-rap', n)),
+      pool: Array.from({ length: 12 }, (_, n) => kitchenSong('pop', n)),
       artistId: (key) => 100 + Number(key.split('|')[1]),
       related: (seedId) => [{ id: seedId + 1000, name: `Stranger ${seedId}` }],
       tops: [{ title: 'Fresh Cut', artist: 'Outside', durationSec: 180 }],
@@ -266,24 +346,24 @@ describe('FmStation genre blocks', () => {
     const next = await radio.play(1);
     const first = next[0];
     assert.ok(first);
-    assert.match(first.title, /cz-rap/);
-    assert.equal(radio.calls.youtube, 1);
-    assert.equal(radio.calls.deezer, 24);
+    assert.match(first.title, /pop/);
+    assert.equal(first.vibe, 'pop');
+    assert.equal(radio.calls.youtube, 0);
   });
 
-  it('opens with one set, then plays the next genre for blockSets sets', async () => {
+  it('plays a rotation block of indie, then moves on to Latin', async () => {
     const radio = show({
       pool: [
-        ...Array.from({ length: 12 }, (_, n) => kitchenSong('cz-rap', n)),
-        ...Array.from({ length: 12 }, (_, n) => kitchenSong('rock', n)),
+        ...Array.from({ length: 12 }, (_, n) => kitchenSong('indie', n)),
+        ...Array.from({ length: 12 }, (_, n) => kitchenSong('latin', n)),
       ],
-      blockSets: 2,
+      blockSongs: 15,
       searchOne: async () => null,
     });
     const played = await radio.play(15);
     const vibe = played.map((song) => song.vibe?.replace(/ · new find$/, '') ?? '');
-    assert.deepEqual(vibe.slice(0, 5), Array(5).fill('Czech rap'));
-    assert.deepEqual(vibe.slice(5, 15), Array(10).fill('rock'));
+    assert.deepEqual(vibe.slice(0, 12), Array(12).fill('indie'));
+    assert.deepEqual(vibe.slice(12, 15), Array(3).fill('Latin'));
   });
 
   it('plays 20 songs from a 4-song kitchen without repeating one inside any 10', async () => {
@@ -395,7 +475,8 @@ describe('FmStation genre blocks', () => {
 
     let discover: number | null = null;
     const claude = show({
-      pool: Array.from({ length: 12 }, (_, n) => kitchenSong('rock', n)),
+      pool: [1, 2, 3, 4].map((n) => kitchenSong('rock', n)),
+      artistId: () => undefined,
       blocks: false,
       related: [{ id: 9, name: 'Stranger' }],
       searchOne: hit,
@@ -580,6 +661,45 @@ describe('FmStation voice cache', () => {
     assert.equal(a?.pcm?.[0], 1);
   });
 });
+
+/** PCM the tests hand back instead of a Suno file. No FFmpeg. */
+function tone(seconds: number, sample: number): Buffer {
+  const frames = Math.round(seconds * 48_000);
+  const out = Buffer.alloc(frames * 4);
+  for (let i = 0; i < frames; i += 1) {
+    out.writeInt16LE(sample, i * 4);
+    out.writeInt16LE(sample, i * 4 + 2);
+  }
+  return out;
+}
+
+/** A library whose files are already PCM. `fail` makes those names throw. */
+function memJingles(
+  rows: { name: string; pcm: Buffer | null }[],
+  fail: ReadonlySet<string> = new Set(),
+): { lib: JingleLibrary; calls: string[] } {
+  const files: JingleFile[] = [];
+  const pcm = new Map<string, Buffer | null>();
+  for (const row of rows) {
+    const classified = classifyJingleName(row.name);
+    if (!classified) continue;
+    const path = `mem://${row.name}`;
+    files.push({ ...classified, file: path });
+    pcm.set(path, row.pcm);
+  }
+  const calls: string[] = [];
+  const lib = new JingleLibrary({
+    list: () => files,
+    decode: async (file) => {
+      calls.push(file);
+      if (fail.has(file)) throw new Error('broken');
+      const clip = pcm.get(file);
+      if (!clip?.length) throw new Error('missing');
+      return clip;
+    },
+  });
+  return { lib, calls };
+}
 
 /** A YouTube hit whose title is the search query, so `isSameSong` accepts it. */
 function found(query: string, url?: string): Track {
@@ -819,5 +939,678 @@ describe('FmStation never repeats an aired song', () => {
     assert.match(played[2]?.title ?? '', /pop song 3/);
     assert.ok(warns.some((line) => line.includes('nothing new could be found')));
     assert.ok(played.every((song) => song.vibe === 'kitchen throwbacks'));
+  });
+});
+
+async function until(ready: () => boolean): Promise<void> {
+  for (let i = 0; i < 100; i += 1) {
+    if (ready()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.fail('timed out');
+}
+
+describe('FmStation opener', () => {
+  it('goes on air at the first song and keeps the rest of that set in order', async () => {
+    const pool = [1, 2, 3, 4, 5, 6].map((n) => kitchenSong('cz-rap', n));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const pending: { query: string; release: () => void }[] = [];
+    const infos: string[] = [];
+    const radio = show({
+      pool,
+      infos,
+      aired: async () => pool.map((song) => airedOf(song, new Date(START - 86_400_000))),
+      artistId: (key) => 100 + Number(key.split('|')[1]),
+      related: (seedId) => [{ id: seedId + 40, name: `Rel ${seedId}` }],
+      topsFor: (artistId) => [
+        { title: `Find ${artistId}`, artist: `Band ${artistId}`, durationSec: 180 },
+      ],
+      searchOne: (query) =>
+        new Promise((resolve) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          pending.push({
+            query,
+            release: () => {
+              inFlight -= 1;
+              resolve(found(query));
+            },
+          });
+        }),
+    });
+
+    const opening = radio.station.upNext();
+    await until(() => pending.length >= 3);
+    assert.equal(maxInFlight <= 3, true);
+    const released: string[] = [];
+    let settled = false;
+    void opening.then(() => {
+      settled = true;
+    });
+    const releaseNext = async (): Promise<void> => {
+      await until(() => pending.length > released.length);
+      const item = pending[released.length]!;
+      released.push(item.query);
+      item.release();
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    // Four finds are not a set. The first song waits until five will play.
+    for (let n = 0; n < 4; n += 1) await releaseNext();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    for (let n = 0; n < 12 && !settled; n += 1) await releaseNext();
+    const first = await opening;
+    assert.ok(first);
+    assert.equal(first.url, found(released[0]!).url);
+    assert.equal(radio.station.queued()?.url, first.url);
+    const played = [first.url];
+    radio.station.starting(first);
+    for (let i = 0; i < 4; i += 1) {
+      const track = await radio.station.upNext();
+      assert.ok(track);
+      assert.equal(played.includes(track.url), false);
+      played.push(track.url);
+      radio.station.starting(track);
+    }
+    assert.equal(played.length, 5);
+    assert.equal(new Set(played).size, 5);
+    assert.deepEqual(
+      played,
+      released.slice(0, 5).map((query) => found(query).url),
+    );
+    assert.equal(
+      infos.some((line) => line.includes('set 2')),
+      false,
+    );
+    assert.equal(maxInFlight <= 3, true);
+  });
+
+  it('does not search a missed find again in the next show', async () => {
+    const pool = [1, 2, 3, 4].map((n) => kitchenSong('pop', n));
+    const dead: { artist: string; title: string }[] = [];
+    const shared = {
+      pool,
+      deadFinds: dead,
+      aired: async () => pool.map((song) => airedOf(song, new Date(START - 86_400_000))),
+      related: [{ id: 7, name: 'Stranger' }],
+      tops: [{ title: 'Brand New', artist: 'Stranger', durationSec: 180 }],
+      searchOne: async () => null,
+    };
+    const first = show(shared);
+    const opened = await first.play(1);
+    assert.equal(opened.length, 1);
+    assert.equal(first.calls.youtube, 1);
+    assert.deepEqual(dead, [{ artist: 'Stranger', title: 'Brand New' }]);
+    first.station.end();
+
+    const second = show(shared);
+    const again = await second.play(1);
+    assert.equal(again.length, 1);
+    assert.equal(second.calls.youtube, 0);
+  });
+
+  it('keeps at most 3 YouTube searches in flight and stops at the cap', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const pool = [1, 2, 3, 4, 5, 6].map((n) => kitchenSong('pop', n));
+    const radio = show({
+      pool,
+      aired: async () => pool.map((song) => airedOf(song, new Date(START - 86_400_000))),
+      artistId: (key) => 100 + Number(key.split('|')[1]),
+      related: (id) => [0, 1, 2, 3].map((n) => ({ id: id * 10 + n, name: `R${id}-${n}` })),
+      topsFor: (artistId) => [{ title: `T${artistId}`, artist: `A${artistId}`, durationSec: 180 }],
+      searchOne: () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        return new Promise((resolve) => {
+          setImmediate(() => {
+            inFlight -= 1;
+            resolve(null);
+          });
+        });
+      },
+    });
+    const played = await radio.play(1);
+    assert.equal(played.length, 1);
+    assert.equal(maxInFlight <= 3, true);
+    assert.equal(maxInFlight > 1, true);
+    // Each pass stops at its cap of 10: the pop rotation block, then the finds
+    // fallback once the rotation has nothing playable.
+    assert.equal(radio.calls.youtube, 20);
+  });
+});
+
+describe('FmStation genre rotation', () => {
+  const rotationPool = [
+    ...Array.from({ length: 20 }, (_, n) => kitchenSong('rock', n)),
+    ...Array.from({ length: 20 }, (_, n) => kitchenSong('rap', n)),
+  ];
+
+  it('plays 15 rock songs, then rap, and trims the last set of a shorter block', async () => {
+    const infos: string[] = [];
+    const radio = show({
+      pool: rotationPool,
+      infos,
+      blockSongs: 12,
+      breakSeconds: 0,
+      searchOne: async () => null,
+    });
+    const played = await radio.play(13);
+    const vibe = played.map((song) => song.vibe ?? '');
+    assert.deepEqual(vibe.slice(0, 12), Array(12).fill('rock'));
+    assert.equal(vibe[12], 'rap');
+    assert.ok(infos.some((line) => line.includes('rock for 12 songs (next: rap).')));
+  });
+
+  it('does not count a request toward the 15', async () => {
+    const radio = show({
+      pool: rotationPool,
+      blockSongs: 15,
+      breakSeconds: 0,
+      searchOne: async () => null,
+    });
+    const first = await radio.play(10);
+    radio.station.heard({
+      title: 'A request',
+      url: 'https://youtu.be/request',
+      durationSec: 180,
+      requestedBy: 'Vojta',
+    });
+    const rest = await radio.play(6);
+    const played = [...first, ...rest];
+    assert.deepEqual(
+      played.slice(0, 15).map((song) => song.vibe),
+      Array(15).fill('rock'),
+    );
+    assert.equal(played[15]?.vibe, 'rap');
+  });
+
+  it('starts the next show at the genre after the one this show ended on', async () => {
+    const cursor: RotationCursor = { genre: null };
+    const first = show({
+      pool: rotationPool,
+      rotationCursor: cursor,
+      breakSeconds: 0,
+      searchOne: async () => null,
+    });
+    const played = await first.play(5);
+    assert.ok(played.every((song) => song.vibe === 'rock'));
+    first.station.end();
+    assert.equal(cursor.genre, 'rock');
+
+    const second = show({
+      pool: rotationPool,
+      rotationCursor: cursor,
+      breakSeconds: 0,
+      searchOne: async () => null,
+    });
+    const again = await second.play(5);
+    assert.ok(again.every((song) => song.vibe === 'rap'));
+    const urls = new Set(played.map((song) => song.url));
+    assert.ok(again.every((song) => !urls.has(song.url)));
+  });
+
+  it('skips an empty genre and does not replay a song that already aired', async () => {
+    const infos: string[] = [];
+    const edm = Array.from({ length: 12 }, (_, n) => kitchenSong('edm', n));
+    const aired = edm.slice(0, 2);
+    const radio = show({
+      pool: edm,
+      infos,
+      breakSeconds: 0,
+      aired: async () => aired.map((song) => airedOf(song, new Date(START - 86_400_000))),
+      searchOne: async () => null,
+    });
+    const played = await radio.play(5);
+    assert.ok(played.every((song) => song.vibe === 'EDM'));
+    const urls = played.map((song) => song.url);
+    assert.equal(urls.includes(aired[0]!.url!), false);
+    assert.equal(urls.includes(aired[1]!.url!), false);
+    assert.ok(infos.some((line) => line.includes('no playable songs for rock')));
+    assert.ok(infos.some((line) => line.includes('no playable songs for rap')));
+  });
+
+  it('skips "a bit of everything" until five unaired songs are waiting', async () => {
+    const infos: string[] = [];
+    const short = show({
+      pool: [1, 2, 3, 4].map((n) => kitchenSong('other', n)),
+      infos,
+      breakSeconds: 0,
+      searchOne: async () => null,
+    });
+    await short.play(4);
+    // The fallback's mixed theme shares the name, so check that no rotation block started.
+    assert.ok(!infos.some((line) => line.includes('a bit of everything for 15 songs')));
+    assert.ok(infos.some((line) => line.includes('no playable songs for a bit of everything')));
+
+    const ready = show({
+      pool: [1, 2, 3, 4, 5].map((n) => kitchenSong('other', n)),
+      breakSeconds: 0,
+      artistId: () => undefined,
+      searchOne: async () => {
+        throw new Error('other has no finds');
+      },
+    });
+    const songs = await ready.play(5);
+    assert.ok(songs.every((song) => song.vibe === 'a bit of everything'));
+    assert.equal(ready.calls.deezer, 0);
+    assert.equal(ready.calls.youtube, 0);
+  });
+
+  it('plays a playlist for the first genre when the kitchen has never played it', async () => {
+    const queries: string[] = [];
+    const radio = show({
+      pool: [1, 2, 3, 4, 5, 6].map((n) => kitchenSong('pop', n)),
+      artistId: () => undefined,
+      breakSeconds: 0,
+      aired: async () => [
+        {
+          songKey: 'stranger|old-hit',
+          url: 'https://youtu.be/old-hit',
+          artist: 'Stranger',
+          title: 'Old Hit',
+          playedAt: new Date(START - 86_400_000),
+        },
+      ],
+      genreList: async (genre) =>
+        genre === 'rock'
+          ? [
+              { title: 'Old Hit', artist: 'Stranger', durationSec: 180 },
+              { title: 'Fresh Cut', artist: 'Outside', durationSec: 200 },
+              { title: 'Second Cut', artist: 'Outside', durationSec: 190 },
+              { title: 'Third Cut', artist: 'Outside', durationSec: 188 },
+              { title: 'Fourth Cut', artist: 'Outside', durationSec: 176 },
+              { title: 'Fifth Cut', artist: 'Outside', durationSec: 210 },
+            ]
+          : [],
+      searchOne: async (query) => {
+        queries.push(query);
+        return found(query);
+      },
+    });
+    const played = await radio.play(1);
+    assert.equal(played.length, 1);
+    assert.equal(played[0]?.title.includes('Old Hit'), false);
+    assert.match(played[0]?.vibe ?? '', /rock/);
+    assert.match(played[0]?.vibe ?? '', /new find/);
+    assert.equal(
+      queries.some((query) => query.includes('Old Hit')),
+      false,
+    );
+  });
+
+  it('plays the new-find jingle once per block, not on a block’s first set', async () => {
+    const { lib } = memJingles([{ name: 'new-find.mp3', pcm: tone(0.25, 4_000) }]);
+    const speaks: string[] = [];
+    const infos: string[] = [];
+    const cuts = (artist: string, title: string, count: number) =>
+      Array.from({ length: count }, (_, n) => ({
+        title: `${title} ${n + 1}`,
+        artist,
+        durationSec: 200,
+      }));
+    const radio = show({
+      pool: [1, 2, 3, 4, 5, 6].map((n) => kitchenSong('pop', n)),
+      artistId: () => undefined,
+      breakSeconds: 0,
+      blockSongs: 15,
+      jingles: lib,
+      infos,
+      genreList: async (genre) => {
+        if (genre === 'rock') return cuts('Outside', 'Fresh Cut', 15);
+        if (genre === 'rap') return cuts('Rapper', 'Street Cut', 5);
+        return [];
+      },
+      searchOne: async (query) => found(query),
+      speak: async (text) => {
+        speaks.push(text);
+        return Buffer.from('line');
+      },
+    });
+    const sets: { vibe: string; pcm: Buffer | null; text: string }[] = [];
+    for (let i = 0; i < 16; i += 1) {
+      const track = await radio.station.upNext();
+      assert.ok(track, infos.join('\n'));
+      const intro = await radio.station.intro(track);
+      if (intro) {
+        sets.push({
+          vibe: radio.station.vibeOf(track) ?? '',
+          pcm: intro.pcm,
+          text: intro.text,
+        });
+      }
+      radio.station.starting(track);
+      radio.setClock(START + (i + 1) * SONG_MS);
+    }
+    assert.equal(sets.length, 4, `${sets.map((set) => set.vibe).join(' | ')}\n${infos.join('\n')}`);
+    const lead = await lib.clip(namedJingle(lib.files(), 'new-find'));
+    assert.ok(lead);
+    const line = Buffer.from('line');
+    const withJingle = lead.length + silenceMs(JINGLE_GAP_MS).length + line.length;
+    const clips = sets.map((set) => set.pcm);
+    assert.deepEqual(
+      sets.map((set) => set.vibe),
+      ['rock · new find', 'rock · new find', 'rock · new find', 'rap · new find'],
+    );
+    assert.equal(clips[0]?.equals(line), true);
+    const sung = clips[1];
+    assert.ok(sung);
+    assert.equal(sung.length, withJingle);
+    assert.equal(sung.subarray(0, lead.length).equals(lead), true);
+    assert.equal(sung.subarray(sung.length - line.length).equals(line), true);
+    assert.equal(clips[2]?.equals(line), true);
+    assert.equal(clips[3]?.equals(line), true);
+    assert.deepEqual(
+      sets.map((set) => set.text),
+      speaks,
+    );
+    assert.equal(speaks.length, 4);
+  });
+
+  it('plays the break before the next block, and skips it when breakSeconds is 0', async () => {
+    const pcm = (seconds: number) => Buffer.alloc(Math.round(seconds * 48_000 * 2 * 2));
+    const spoken: string[] = [];
+    const voice = {
+      speak: async (text: string) => {
+        spoken.push(text);
+        return pcm(1);
+      },
+    };
+    const radio = show({
+      pool: rotationPool,
+      blockSongs: 5,
+      breakSeconds: 8,
+      speak: voice.speak,
+      jingle: voice as DjVoice,
+      searchOne: async () => null,
+    });
+    await radio.play(5);
+    const next = await radio.station.upNext();
+    assert.ok(next);
+    const intro = await radio.station.intro(next);
+    assert.match(intro?.text ?? '', /^📻 Kitchen FM break · next up: rap$/);
+    assert.ok((intro?.pcm?.length ?? 0) > pcm(1).length);
+    assert.equal(intro?.text.includes('{'), false);
+
+    const quiet = show({
+      pool: rotationPool,
+      blockSongs: 5,
+      breakSeconds: 0,
+      lines: null,
+      searchOne: async () => null,
+    });
+    await quiet.play(5);
+    const plain = await quiet.station.upNext();
+    assert.ok(plain);
+    const line = await quiet.station.intro(plain);
+    assert.equal((line?.text ?? '').includes('Kitchen FM break'), false);
+  });
+});
+
+describe('FmStation prepared opener', () => {
+  const pool = () => [0, 1, 2, 3, 4, 5].map((n) => kitchenSong('cz-rap', n));
+
+  it('opens with the prepared song and fills the rest of set 1 without searching or speaking', async () => {
+    const songs = pool();
+    const opener = preparedFor(songs[0]!);
+    const infos: string[] = [];
+    const speaks: string[] = [];
+    let consumed = 0;
+    const radio = show({
+      pool: songs,
+      prepared: opener,
+      onConsume: () => {
+        consumed += 1;
+      },
+      infos,
+      speak: async (text) => {
+        speaks.push(text);
+        return Buffer.from('live');
+      },
+      searchOne: async () => {
+        throw new Error('YouTube should not be asked');
+      },
+    });
+    const played = await radio.play(5);
+    assert.equal(played.length, 5);
+    assert.equal(played[0]?.url, opener.track.url);
+    assert.equal(new Set(played.map((song) => song.url)).size, 5);
+    assert.ok(played.every((song) => songs.some((item) => item.url === song.url)));
+    assert.equal(radio.calls.youtube, 0);
+    assert.deepEqual(speaks, []);
+    assert.equal(consumed, 1);
+    assert.ok(
+      infos.includes(
+        'Kitchen FM in Kitchen: using the prepared opener "cz-rap artist 0 - cz-rap song 0" (Czech rap).',
+      ),
+    );
+    const intro = await radio.station.intro(opener.track);
+    assert.equal(intro?.text, opener.line);
+    assert.equal(intro?.pcm, opener.pcm);
+    assert.deepEqual(speaks, []);
+  });
+
+  it('plays id-main ahead of the opening line', async () => {
+    const songs = pool();
+    const opener = preparedFor(songs[0]!);
+    const { lib, calls } = memJingles([
+      { name: 'id-main.mp3', pcm: tone(0.2, 8_000) },
+      { name: 'id-jazz.mp3', pcm: tone(0.2, 1_000) },
+    ]);
+    const speaks: string[] = [];
+    const radio = show({
+      pool: songs,
+      prepared: opener,
+      jingles: lib,
+      speak: async (text) => {
+        speaks.push(text);
+        return Buffer.from('live');
+      },
+      searchOne: async () => {
+        throw new Error('YouTube should not be asked');
+      },
+    });
+    await radio.play(1);
+    const intro = await radio.station.intro(opener.track);
+    const lead = await lib.clip({ kind: 'id', id: 'main', file: 'mem://id-main.mp3' });
+    assert.ok(lead);
+    assert.equal(intro?.text, opener.line);
+    assert.deepEqual(speaks, []);
+    assert.equal(opener.pcm?.equals(Buffer.from('clip')), true);
+    assert.ok(intro?.pcm);
+    assert.ok(intro.pcm.subarray(0, lead.length).equals(lead));
+    const gap = silenceMs(JINGLE_GAP_MS);
+    assert.ok(intro.pcm.subarray(lead.length, lead.length + gap.length).equals(gap));
+    assert.ok(intro.pcm.subarray(lead.length + gap.length).equals(opener.pcm ?? Buffer.alloc(0)));
+    assert.deepEqual(calls, ['mem://id-main.mp3']);
+  });
+
+  it('plays the opening line alone when id-main will not decode', async () => {
+    const songs = pool();
+    const opener = preparedFor(songs[0]!);
+    const { lib, calls } = memJingles(
+      [
+        { name: 'id-main.mp3', pcm: tone(0.2, 8_000) },
+        { name: 'id-jazz.mp3', pcm: tone(0.2, 1_000) },
+      ],
+      new Set(['mem://id-main.mp3']),
+    );
+    const radio = show({
+      pool: songs,
+      prepared: opener,
+      jingles: lib,
+      searchOne: async () => {
+        throw new Error('YouTube should not be asked');
+      },
+    });
+    await radio.play(1);
+    const intro = await radio.station.intro(opener.track);
+    assert.equal(intro?.text, opener.line);
+    assert.equal(intro?.pcm, opener.pcm);
+    assert.deepEqual(calls, ['mem://id-main.mp3']);
+  });
+
+  it('uses the prepared song and synthesizes the line when the clip is missing', async () => {
+    const songs = pool();
+    const opener = preparedFor(songs[0]!, { pcm: null });
+    const speaks: string[] = [];
+    const radio = show({
+      pool: songs,
+      prepared: opener,
+      speak: async (text) => {
+        speaks.push(text);
+        return Buffer.from('live');
+      },
+      searchOne: async () => {
+        throw new Error('YouTube should not be asked');
+      },
+    });
+    const played = await radio.play(1);
+    assert.equal(played[0]?.url, opener.track.url);
+    assert.equal(radio.calls.youtube, 0);
+    assert.deepEqual(speaks, [opener.line]);
+    const intro = await radio.station.intro(opener.track);
+    assert.equal(intro?.text, opener.line);
+    assert.equal(speaks.length, 1);
+  });
+
+  async function fallsBack(
+    reason: string,
+    opts: {
+      over?: Partial<PreparedOpener>;
+      song?: FmSong;
+      /** Kitchen the show reads. Defaults to six unaired Czech rap songs. */
+      pool?: FmSong[];
+      aired?: () => Promise<readonly AiredSong[]>;
+      findBlocks?: () => Promise<readonly { artist: string; title: string }[]>;
+      heard?: boolean;
+    } = {},
+  ): Promise<void> {
+    const songs = opts.pool ?? pool();
+    const chosen = opts.song ?? kitchenSong('cz-rap', 99);
+    const opener = preparedFor(chosen, opts.over);
+    const infos: string[] = [];
+    const speaks: string[] = [];
+    let consumed = 0;
+    const radio = show({
+      pool: songs,
+      prepared: opener,
+      onConsume: () => {
+        consumed += 1;
+      },
+      infos,
+      aired: opts.aired,
+      findBlocks: opts.findBlocks,
+      speak: async (text) => {
+        speaks.push(text);
+        return Buffer.from('live');
+      },
+    });
+    if (opts.heard) radio.station.heard(opener.track);
+    const played = await radio.play(1);
+    assert.equal(played.length, 1);
+    assert.notEqual(played[0]?.url, chosen.url);
+    assert.equal(speaks.length, 1);
+    assert.equal(consumed, 1);
+    assert.ok(
+      infos.includes(`Kitchen FM in Kitchen: dropping the prepared opener, ${reason}.`),
+      infos.join('\n'),
+    );
+  }
+
+  it('drops an opener prepared for a different point in the rotation', async () => {
+    await fallsBack('the rotation moved on', { over: { after: 'rock' } });
+  });
+
+  it('drops an opener older than 12 hours', async () => {
+    await fallsBack('it is older than 12 hours', {
+      over: { preparedAt: START - OPENER_MAX_AGE_MS },
+    });
+  });
+
+  it('drops an opener that has aired since it was prepared', async () => {
+    const chosen = kitchenSong('cz-rap', 99);
+    await fallsBack('it has aired since it was prepared', {
+      song: chosen,
+      aired: async () => [
+        {
+          songKey: chosen.key,
+          url: chosen.url ?? '',
+          artist: chosen.artist,
+          title: chosen.title,
+          playedAt: new Date(START),
+        },
+      ],
+    });
+  });
+
+  it('drops an opener someone put on after it was prepared', async () => {
+    await fallsBack('it has aired since it was prepared', { heard: true });
+  });
+
+  it('drops an opener the kitchen has thumbs-downed', async () => {
+    const chosen = { ...kitchenSong('cz-rap', 0), nopes: 2 };
+    await fallsBack('it is blocked', {
+      song: chosen,
+      pool: [chosen, ...[1, 2, 3, 4, 5].map((n) => kitchenSong('cz-rap', n))],
+    });
+  });
+
+  it('drops a prepared find a thumbs-down has blocked', async () => {
+    const chosen = kitchenSong('cz-rap', 99);
+    await fallsBack('it is blocked', {
+      song: chosen,
+      findBlocks: async () => [{ artist: chosen.artist, title: chosen.title }],
+    });
+  });
+
+  it('drops an opener made in another language', async () => {
+    await fallsBack('it was made in another language', { over: { language: 'cs' } });
+  });
+
+  it('drops an opener made with another voice', async () => {
+    await fallsBack('the DJ voice changed', { over: { voice: 'cs-CZ-VlastaNeural' } });
+  });
+
+  it('prepares a showOpen line with no clock in it, and does not speak', async () => {
+    const speaks: string[] = [];
+    const radio = show({
+      pool: pool(),
+      lines: showOpenBook([
+        'It is {time}, good {daypart}, {song}.',
+        'Welcome in, {server}. {genre} starts with {song}.',
+      ]),
+      speak: async (text) => {
+        speaks.push(text);
+        return Buffer.from('live');
+      },
+      searchOne: async () => {
+        throw new Error('YouTube should not be asked');
+      },
+    });
+    const found = await radio.station.prepareOpener();
+    assert.ok(found);
+    assert.match(found.line, /^Welcome in, Kitchen\. Czech rap starts with /);
+    assert.equal(found.line.includes('12 AM'), false);
+    assert.equal(found.line.includes('late night'), false);
+    assert.equal(/\{(time|daypart)\}/.test(found.line), false);
+    assert.deepEqual(speaks, []);
+    assert.equal(radio.calls.youtube, 0);
+  });
+
+  it('uses the built-in greeting when every showOpen line names the time', async () => {
+    const radio = show({
+      pool: pool(),
+      lines: showOpenBook(['It is {time}, good {daypart}, {song}.']),
+    });
+    const found = await radio.station.prepareOpener();
+    assert.ok(found);
+    assert.equal(
+      found.line,
+      `Kitchen, this is Kitchen FM. We're going for Czech rap. First up, ${found.title} by ${found.artist}.`,
+    );
+    assert.equal(found.line.includes('12 AM'), false);
+    assert.equal(found.line.includes('late night'), false);
   });
 });

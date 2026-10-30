@@ -72,6 +72,12 @@ export interface FmCatalog {
   /** An artist's top tracks. Empty on failure. */
   topTracks(artistId: number): Promise<DeezerTop[]>;
   /**
+   * Tracks from the first Deezer playlists for `query` that hold at least 20 songs
+   * and whose title `fits`. At most three playlists, each capped at 100 tracks.
+   * Empty on failure.
+   */
+  genreTracks(query: string, fits?: (title: string) => boolean): Promise<DeezerTop[]>;
+  /**
    * Country and tags for one artist. `ok: false` means MusicBrainz did not answer
    * (a 503 is tried again after 3 seconds, at most twice).
    */
@@ -177,6 +183,60 @@ export function relatedFromBody(body: unknown): { id: number; name: string }[] {
     artists.push({ id, name });
   }
   return artists;
+}
+
+/** One playlist from a Deezer playlist search. */
+export interface DeezerPlaylist {
+  id: number;
+  title: string;
+  nbTracks: number;
+}
+
+/**
+ * Playlists on a Deezer `/search/playlist` payload.
+ * The caller keeps those with at least 20 tracks and takes the first three.
+ */
+export function playlistsFromSearch(body: unknown): DeezerPlaylist[] {
+  if (deezerFailed(body)) return [];
+  const data = record(body)?.data;
+  if (!Array.isArray(data)) return [];
+  const lists: DeezerPlaylist[] = [];
+  for (const item of data) {
+    const row = record(item);
+    const id = num(row?.id);
+    const title = text(row?.title);
+    const nbTracks = num(row?.nb_tracks);
+    if (id === null || !title || nbTracks === null) continue;
+    lists.push({ id, title, nbTracks });
+  }
+  return lists;
+}
+
+/**
+ * Playlists long enough to build a set from, in the order Deezer returned them.
+ * `fits` drops a playlist whose title is another genre.
+ */
+export function playlistPicks(
+  lists: readonly DeezerPlaylist[],
+  limit = 3,
+  fits: (title: string) => boolean = () => true,
+): DeezerPlaylist[] {
+  return lists.filter((list) => list.nbTracks >= 20 && fits(list.title)).slice(0, limit);
+}
+
+/** Tracks from several lists, first occurrence of an artist and title kept. */
+export function mergeTops(groups: readonly (readonly DeezerTop[])[]): DeezerTop[] {
+  const seen = new Set<string>();
+  const merged: DeezerTop[] = [];
+  for (const group of groups) {
+    for (const track of group) {
+      const key = `${track.artist.toLowerCase()}|${track.title.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(track);
+    }
+  }
+  return merged;
 }
 
 /** Top tracks on a Deezer payload. Duration is seconds. */
@@ -398,6 +458,27 @@ export function createCatalog(fetchImpl: typeof fetch = fetch): FmCatalog {
         DEEZER_HEADERS,
       );
       return body ? topsFromBody(body) : [];
+    },
+    async genreTracks(query, fits) {
+      await deezer.slot();
+      const found = await getJson(
+        fetchImpl,
+        `${DEEZER}/search/playlist?q=${encodeURIComponent(query)}&limit=10`,
+        DEEZER_HEADERS,
+      );
+      if (!found) return [];
+      const picks = playlistPicks(playlistsFromSearch(found), 3, fits);
+      const groups: DeezerTop[][] = [];
+      for (const list of picks) {
+        await deezer.slot();
+        const body = await getJson(
+          fetchImpl,
+          `${DEEZER}/playlist/${list.id}/tracks?limit=100`,
+          DEEZER_HEADERS,
+        );
+        groups.push(body ? topsFromBody(body) : []);
+      }
+      return mergeTops(groups);
     },
     async artistCountry(name) {
       const url = `${MUSICBRAINZ}?query=${encodeURIComponent(musicBrainzQuery(name))}&fmt=json&limit=5`;

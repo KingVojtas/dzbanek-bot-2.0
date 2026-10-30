@@ -16,6 +16,7 @@ import { buildNowPlayingDisplay } from '../core/display/music';
 import { upcomingQueue, type EmbedCard } from '../core/embeds';
 import type { Logger } from '../core/logger';
 import type { LoopMode, PlayerStation, StationIntro, Track, TrackSource } from '../core/types';
+import { introPlayMs, pcmSeconds, streamOpenDelayMs } from './intro-wait';
 import { afterTrackEnds, earlyEndWarning, pushHistory, takeNext } from './queue-rules';
 
 const VOLUME_MIN = 0.25;
@@ -25,8 +26,8 @@ const VOLUME_STEP = 0.25;
 const PROGRESS_TICK_MS = 5_000;
 /** The next intro is written during the song before; an unprepared one gets this long. */
 const INTRO_WAIT_MS = 12_000;
-/** A DJ clip that runs longer than this (or stays paused) is cut. */
-const INTRO_MAX_MS = 60_000;
+/** A break asks the player to wait this long for its clip to be ready. */
+const LONG_INTRO_WAIT_MS = 60_000;
 /** Station picks that fail in a row before the show stops trying (YouTube is down). */
 const STATION_MISSES = 3;
 /** Whole song, so yt-dlp exits and closes YouTube. Songs are 3–8 MB; a 12-minute cap stays under 16 MB. */
@@ -583,42 +584,72 @@ export class GuildPlayer {
       this.logger.info(`Starting stream for: ${track.title} (${track.url})`);
       // The song loads while the DJ talks. The clock stops when the stream is
       // ready, so a long intro does not look like a slow download.
-      const streamStarted = Date.now();
+      // A break of a few minutes waits to open YouTube until just before it ends,
+      // unless this song was already prefetched during the one before it.
+      const prefetched = this.prefetched?.url === track.url;
+      const longIntro = (this.station?.introWaitMs?.(track) ?? 0) >= LONG_INTRO_WAIT_MS;
+      let streamStarted = Date.now();
       let prefetchedHit = false;
       let streamReadyMs = 0;
       let streamFailed = false;
-      const opening = this.openStream(track, gen).then(async (opened) => {
-        if (!opened) return null;
-        prefetchedHit = opened.prefetched;
-        const probed = await probeStream(opened.stream);
-        streamReadyMs = Date.now() - streamStarted;
-        if (this.destroyed || gen !== this.playGeneration) {
-          probed.stream.destroy();
-          return null;
-        }
-        return probed;
-      });
-      opening.catch(() => {
-        streamFailed = true;
-      });
+      type Probed = { stream: Readable; type: StreamType } | null;
+      let opening: Promise<Probed> | null = null;
+      const begin = (): Promise<Probed> => {
+        if (opening) return opening;
+        streamStarted = Date.now();
+        opening = this.openStream(track, gen).then(async (opened) => {
+          if (!opened) return null;
+          prefetchedHit = opened.prefetched;
+          const probed = await probeStream(opened.stream);
+          streamReadyMs = Date.now() - streamStarted;
+          if (this.destroyed || gen !== this.playGeneration) {
+            probed.stream.destroy();
+            return null;
+          }
+          return probed;
+        });
+        opening.catch(() => {
+          streamFailed = true;
+        });
+        return opening;
+      };
+      // Short intros, and a song already in memory, open now. A long break does not.
+      if (!longIntro || prefetched) begin();
       const intro = await this.stationIntro(track, previous);
+      const delayMs = streamOpenDelayMs(
+        intro?.pcm?.length ? pcmSeconds(intro.pcm) : 0,
+        prefetched || !longIntro,
+      );
+      if (delayMs === 0) begin();
       // A song that already failed keeps its dedication for the next one (`missed` below).
       if (intro && !streamFailed) {
         this.djLine = intro.text;
         if (!this.destroyed) void this.publishFreshNowPlaying(track).catch(() => {});
         if (intro.pcm) {
           this.station?.spoke?.(track);
-          await this.playIntro(intro.pcm, gen);
+          if (delayMs > 0) {
+            const timer = setTimeout(() => begin(), delayMs);
+            timer.unref?.();
+            try {
+              await this.playIntro(intro.pcm, gen);
+            } finally {
+              clearTimeout(timer);
+            }
+          } else {
+            await this.playIntro(intro.pcm, gen);
+          }
         }
       }
+      // Skip during the intro cuts it short. Open the song now if it is not open yet.
+      const pending = begin();
       if (this.destroyed || gen !== this.playGeneration) {
-        void opening.then(
+        void pending.then(
           (probed) => probed?.stream.destroy(),
           () => {},
         );
         return false;
       }
-      const probed = await opening;
+      const probed = await pending;
       if (!probed) {
         if (!this.destroyed && gen === this.playGeneration) this.station?.missed?.(track);
         return false;
@@ -721,7 +752,7 @@ export class GuildPlayer {
       resource.volume?.setVolume(this.volume);
       this.introPlaying = true;
       this.player.play(resource);
-      await entersState(this.player, AudioPlayerStatus.Idle, INTRO_MAX_MS);
+      await entersState(this.player, AudioPlayerStatus.Idle, introPlayMs(pcm));
       const seconds = (resource.playbackDuration / 1000).toFixed(1);
       this.logger.info(`Kitchen FM DJ spoke for ${seconds} s`);
     } catch (error) {

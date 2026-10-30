@@ -1,4 +1,5 @@
 import type { Track } from '../core/types';
+import { JINGLE_GAP_MS } from './jingles';
 import { fillLine, type LineSlots } from './lines';
 import type { DjLanguage } from './script';
 
@@ -57,14 +58,38 @@ export function silenceMs(ms: number): Buffer {
 }
 
 /**
- * The dedication, a short gap, then the set line, as one clip.
- * Either side may be missing. Null when there is nothing to play.
+ * Clips in order, with `gapMs` of silence between the ones that have audio.
+ * Null when every part is missing.
  */
-export function joinIntro(dedication: Buffer | null, setLine: Buffer | null): Buffer | null {
-  const head = dedication?.length ? dedication : null;
-  const tail = setLine?.length ? setLine : null;
-  if (head && tail) return Buffer.concat([head, silenceMs(DEDICATION_GAP_MS), tail]);
-  return head ?? tail;
+export function joinClips(
+  parts: readonly (Buffer | null | undefined)[],
+  gapMs = DEDICATION_GAP_MS,
+): Buffer | null {
+  const clips = parts.filter((part): part is Buffer => Boolean(part?.length));
+  if (clips.length === 0) return null;
+  if (clips.length === 1) return clips[0] ?? null;
+  const gap = silenceMs(gapMs);
+  const joined: Buffer[] = [];
+  clips.forEach((clip, index) => {
+    if (index > 0) joined.push(gap);
+    joined.push(clip);
+  });
+  return Buffer.concat(joined);
+}
+
+/**
+ * The dedication jingle, the spoken dedication, then the set line.
+ * The jingle sits half a second ahead of the dedication. The dedication
+ * and the set line keep the shorter gap. Either side may be missing.
+ * Null when there is nothing to play.
+ */
+export function joinIntro(
+  dedication: Buffer | null,
+  setLine: Buffer | null,
+  jingle?: Buffer | null,
+): Buffer | null {
+  const spoken = jingle?.length ? joinClips([jingle, dedication], JINGLE_GAP_MS) : dedication;
+  return joinClips([spoken, setLine], DEDICATION_GAP_MS);
 }
 
 const FALLBACK: Record<DjLanguage, Record<'both' | 'to' | 'song' | 'plain', string>> = {

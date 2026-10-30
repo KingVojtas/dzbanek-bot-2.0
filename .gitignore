@@ -20,3 +20,7 @@ data/*
 
 # YouTube cookies shipped with /update-dzbanek uploads — a signed-in session, never commit
 secrets/
+
+# Kitchen FM's Suno jingles (~20 MB of MP3). /update-dzbanek uploads them from this folder;
+# they stay out of git history. The station plays a built-in chime for any file that is missing.
+assets/fm/jingles/

@@ -12,18 +12,24 @@ import {
   fetchMusicBrainz,
   genreNamesFromAlbum,
   MB_RETRY_MS,
+  mergeTops,
   musicBrainzQuery,
+  playlistPicks,
+  playlistsFromSearch,
   relatedFromBody,
   topsFromBody,
   type FmCatalog,
 } from '../src/fm/catalog';
 import { GenreBook } from '../src/fm/GenreBook';
+import { GENRE_ROTATION, rememberList, rotationAfter, stationPitch } from '../src/fm/rotation';
+import { timelessLines } from '../src/fm/opener';
 import {
   artistKey,
   classifyGenre,
   GENRE_MISS_MS,
   genresReady,
   knownSongs,
+  playlistFits,
   readGenreCache,
   songNeedsLookup,
   writeGenreCache,
@@ -45,7 +51,7 @@ import {
   type LineSlots,
   type Moment,
 } from '../src/fm/lines';
-import { isSameSong, prepareBlocked, type FmSong } from '../src/fm/script';
+import { isSameSong, plainTitle, prepareBlocked, type FmSong } from '../src/fm/script';
 import {
   blockProfile,
   findAllowance,
@@ -96,7 +102,12 @@ describe('classifyGenre', () => {
     assert.equal(classifyGenre(['Drum and Bass'], 'UK'), 'edm');
     assert.equal(classifyGenre(['Pop'], 'CZ'), 'cz-pop');
     assert.equal(classifyGenre(['Pop'], 'US'), 'pop');
-    assert.equal(classifyGenre(['Rock'], 'CZ'), 'rock');
+    assert.equal(classifyGenre(['Rock'], 'CZ'), 'cz-rock');
+    assert.equal(classifyGenre(['Rock'], 'SK'), 'cz-rock');
+    assert.equal(classifyGenre(['Rock'], 'US'), 'rock');
+    assert.equal(classifyGenre(['Country'], 'US'), 'country');
+    assert.equal(classifyGenre(['Americana', 'Rock'], 'US'), 'country');
+    assert.equal(classifyGenre(['Bluegrass', 'Pop'], null), 'country');
     assert.equal(classifyGenre(['Metal', 'Rock'], 'US'), 'metal');
     assert.equal(classifyGenre(['R&B'], null), 'rnb');
     assert.equal(classifyGenre(['Alternative'], null), 'rock');
@@ -123,7 +134,7 @@ describe('classifyGenre', () => {
         { name: 'czech', count: 3 },
         { name: 'rock', count: 5 },
       ]),
-      'rock',
+      'cz-rock',
     );
     assert.equal(classifyGenre(['Pop'], 'CZ', [{ name: 'hip hop', count: 4 }]), 'cz-rap');
     assert.equal(classifyGenre(['Jazz'], 'FR', [{ name: 'electronic', count: 2 }]), 'edm');
@@ -136,7 +147,81 @@ describe('classifyGenre', () => {
       ]),
       'edm',
     );
-    assert.equal(classifyGenre(['Rock'], 'CZ', [{ name: 'czech', count: 9 }]), 'rock');
+    assert.equal(classifyGenre(['Rock'], 'CZ', [{ name: 'czech', count: 9 }]), 'cz-rock');
+  });
+});
+
+describe('genre rotation', () => {
+  it('walks the list, and a fresh server starts at rock', () => {
+    assert.equal(rotationAfter(null), 'rock');
+    assert.equal(rotationAfter('rock'), 'rap');
+    assert.equal(rotationAfter('latin'), 'other');
+    assert.equal(rotationAfter('other'), 'rock');
+    let genre = rotationAfter(null);
+    const seen: string[] = [];
+    for (let n = 0; n < GENRE_ROTATION.length; n += 1) {
+      seen.push(genre);
+      genre = rotationAfter(genre);
+    }
+    assert.deepEqual(seen, [...GENRE_ROTATION]);
+    assert.equal(genre, 'rock');
+  });
+
+  it('describes the break in the radio reply, and leaves it out at 0', () => {
+    assert.equal(
+      stationPitch(15, 180, 'rock'),
+      'A new genre every 15 songs, with a 3-minute Kitchen FM break in between. First up: rock.',
+    );
+    assert.equal(
+      stationPitch(15, 90, 'rap'),
+      'A new genre every 15 songs, with a 90-second Kitchen FM break in between. First up: rap.',
+    );
+    assert.equal(stationPitch(12, 0, 'EDM'), 'A new genre every 12 songs. First up: EDM.');
+  });
+
+  it('reuses a genre list until it is 12 hours old, including an empty one', async () => {
+    const cache = new Map<string, { at: number; items: Promise<number[]> }>();
+    let loads = 0;
+    const load = async (): Promise<number[]> => {
+      loads += 1;
+      return loads === 1 ? [1] : [2];
+    };
+    assert.deepEqual(await rememberList(cache, 'edm', 0, 1_000, load), [1]);
+    assert.deepEqual(await rememberList(cache, 'edm', 999, 1_000, load), [1]);
+    assert.equal(loads, 1);
+    assert.deepEqual(await rememberList(cache, 'edm', 1_000, 1_000, load), [2]);
+    assert.equal(loads, 2);
+
+    let emptyLoads = 0;
+    assert.deepEqual(
+      await rememberList(cache, 'country', 0, 1_000, async () => {
+        emptyLoads += 1;
+        return [];
+      }),
+      [],
+    );
+    // An empty list is a failed call: the next caller loads again.
+    assert.deepEqual(
+      await rememberList(cache, 'country', 10, 1_000, async () => {
+        emptyLoads += 1;
+        return [4];
+      }),
+      [4],
+    );
+    assert.equal(emptyLoads, 2);
+
+    let shared = 0;
+    const slow = async (): Promise<number[]> => {
+      shared += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return [7];
+    };
+    const [a, b] = await Promise.all([
+      rememberList(cache, 'metal', 0, 1_000, slow),
+      rememberList(cache, 'metal', 1, 1_000, slow),
+    ]);
+    assert.deepEqual([a, b], [[7], [7]]);
+    assert.equal(shared, 1);
   });
 });
 
@@ -391,7 +476,7 @@ describe('line book', () => {
     );
   });
 
-  it('opens the show, welcomes, and credits the song in that order', () => {
+  it('opens the show with only the greeting, then welcomes and credits later sets', () => {
     assert.deepEqual(
       momentsFor({
         set: 1,
@@ -401,7 +486,11 @@ describe('line book', () => {
         how: 'play',
         by: 'Vojta',
       }),
-      ['showOpen', 'byPlay'],
+      ['showOpen'],
+    );
+    assert.deepEqual(
+      momentsFor({ set: 1, newBlock: true, hour: 18, newcomers: [], how: 'new', by: null }),
+      ['showOpen'],
     );
     assert.deepEqual(
       momentsFor({ set: 3, newBlock: true, hour: 2, newcomers: ['Ana'], how: 'new', by: null }),
@@ -449,6 +538,17 @@ describe('line book', () => {
     });
   }
 
+  it('has a showOpen line that can be said hours later', () => {
+    for (const language of ['en', 'cs'] as const) {
+      const usable = timelessLines(readLineFile(language).lines.showOpen);
+      assert.ok(usable.length > 0, language);
+      for (const line of usable) {
+        assert.equal(blanksIn(line).includes('time'), false, line);
+        assert.equal(blanksIn(line).includes('daypart'), false, line);
+      }
+    }
+  });
+
   it('does not promise an hour', () => {
     for (const line of Object.values(readLineFile('en').lines).flat()) {
       assert.equal(/\bhours?\b/i.test(line), false, line);
@@ -487,6 +587,94 @@ describe('catalog parsers', () => {
       [{ title: 'D.A.N.C.E.', artist: 'Justice', durationSec: 241 }],
     );
     assert.equal(deezerHitFromSearch({ error: { code: 4 } }, { artist: 'A', title: 'B' }), null);
+  });
+
+  it('keeps the first long playlists and merges their tracks by artist and title', () => {
+    const lists = playlistsFromSearch({
+      data: [
+        { id: 7571914262, title: 'Nejlepší Český a Slovenský Rap', nb_tracks: 1263 },
+        { id: 2, title: 'Short', nb_tracks: 5 },
+        { id: 3, title: 'Also long', nb_tracks: 20 },
+        { id: 4, title: 'Third', nb_tracks: 40 },
+        { id: 5, title: 'Fourth', nb_tracks: 50 },
+      ],
+    });
+    assert.equal(lists[0]?.id, 7571914262);
+    assert.deepEqual(
+      playlistPicks(lists).map((list) => list.id),
+      [7571914262, 3, 4],
+    );
+    assert.deepEqual(playlistsFromSearch({ error: { code: 4 } }), []);
+    assert.deepEqual(playlistsFromSearch({ data: [{ id: 1, title: '', nb_tracks: 30 }] }), []);
+    assert.deepEqual(
+      mergeTops([
+        [
+          { title: 'A', artist: 'B', durationSec: 1 },
+          { title: 'C', artist: 'D', durationSec: 2 },
+        ],
+        [{ title: 'a', artist: 'b', durationSec: 9 }],
+      ]),
+      [
+        { title: 'A', artist: 'B', durationSec: 1 },
+        { title: 'C', artist: 'D', durationSec: 2 },
+      ],
+    );
+  });
+
+  it('only takes playlists whose title names the genre', () => {
+    // Deezer's real answer to "český pop" (30 Oct 2026) puts a rap playlist first.
+    const lists = playlistsFromSearch({
+      data: [
+        { id: 3799714202, title: 'CZ/SK Rap', nb_tracks: 366 },
+        { id: 2, title: 'pop český klasika', nb_tracks: 54 },
+        { id: 3, title: 'Český Pop', nb_tracks: 38 },
+      ],
+    });
+    assert.deepEqual(
+      playlistPicks(lists, 3, (title) => playlistFits('cz-pop', title)).map((list) => list.id),
+      [2, 3],
+    );
+    assert.equal(playlistFits('cz-rap', 'CZ/SK Rap'), true);
+    assert.equal(playlistFits('cz-rock', 'Český výběr rock a punk'), true);
+    assert.equal(playlistFits('rnb', 'R&B Hits'), true);
+    assert.equal(playlistFits('metal', 'Rock Essentials'), false);
+    assert.equal(playlistFits('other', 'Anything'), true);
+  });
+
+  it('matches a find without the release label Deezer adds to its title', () => {
+    assert.equal(plainTitle('Smoke On The Water (Remastered 2012)'), 'Smoke On The Water');
+    assert.equal(plainTitle('Wheel in the Sky - 2024 Remaster'), 'Wheel in the Sky');
+    assert.equal(
+      plainTitle("Don't Stop Believin' [2022 Remaster] (Live at The Summit)"),
+      "Don't Stop Believin' (Live at The Summit)",
+    );
+    assert.equal(plainTitle('Song (Radio Edit)'), 'Song');
+    assert.equal(plainTitle('(Remastered)'), '(Remastered)');
+    assert.equal(
+      isSameSong(
+        { artist: 'Deep Purple', title: 'Smoke On The Water (Remastered 2012)' },
+        { title: 'Deep Purple - Smoke on the Water (Official Audio)', uploader: 'Deep Purple' },
+      ),
+      true,
+    );
+    assert.equal(
+      isSameSong(
+        { artist: 'Journey', title: 'When You Love a Woman (2024 Remaster)' },
+        {
+          title: 'Journey - When You Love A Woman (Official HD Video - 1996)',
+          uploader: 'Journey',
+        },
+      ),
+      true,
+    );
+    // A live take still is not the studio song.
+    assert.equal(
+      isSameSong(
+        { artist: 'Journey', title: 'Separate Ways (2024 Remaster)' },
+        { title: 'Journey - Separate Ways (Live in Houston)', uploader: 'Journey' },
+      ),
+      false,
+    );
   });
 
   it('reads a MusicBrainz country only when the artist name matches', () => {
@@ -697,6 +885,7 @@ function catalog(overrides: Partial<FmCatalog>): FmCatalog {
     albumGenres: unused,
     relatedArtists: async () => [],
     topTracks: async () => [],
+    genreTracks: async () => [],
     artistCountry: unused,
     lookupArea: async () => ({ ok: true, value: { country: null, parents: [] } }),
     ...overrides,
@@ -850,9 +1039,9 @@ describe('GenreBook', () => {
       { key: 'kabat|a', artist: 'ignored', title: 'A' },
       { key: 'kabat|b', artist: 'ignored', title: 'B' },
     ]);
-    await until(() => book.genreOf('kabat|b') === 'rock');
+    await until(() => book.genreOf('kabat|b') === 'cz-rock');
     assert.equal(asked, 1);
-    assert.equal(book.genreOf('kabat|a'), 'rock');
+    assert.equal(book.genreOf('kabat|a'), 'cz-rock');
     assert.deepEqual(book.snapshot().artists[artistKey('Kabát')], {
       country: 'CZ',
       tags: [
@@ -966,7 +1155,7 @@ describe('GenreBook', () => {
     };
     const book = new GenreBook(path, catalog({}), logger, cache);
     assert.equal(book.genreOf('linkin park|numb'), 'rock');
-    assert.equal(book.genreOf('kabat|mala'), 'rock');
+    assert.equal(book.genreOf('kabat|mala'), 'cz-rock');
     assert.equal(readGenreCache(path).songs['linkin park|numb']?.genre, 'rock');
   });
 

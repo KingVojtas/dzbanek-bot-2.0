@@ -6,10 +6,13 @@ import type { MusicManager } from '../music/MusicManager';
 import type { Track } from '../core/types';
 import { dedupeSongs, songFromCatch, songFromTrack } from '../quiz/songs';
 import type { PlayLogKind, PlayLogStore, PlayedTrackStore } from '../quiz/stores';
-import { createCatalog, type FmCatalog } from './catalog';
+import { createCatalog, type DeezerTop, type FmCatalog } from './catalog';
 import { FmStation } from './FmStation';
 import { GenreBook, genreCachePath } from './GenreBook';
-import { genreName } from './genres';
+import { JingleLibrary } from './jingles';
+import { genreName, genreQuery, playlistFits, type GenreId, type GenreIndex } from './genres';
+import { GENRE_LIST_MS, rememberList, rotationAfter, type RotationCursor } from './rotation';
+import type { PreparedOpener } from './opener';
 import {
   playFromFire,
   reactionSongKey,
@@ -24,6 +27,27 @@ import { DjWriter } from './writer';
 export const FM_MIN_SONGS = 3;
 /** A /play newer than this stays off the station, the same as a song it aired itself. */
 const RECENT_PLAY_MS = 24 * 60 * 60 * 1000;
+/** Boot preparation waits so startup is not competing with it. */
+const BOOT_DELAY_MS = 30_000;
+/** One server, then a short pause, so the YouTube and Deezer gates are not piled up. */
+const PREPARE_GAP_MS = 3_000;
+/** Openers prepared on boot. The rest wait until a show on that server ends. */
+const BOOT_SERVERS = 10;
+
+/** Stand-ins for the catalog, the genre cache, the voice, and the clock. */
+export interface KitchenFmOptions {
+  now?: () => number;
+  catalog?: FmCatalog;
+  genres?: GenreIndex;
+  voice?: DjVoice;
+  /** Station IDs and promos. A miss here does not rest the DJ's voice. */
+  jingle?: DjVoice;
+  /**
+   * Sung jingles. Null skips them. Omitted reads `assets/fm/jingles`.
+   * The file is joined when a clip is played, not when an opener is prepared.
+   */
+  jingles?: JingleLibrary | null;
+}
 
 /**
  * How a track start is filed. A new find wins over a plain station pick.
@@ -41,15 +65,31 @@ export function playLogKind(
 
 /**
  * Kitchen FM: the server's own station. It plays the kitchen's songs (every
- * /play and every 🍪 catch) in genre blocks of about ten songs, with a few new
- * finds and a DJ between the sets. /play requests still go first. No API key.
+ * /play and every 🍪 catch) in blocks of about fifteen songs, one genre then
+ * the next, with a spoken break between them. /play requests still go first.
+ * No API key.
  */
 export class KitchenFm {
   private readonly stations = new Map<string, FmStation>();
   private readonly writer: DjWriter;
   private readonly voice: DjVoice;
-  private readonly genres: GenreBook;
+  private readonly jingle: DjVoice;
+  private readonly jingles: JingleLibrary | null;
+  private readonly genres: GenreIndex;
   private readonly catalog: FmCatalog;
+  /** Find queries YouTube could not match, per server, for the life of the process. */
+  private readonly deadFinds = new Map<string, { artist: string; title: string }[]>();
+  /** Genre the previous show on this server ended on, so the next one starts after it. */
+  private readonly rotationCursors = new Map<string, RotationCursor>();
+  /** Deezer playlist tracks, one list per genre, shared by every server. */
+  private readonly genreLists = new Map<string, { at: number; items: Promise<DeezerTop[]> }>();
+  /** The next show's opener, one per server. Gone once that show uses it or drops it. */
+  private readonly prepared = new Map<string, PreparedOpener>();
+  /** A preparation already running, so a second one for the same server waits on it. */
+  private readonly preparing = new Map<string, Promise<void>>();
+  private bootTimer: ReturnType<typeof setTimeout> | null = null;
+  private backgroundStopped = false;
+  private gapMs = PREPARE_GAP_MS;
 
   constructor(
     private readonly music: MusicManager,
@@ -59,15 +99,28 @@ export class KitchenFm {
     private readonly playLog: PlayLogStore,
     private readonly config: Config,
     private readonly logger: Logger,
+    private readonly options: KitchenFmOptions = {},
   ) {
     this.writer = new DjWriter(config.dj.model, logger, {
       setsPerServerPerDay: config.dj.setsPerServerPerDay,
       setsPerDay: config.dj.setsPerDay,
       timezone: config.timezone,
     });
-    this.voice = new DjVoice(config.dj.voice, logger);
-    this.catalog = createCatalog();
-    this.genres = new GenreBook(genreCachePath(), this.catalog, logger);
+    this.voice = options.voice ?? new DjVoice(config.dj.voice, logger);
+    this.jingle =
+      options.jingle ?? new DjVoice(config.dj.jingleVoice ?? 'en-GB-RyanNeural', logger);
+    this.jingles =
+      options.jingles !== undefined
+        ? options.jingles
+        : new JingleLibrary({
+            warn: (message) => logger.warn(message),
+          });
+    this.catalog = options.catalog ?? createCatalog();
+    this.genres = options.genres ?? new GenreBook(genreCachePath(), this.catalog, logger);
+  }
+
+  private clock(): number {
+    return this.options.now?.() ?? Date.now();
   }
 
   /** A set may bring songs the kitchen never played, from related artists. */
@@ -166,7 +219,104 @@ export class KitchenFm {
     this.genres.enqueue(kitchen);
     if (player.onAir && this.stations.has(guild.id)) return songs;
 
-    const station: FmStation = new FmStation(
+    const station = this.createStation(guild, () => {
+      if (this.stations.get(guild.id) === station) this.stations.delete(guild.id);
+      this.logger.info(`Kitchen FM off the air in ${guild.name}.`);
+      void this.prepareNext(guild);
+    });
+    this.stations.set(guild.id, station);
+    player.setStation(station);
+    this.logger.info(`Kitchen FM on air in ${guild.name} (#${voice.name}), ${songs} songs.`);
+    return songs;
+  }
+
+  /** Find queries that missed on YouTube, kept until the process exits. */
+  private deadFor(guildId: string): { artist: string; title: string }[] {
+    let list = this.deadFinds.get(guildId);
+    if (!list) {
+      list = [];
+      this.deadFinds.set(guildId, list);
+    }
+    return list;
+  }
+
+  /** Genre the last show on this server ended on. Null before the first one. */
+  private cursorFor(guildId: string): RotationCursor {
+    let cursor = this.rotationCursors.get(guildId);
+    if (!cursor) {
+      cursor = { genre: null };
+      this.rotationCursors.set(guildId, cursor);
+    }
+    return cursor;
+  }
+
+  /** The genre a new show on this server would open with. Rock when none has ended. */
+  openingGenre(guildId: string): GenreId {
+    return rotationAfter(this.rotationCursors.get(guildId)?.genre ?? null);
+  }
+
+  /** Playlist tracks for one genre, fetched at most once every 12 hours. */
+  private tracksFor(genre: GenreId): Promise<DeezerTop[]> {
+    const query = genreQuery(genre);
+    if (!query) return Promise.resolve([]);
+    return rememberList(this.genreLists, genre, this.clock(), GENRE_LIST_MS, () =>
+      this.catalog.genreTracks(query, (title) => playlistFits(genre, title)),
+    );
+  }
+
+  /**
+   * Prepare openers in the background, once shortly after boot.
+   * A show that ends prepares the next one itself.
+   * The constructor stays free of timers; call `stopBackgroundWork` on shutdown.
+   */
+  startBackgroundWork(
+    guilds: () => Iterable<{ id: string; name: string }>,
+    timing?: { bootDelayMs?: number; gapMs?: number },
+  ): void {
+    this.stopBackgroundWork();
+    this.backgroundStopped = false;
+    this.gapMs = timing?.gapMs ?? PREPARE_GAP_MS;
+    const bootDelay = timing?.bootDelayMs ?? BOOT_DELAY_MS;
+    this.bootTimer = setTimeout(() => {
+      this.bootTimer = null;
+      if (this.backgroundStopped) return;
+      void this.prepareAtBoot(guilds).catch((error: unknown) => {
+        this.logger.warn('Kitchen FM could not prepare openers:', error);
+      });
+    }, bootDelay);
+    this.bootTimer.unref?.();
+  }
+
+  /** Stop boot preparation. A show already on air is left alone. */
+  stopBackgroundWork(): void {
+    this.backgroundStopped = true;
+    if (this.bootTimer) clearTimeout(this.bootTimer);
+    this.bootTimer = null;
+  }
+
+  /** The opener stored for the next show on this server, if there is one. */
+  openerFor(guildId: string): PreparedOpener | null {
+    return this.prepared.get(guildId) ?? null;
+  }
+
+  /**
+   * Find and voice the next show's first song. Does nothing while a show is on
+   * or while a preparation for this server is already running. A failure leaves
+   * no new opener; the next show starts the usual way.
+   */
+  prepareNext(guild: { id: string; name: string }): Promise<void> {
+    if (this.backgroundStopped || this.stations.has(guild.id)) return Promise.resolve();
+    const existing = this.preparing.get(guild.id);
+    if (existing) return existing;
+    const job = this.runPrepare(guild).finally(() => {
+      if (this.preparing.get(guild.id) === job) this.preparing.delete(guild.id);
+    });
+    this.preparing.set(guild.id, job);
+    return job;
+  }
+
+  private createStation(guild: Guild, onEnd: () => void, preparing = false): FmStation {
+    return new FmStation(
       {
         guild,
         listeners: () => this.listeners(guild),
@@ -175,24 +325,98 @@ export class KitchenFm {
         writer: this.writer,
         voice: this.voice,
         language: this.config.dj.language,
+        voiceName: this.config.dj.voice,
         discover: this.config.dj.discover,
         blockSets: this.config.dj.blockSets,
+        blockSongs: this.config.dj.blockSongs,
+        breakSeconds: this.config.dj.breakSeconds,
+        jingle: this.jingle,
+        jingles: this.jingles,
         genres: this.genres,
         catalog: this.catalog,
         findBlocks: async () => (await this.reactions.tally(guild.id)).blocked,
-        aired: () => this.playLog.aired(guild.id, new Date(Date.now() - RECENT_PLAY_MS)),
+        aired: () => this.playLog.aired(guild.id, new Date(this.clock() - RECENT_PLAY_MS)),
+        deadFinds: this.deadFor(guild.id),
+        rotationCursor: this.cursorFor(guild.id),
+        genreTracks: (genre) => this.tracksFor(genre),
+        prepared: preparing ? null : (this.prepared.get(guild.id) ?? null),
+        consumeOpener: preparing
+          ? undefined
+          : () => {
+              this.prepared.delete(guild.id);
+            },
+        now: () => this.clock(),
         timezone: this.config.timezone,
         logger: this.logger,
       },
-      () => {
-        if (this.stations.get(guild.id) === station) this.stations.delete(guild.id);
-        this.logger.info(`Kitchen FM off the air in ${guild.name}.`);
-      },
+      onEnd,
     );
-    this.stations.set(guild.id, station);
-    player.setStation(station);
-    this.logger.info(`Kitchen FM on air in ${guild.name} (#${voice.name}), ${songs} songs.`);
-    return songs;
+  }
+
+  private async runPrepare(guild: { id: string; name: string }): Promise<void> {
+    try {
+      if (this.backgroundStopped || this.stations.has(guild.id)) return;
+      const station = this.createStation(guild as Guild, () => {}, true);
+      const found = await station.prepareOpener();
+      if (this.backgroundStopped || this.stations.has(guild.id)) return;
+      if (!found) {
+        this.logger.warn(`Kitchen FM in ${guild.name}: could not prepare the next opener.`);
+        return;
+      }
+      let pcm: Buffer | null = null;
+      try {
+        pcm = await this.voice.speak(found.line);
+      } catch (error: unknown) {
+        this.logger.warn('Kitchen FM intro failed:', error);
+        pcm = null;
+      }
+      if (this.backgroundStopped || this.stations.has(guild.id)) return;
+      const opener: PreparedOpener = {
+        ...found,
+        pcm,
+        preparedAt: this.clock(),
+        language: this.config.dj.language,
+        voice: this.config.dj.voice,
+      };
+      this.prepared.set(guild.id, opener);
+      const seconds = opener.pcm?.length
+        ? (opener.pcm.length / (48_000 * 2 * 2)).toFixed(1)
+        : '0.0';
+      this.logger.info(
+        `Kitchen FM in ${guild.name}: next opener ready: "${opener.artist} - ${opener.title}" (${genreName(opener.genre, this.config.dj.language)}), clip ${seconds} s.`,
+      );
+    } catch (error: unknown) {
+      this.logger.warn(`Kitchen FM in ${guild.name}: could not prepare the next opener:`, error);
+    }
+  }
+
+  private async prepareAtBoot(guilds: () => Iterable<{ id: string; name: string }>): Promise<void> {
+    let started = 0;
+    let gap = false;
+    for (const guild of guilds()) {
+      if (this.backgroundStopped || started >= BOOT_SERVERS) return;
+      if (this.stations.has(guild.id)) continue;
+      let songs: number;
+      try {
+        songs = (await this.pool(guild.id)).length;
+      } catch (error: unknown) {
+        this.logger.warn(`Kitchen FM in ${guild.name}: could not read the kitchen:`, error);
+        continue;
+      }
+      if (songs < FM_MIN_SONGS) continue;
+      if (gap) await this.pause(this.gapMs);
+      gap = true;
+      started += 1;
+      await this.prepareNext(guild);
+    }
+  }
+
+  private pause(ms: number): Promise<void> {
+    if (ms <= 0 || this.backgroundStopped) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      timer.unref?.();
+    });
   }
 
   /**

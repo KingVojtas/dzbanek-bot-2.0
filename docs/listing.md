@@ -33,7 +33,7 @@ Seven stations, live: Kiss, Rock Radio, Radio Beat and Frekvence 1 from Czechia,
 
 ## 🎙️ Kitchen FM, your own station
 
-`/radio play station:Kitchen FM` plays your server's own songs, everything you've `/play`ed and caught, in genre blocks, with a DJ who talks between sets and reads your dedications (`/radio dedicate`). Press 🔥 or 👎 on a song and the station learns what you like. On the 1st of each month, **Kitchen Wrapped** sums up your server's month in songs.
+`/radio play station:Kitchen FM` plays your server's own songs, everything you've `/play`ed and caught, in genre blocks, with a DJ who talks between sets and reads your dedications (`/radio dedicate`). The genre changes every 15 songs (rock, then rap, then EDM, and on through the list), with a 3-minute Kitchen FM break in between: “You're listening to Kitchen FM. Put your headphones on and get ready for the ride!” A later show picks up at the next genre. Press 🔥 or 👎 on a song and the station learns what you like. On the 1st of each month, **Kitchen Wrapped** sums up your server's month in songs.
 
 ## 🎧 Kitchen Quiz
 

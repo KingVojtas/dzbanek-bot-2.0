@@ -13,6 +13,12 @@ import {
   silenceMs,
 } from '../src/fm/dedications';
 import { FmStation } from '../src/fm/FmStation';
+import {
+  JINGLE_GAP_MS,
+  JingleLibrary,
+  classifyJingleName,
+  type JingleFile,
+} from '../src/fm/jingles';
 import { blanksIn, readLineFile } from '../src/fm/lines';
 import type { FmSong } from '../src/fm/script';
 
@@ -32,7 +38,10 @@ function song(n: number): FmSong {
   };
 }
 
-function show(speak: (text: string) => Promise<Buffer | null> = async () => null) {
+function show(
+  speak: (text: string) => Promise<Buffer | null> = async () => null,
+  jingles?: JingleLibrary | null,
+) {
   return new FmStation(
     {
       guild: {
@@ -44,6 +53,7 @@ function show(speak: (text: string) => Promise<Buffer | null> = async () => null
       source: { youtube: { searchOne: async () => null } } as never,
       writer: { ready: false } as never,
       voice: { speak } as never,
+      jingles,
       language: 'en',
       discover: 0,
       genres: {
@@ -132,6 +142,15 @@ describe('dedication replies and lines', () => {
     assert.equal(joined?.[joined.length - 1], 2);
     assert.equal(joinIntro(head, null), head);
     assert.equal(joinIntro(null, null), null);
+
+    const jingle = Buffer.from([9, 0, 9, 0]);
+    const sung = joinIntro(head, tail, jingle);
+    const lead = silenceMs(JINGLE_GAP_MS).length;
+    assert.equal(sung?.length, jingle.length + lead + head.length + gap + tail.length);
+    assert.equal(sung?.[0], 9);
+    assert.equal(sung?.[jingle.length + lead], 1);
+    assert.equal(sung?.[sung.length - 1], 2);
+    assert.equal(joinIntro(head, tail, Buffer.alloc(0))?.length, joined?.length);
   });
 
   it('has a line for a recipient, a song, neither, and both', () => {
@@ -327,6 +346,45 @@ describe('dedication playback', () => {
     assert.equal(live?.pcm?.[0], 1);
     assert.equal(live?.pcm?.[live.pcm.length - 1], 2);
     assert.equal(live?.pcm?.length, 4 + silenceMs(DEDICATION_GAP_MS).length + 4);
+  });
+
+  it('plays dedication.mp3 before the message, and does not invent a station ID', async () => {
+    const raw = Buffer.alloc(Math.round(0.2 * 48_000) * 4);
+    for (let i = 0; i < raw.length; i += 2) raw.writeInt16LE(4_000, i);
+    const classified = classifyJingleName('dedication.mp3');
+    assert.ok(classified);
+    const file: JingleFile = { ...classified, file: 'mem://dedication.mp3' };
+    const lib = new JingleLibrary({
+      list: () => [file],
+      decode: async () => raw,
+    });
+    const station = show(voice().speak, lib);
+    const first = await station.upNext();
+    assert.ok(first);
+    const early = await station.intro(first);
+    assert.equal(early?.pcm?.length, 4);
+    assert.equal(early?.pcm?.[0], 2);
+    station.dedicate({
+      userId: 'u1',
+      from: 'Vojta',
+      to: '',
+      message: 'good luck tomorrow',
+      track: first,
+      song: 'Lavazza by Viktor Sheen',
+    });
+    station.starting(first);
+    const live = await station.intro(first);
+    const lead = await lib.clip(file);
+    assert.ok(lead);
+    assert.ok(live?.pcm);
+    const leadGap = silenceMs(JINGLE_GAP_MS).length;
+    const tailGap = silenceMs(DEDICATION_GAP_MS).length;
+    assert.ok(live.pcm.subarray(0, lead.length).equals(lead));
+    assert.equal(live.pcm[lead.length + leadGap], 1);
+    assert.equal(live.pcm[live.pcm.length - 1], 2);
+    assert.equal(live.pcm.length, lead.length + leadGap + 4 + tailGap + 4);
+    assert.match(live.text, /good luck tomorrow/);
+    assert.ok(live.text.includes(early?.text ?? ''));
   });
 
   it('puts a dedication back when its song never starts', async () => {

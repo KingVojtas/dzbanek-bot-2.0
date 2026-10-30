@@ -42,8 +42,20 @@ export interface Config {
     model: string;
     /** New finds per set, from related artists, 0 to 3. */
     discover: number;
-    /** Sets in a genre block after the opener, from 1 to 4. The first block is one set. */
+    /**
+     * Station songs in one rotation block, from 5 to 30.
+     * Requests and dedications are not counted.
+     */
+    blockSongs: number;
+    /** Sets in a taste block after the first, from 1 to 4. The first taste block is one set. */
     blockSets: number;
+    /**
+     * The break between rotation blocks, in seconds, from 0 to 300.
+     * 0 plays the next block with the usual DJ line and no break.
+     */
+    breakSeconds: number;
+    /** Edge voice for station IDs, promos, and outros. The DJ voice still reads the recap. */
+    jingleVoice: string;
     /** Claude-planned sets a server gets per day. Past it the station plans its own. */
     setsPerServerPerDay: number;
     /** Claude-planned sets per day across every server, a ceiling on the API bill. */
@@ -54,6 +66,8 @@ export interface Config {
 
 /** The DJ's voice when config.json names none. */
 const DJ_VOICES = { en: 'en-US-AndrewMultilingualNeural', cs: 'cs-CZ-VlastaNeural' } as const;
+/** Station IDs and promos. The break is English even when the DJ speaks Czech. */
+const JINGLE_VOICE = 'en-GB-RyanNeural';
 
 type Json = Record<string, unknown>;
 
@@ -74,6 +88,12 @@ function requireString(value: unknown, name: string): string {
     throw new Error(`Invalid config: "${name}" must be a non-empty string.`);
   }
   return value;
+}
+
+/** A whole number clamped to a range, or `fallback` when the value is missing. */
+function clampWhole(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
 }
 
 /** A whole number from config, or null when it is missing or not a number. */
@@ -148,10 +168,13 @@ function loadConfig(): Config {
         typeof dj.discover === 'number' && Number.isFinite(dj.discover)
           ? Math.min(3, Math.max(0, Math.round(dj.discover)))
           : 2,
+      blockSongs: clampWhole(dj.blockSongs, 5, 30, 15),
       blockSets:
         typeof dj.blockSets === 'number' && Number.isFinite(dj.blockSets)
           ? Math.min(4, Math.max(1, Math.round(dj.blockSets)))
           : 2,
+      breakSeconds: clampWhole(dj.breakSeconds, 0, 300, 180),
+      jingleVoice: optionalString(dj.jingleVoice) ?? JINGLE_VOICE,
       setsPerServerPerDay: wholeAtLeastZero(dj.setsPerServerPerDay) ?? 20,
       setsPerDay: wholeAtLeastZero(dj.setsPerDay) ?? 100,
     },

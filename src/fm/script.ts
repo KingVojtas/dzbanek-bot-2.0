@@ -419,6 +419,21 @@ export function parsePlan(
 const VARIANT =
   /\b(nightcore|sped up|slowed|reverb|8d|bass ?boost(ed)?|karaoke|instrumental|cover|remix|live)\b/;
 const FEAT = /\s*[([]?\s*\b(?:feat|ft|featuring)\b\.?.*$/i;
+/** Release labels Deezer puts on a title that a YouTube upload does not carry. */
+const RELEASE_WORDS =
+  'remaster(?:ed)?|radio edit|single version|album version|mono|stereo|deluxe(?: edition)?|bonus track';
+const RELEASE_TAG = new RegExp(`\\s*[([][^)\\]]*\\b(?:${RELEASE_WORDS})\\b[^)\\]]*[)\\]]`, 'gi');
+const RELEASE_SUFFIX = new RegExp(`\\s+[-–—]\\s+[^-–—]*\\b(?:${RELEASE_WORDS})\\b.*$`, 'i');
+
+/**
+ * The title without release labels: "Smoke On The Water (Remastered 2012)",
+ * "Hush - 1998 Remaster", and "[2022 Remaster]" all lose the label. A live
+ * take or a remix keeps its tag, so it is still told apart from the song.
+ */
+export function plainTitle(title: string): string {
+  const plain = title.replace(RELEASE_TAG, '').replace(RELEASE_SUFFIX, '').trim();
+  return plain || title.trim();
+}
 
 interface SongNeedles {
   titleKey: string;
@@ -433,7 +448,7 @@ interface BlockedName {
 
 /** The title and artist words `isSameSong` looks for in a result. */
 function songNeedles(want: { artist: string; title: string }): SongNeedles | null {
-  const title = want.title.replace(FEAT, '');
+  const title = plainTitle(want.title).replace(FEAT, '');
   const wanted = catchKeys(want.artist, title);
   if (!wanted.titleKey) return null;
   const artistWord =

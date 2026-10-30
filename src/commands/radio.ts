@@ -10,6 +10,8 @@ import {
 import { buildReplyEmbed, buildSiteEmbed } from '../core/embeds';
 import type { Command, Services } from '../core/types';
 import { cleanDedication, dedicationReply, isYouTubePlaylistLink } from '../fm/dedications';
+import { genreName } from '../fm/genres';
+import { stationPitch } from '../fm/rotation';
 import { songPhrase } from '../fm/lines';
 import { isSpotifyAlbumUrl, isSpotifyPlaylistUrl } from '../music/sources';
 import { youtubeBotCheckHint } from '../music/ytdlp-cookies';
@@ -282,13 +284,20 @@ async function playKitchenFm(
   try {
     const text = interaction.channel?.isSendable() ? interaction.channel : null;
     const songs = await services.fm.start(voiceChannel, text);
+    const pitch = stationPitch(
+      services.config.dj.blockSongs,
+      services.config.dj.breakSeconds,
+      genreName(services.fm.openingGenre(voiceChannel.guild.id), services.fm.language),
+    );
     await interaction.editReply({
       embeds: [
         buildReplyEmbed(
           'success',
           `🎙️ **Kitchen FM** is on air in <#${voiceChannel.id}>: ${songs} kitchen songs` +
             (services.fm.findsNew ? ', plus a few new finds' : '') +
-            '. Ten songs of one genre, then the next. The opener is five, with a DJ between the sets.\n' +
+            '. ' +
+            pitch +
+            '\n' +
             '-# `/play` requests go first. ⏭️ Skip cuts the DJ short. `/radio stop` ends the show.',
         ),
       ],

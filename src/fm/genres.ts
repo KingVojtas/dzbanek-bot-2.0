@@ -2,18 +2,24 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { dirname } from 'node:path';
 import { catchKeys } from '../radio/now-playing';
 
-/** One shelf Kitchen FM can play for a block of songs. */
+/**
+ * One shelf Kitchen FM can play for a block of songs.
+ * `query` is the Deezer playlist search for a genre the kitchen has not played.
+ * `other` has none. That block is kitchen songs tagged `other`, or not tagged at all.
+ */
 export const GENRES = [
-  { id: 'cz-rap', en: 'Czech rap', cs: 'český rap' },
-  { id: 'rap', en: 'rap', cs: 'rap' },
-  { id: 'cz-pop', en: 'Czech pop', cs: 'český pop' },
-  { id: 'pop', en: 'pop', cs: 'pop' },
-  { id: 'rock', en: 'rock', cs: 'rock' },
-  { id: 'metal', en: 'metal', cs: 'metal' },
-  { id: 'edm', en: 'EDM', cs: 'EDM' },
-  { id: 'rnb', en: 'R&B', cs: 'R&B' },
-  { id: 'indie', en: 'indie', cs: 'indie' },
-  { id: 'latin', en: 'Latin', cs: 'latina' },
+  { id: 'cz-rap', en: 'Czech rap', cs: 'český rap', query: 'český rap' },
+  { id: 'rap', en: 'rap', cs: 'rap', query: 'rap hits' },
+  { id: 'cz-pop', en: 'Czech pop', cs: 'český pop', query: 'český pop' },
+  { id: 'pop', en: 'pop', cs: 'pop', query: 'pop hits' },
+  { id: 'cz-rock', en: 'Czech rock', cs: 'český rock', query: 'český rock' },
+  { id: 'rock', en: 'rock', cs: 'rock', query: 'rock classics' },
+  { id: 'metal', en: 'metal', cs: 'metal', query: 'metal hits' },
+  { id: 'edm', en: 'EDM', cs: 'EDM', query: 'edm hits' },
+  { id: 'rnb', en: 'R&B', cs: 'R&B', query: 'r&b hits' },
+  { id: 'indie', en: 'indie', cs: 'indie', query: 'indie hits' },
+  { id: 'latin', en: 'Latin', cs: 'latina', query: 'latin hits' },
+  { id: 'country', en: 'country', cs: 'country', query: 'country hits' },
   { id: 'other', en: 'a bit of everything', cs: 'od všeho trochu' },
 ] as const;
 
@@ -23,7 +29,17 @@ export type GenreId = (typeof GENRES)[number]['id'];
 export const GENRE_READY_COUNT = 30;
 export const GENRE_READY_RATIO = 0.6;
 
-const FAMILIES = ['metal', 'rap', 'edm', 'rnb', 'latin', 'indie', 'rock', 'pop'] as const;
+const FAMILIES = [
+  'metal',
+  'rap',
+  'edm',
+  'rnb',
+  'latin',
+  'country',
+  'indie',
+  'rock',
+  'pop',
+] as const;
 type Family = (typeof FAMILIES)[number];
 
 /** How long a Deezer miss stays quiet before the song is looked up again. */
@@ -94,6 +110,38 @@ export function genreName(id: GenreId, language: 'en' | 'cs'): string {
   return language === 'cs' ? (genre?.cs ?? id) : (genre?.en ?? id);
 }
 
+/** Deezer playlist search for this genre. `other` has none. */
+export function genreQuery(id: GenreId): string | null {
+  const genre = GENRES.find((item) => item.id === id);
+  return genre && 'query' in genre ? genre.query : null;
+}
+
+/**
+ * Words a playlist title must hold to be used for a genre, matched without
+ * accents. Deezer's search for "český pop" ranks "CZ/SK Rap" first.
+ */
+const PLAYLIST_WORDS: Partial<Record<GenreId, RegExp>> = {
+  'cz-rap': /\brap\b|hip.?hop/,
+  rap: /\brap\b|hip.?hop|urban/,
+  'cz-pop': /\bpop\b/,
+  pop: /\bpop\b|hits/,
+  'cz-rock': /rock|punk/,
+  rock: /rock/,
+  metal: /metal/,
+  edm: /\bedm\b|dance|electro|house|techno/,
+  rnb: /r&b|\brnb\b|soul/,
+  indie: /indie|alternative/,
+  latin: /latin|reggaeton|salsa|bachata/,
+  country: /country/,
+};
+
+/** Whether a Deezer playlist's title names `id`. A genre without words takes any title. */
+export function playlistFits(id: GenreId, title: string): boolean {
+  const words = PLAYLIST_WORDS[id];
+  if (!words) return true;
+  return words.test(title.toLowerCase().normalize('NFD').replace(/\p{M}/gu, ''));
+}
+
 /** True when `id` is one of the fixed genres. */
 export function isGenreId(id: string): id is GenreId {
   return GENRES.some((genre) => genre.id === id);
@@ -101,9 +149,10 @@ export function isGenreId(id: string): id is GenreId {
 
 /**
  * Map Deezer's genre names, MusicBrainz tag votes, and a country onto one id.
- * Rap or hip hop from Czechia or Slovakia is `cz-rap`. Dance and Electro are `edm`.
- * "Alternative" is rock. Tag votes replace the album label only when one family
- * has at least 2 votes and more than every other family.
+ * Rap or hip hop from Czechia or Slovakia is `cz-rap`. Rock from there is `cz-rock`.
+ * Dance and Electro are `edm`. "Alternative" is rock. Country beats rock and pop
+ * when both labels are on the album. Tag votes replace the album label only when
+ * one family has at least 2 votes and more than every other family.
  */
 export function classifyGenre(
   names: readonly string[],
@@ -114,6 +163,7 @@ export function classifyGenre(
   const home = country === 'CZ' || country === 'SK';
   if (family === 'rap') return home ? 'cz-rap' : 'rap';
   if (family === 'pop') return home ? 'cz-pop' : 'pop';
+  if (family === 'rock') return home ? 'cz-rock' : 'rock';
   return family ?? 'other';
 }
 
@@ -167,6 +217,7 @@ function familyOf(name: string): Family | null {
     return 'edm';
   if (/r\s*&\s*b|\brnb\b|soul|funk/.test(text)) return 'rnb';
   if (/latin|reggaeton|salsa|bachata/.test(text)) return 'latin';
+  if (/\bcountry\b|americana|bluegrass/.test(text)) return 'country';
   if (text.includes('indie')) return 'indie';
   if (text.includes('alternativ') || text.includes('rock')) return 'rock';
   if (text.includes('pop')) return 'pop';

@@ -35,7 +35,10 @@
     "voice": "en-US-AndrewMultilingualNeural",
     "model": "claude-opus-5-5",
     "discover": 2,
+    "blockSongs": 15,
     "blockSets": 2,
+    "breakSeconds": 180,
+    "jingleVoice": "en-GB-RyanNeural",
     "setsPerServerPerDay": 20,
     "setsPerDay": 100
   },

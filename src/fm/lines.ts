@@ -116,8 +116,11 @@ export function momentsFor(facts: {
           ? 'lateNight'
           : 'blockOpen'
         : 'setOpen';
+  // The opener is only the greeting, so the first clip is short enough to synthesize
+  // before the song. Later sets still say who brought it, or that it is new.
+  if (facts.set <= 1) return [main];
   const moments: Moment[] = [];
-  if (facts.set > 1 && facts.newcomers.length > 0) moments.push('welcome');
+  if (facts.newcomers.length > 0) moments.push('welcome');
   moments.push(main);
   if (facts.how === 'new') moments.push('newFind');
   else if (facts.by && facts.how === 'catch') moments.push('byCatch');

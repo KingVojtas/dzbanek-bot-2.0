@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "ids": [
+    "You're listening to Kitchen FM. Put your headphones on and get ready for the ride!",
+    "Kitchen FM. Served hot, all day long.",
+    "This is Kitchen FM, the station that never stops cooking.",
+    "Kitchen FM. Fresh tracks, straight out of the oven.",
+    "You're tuned in to Kitchen FM. Turn it up, the kitchen is open.",
+    "Kitchen FM. Your songs, your kitchen, your radio.",
+    "Kitchen FM, live from {server}.",
+    "Kitchen FM. No reservations needed.",
+    "From the kitchen to your headphones. This is Kitchen FM.",
+    "Kitchen FM. Grab a cookie and stay a while.",
+    "Kitchen FM. One station, every flavour.",
+    "Stay tuned. Kitchen FM is just getting warmed up."
+  ],
+  "promos": [
+    "Got someone to shout out? Type slash radio dedicate, write your message, and the DJ reads it on air before the next song. Kitchen FM. Say it with a song.",
+    "Hear a song you love? Hit the fire button, and Kitchen FM remembers what this kitchen likes. Not your thing? Thumbs down, and that one is off the menu.",
+    "Want to hear something right now? Type slash play with any song, and it jumps straight to the front of the line. The station waits for you. That's the Kitchen FM promise.",
+    "Heard something great on the radio? Press the cookie button to catch it, and it joins the kitchen's collection. Today's catch could be tomorrow's opener.",
+    "On the first of every month, Kitchen Wrapped serves up the month in music: the top songs, who brought the most, the favourite genre, and the song that got the most fire.",
+    "Who's Chef of the Week? Bring your songs, and every fire someone else gives them is a point for you. The chef is crowned on Sunday evening.",
+    "Here's the deal: on Kitchen FM, a song never plays twice. Every show is something new, and there's always another find around the corner.",
+    "Every fifteen songs, Kitchen FM changes the menu. Rock, rap, EDM, country, and everything in between. Not your genre? Give it fifteen songs.",
+    "Kitchen FM sounds best loud. Headphones on, volume up, and let the kitchen do the rest.",
+    "Fancy a change of scenery? Slash radio play takes you to live stations in Prague, London, and California. But you'll be back. Everyone comes back to Kitchen FM.",
+    "Every song on Kitchen FM was brought in by someone in this kitchen, or found just for you. Play more, catch more, and the station gets better every day."
+  ],
+  "recap": [
+    "That was {lastGenre} on Kitchen FM, with {artists}. Don't go anywhere.",
+    "And that wraps up {lastGenre}: {artists}, back to back. Thanks for cooking along.",
+    "{lastGenre} is off the stove. You heard {artists}. Time for a quick break."
+  ],
+  "comingUp": [
+    "After the break, we're switching to {genre}. Coming up: {songs}. {count} songs of {genre}, starting now.",
+    "Change of menu: next up is {genre}. We've got {songs}, and plenty more where that came from.",
+    "Coming up on Kitchen FM: {genre}. First on the plate, {songs}."
+  ],
+  "outro": [
+    "You're listening to Kitchen FM. Next up, {genre}. Put your headphones on and get ready for the ride!",
+    "Kitchen FM. Now serving: {genre}.",
+    "This is Kitchen FM, and this is {genre}."
+  ]
+}

@@ -164,6 +164,7 @@ async function main(): Promise<void> {
   const stopBenchmark = new AbortController();
   // Cron jobs plus the voice sessions. Shutdown exits after this; going idle does not.
   const release = () => {
+    fm.stopBackgroundWork();
     for (const job of jobs) job.stop();
     radio.stopAll();
     music.stopAll();
@@ -315,6 +316,8 @@ async function main(): Promise<void> {
       `yt-dlp update: cron "${YTDLP_UPDATE_CRON}" (${config.timezone}), next ${ytDlpJob.nextRun()?.toISOString() ?? '?'}.`,
     );
     logger.info(`Multi-server ready: in ${client.guilds.cache.size} guild(s).`);
+    // The next show's opener is found after boot, one server at a time.
+    fm.startBackgroundWork(() => client.guilds.cache.values());
   });
 
   const shutdown = (signal: string) => {
