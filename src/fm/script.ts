@@ -418,6 +418,41 @@ export function parsePlan(
 
 const VARIANT =
   /\b(nightcore|sped up|slowed|reverb|8d|bass ?boost(ed)?|karaoke|instrumental|cover|remix|live)\b/;
+const FEAT = /\s*[([]?\s*\b(?:feat|ft|featuring)\b\.?.*$/i;
+
+interface SongNeedles {
+  titleKey: string;
+  artistWord: string;
+  variant: boolean;
+}
+
+interface BlockedName {
+  name: string;
+  variant: boolean;
+}
+
+/** The title and artist words `isSameSong` looks for in a result. */
+function songNeedles(want: { artist: string; title: string }): SongNeedles | null {
+  const title = want.title.replace(FEAT, '');
+  const wanted = catchKeys(want.artist, title);
+  if (!wanted.titleKey) return null;
+  const artistWord =
+    wanted.artistKey.split(' ').find((word) => word.length > 2) ?? wanted.artistKey;
+  return { titleKey: wanted.titleKey, artistWord, variant: VARIANT.test(wanted.titleKey) };
+}
+
+/** One blocked song, normalized the way `isSameSong` reads a search result. */
+function blockedName(found: { title: string; uploader?: string }): BlockedName {
+  const result = catchKeys(found.uploader ?? '', found.title);
+  const name = ` ${result.titleKey} ${result.artistKey} `;
+  return { name, variant: VARIANT.test(name) };
+}
+
+function namesMatch(want: SongNeedles, block: BlockedName): boolean {
+  if (!block.name.includes(` ${want.titleKey} `)) return false;
+  if (want.artistWord && !block.name.includes(want.artistWord)) return false;
+  return want.variant || !block.variant;
+}
 
 /**
  * The YouTube result is the song Claude named: its title in the result, the
@@ -428,15 +463,42 @@ export function isSameSong(
   want: { artist: string; title: string },
   found: { title: string; uploader?: string },
 ): boolean {
-  const title = want.title.replace(/\s*[([]?\s*\b(?:feat|ft|featuring)\b\.?.*$/i, '');
-  const wanted = catchKeys(want.artist, title);
-  const result = catchKeys(found.uploader ?? '', found.title);
-  const name = ` ${result.titleKey} ${result.artistKey} `;
-  if (!wanted.titleKey || !name.includes(` ${wanted.titleKey} `)) return false;
-  const artistWord =
-    wanted.artistKey.split(' ').find((word) => word.length > 2) ?? wanted.artistKey;
-  if (artistWord && !name.includes(artistWord)) return false;
-  return VARIANT.test(wanted.titleKey) || !VARIANT.test(name);
+  const needles = songNeedles(want);
+  if (!needles) return false;
+  return namesMatch(needles, blockedName(found));
+}
+
+/**
+ * Songs a find must not be. Each entry is normalized once; `matches` uses the
+ * same rule as `isSameSong` against "Artist - Title".
+ */
+export interface BlockedSongs {
+  matches(song: { artist: string; title: string }): boolean;
+  add(song: { artist: string; title: string }): void;
+}
+
+/** Prepare `blocked` once, instead of normalizing it on every comparison. */
+export function prepareBlocked(
+  blocked: readonly { artist: string; title: string }[],
+): BlockedSongs {
+  const prepared: BlockedName[] = [];
+  const add = (song: { artist: string; title: string }): void => {
+    prepared.push(
+      blockedName({
+        title: song.artist ? `${song.artist} - ${song.title}` : song.title,
+        uploader: song.artist,
+      }),
+    );
+  };
+  for (const song of blocked) add(song);
+  return {
+    add,
+    matches(song) {
+      const needles = songNeedles(song);
+      if (!needles) return false;
+      return prepared.some((block) => namesMatch(needles, block));
+    },
+  };
 }
 
 /**

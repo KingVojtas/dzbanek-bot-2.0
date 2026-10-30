@@ -45,7 +45,7 @@ import {
   type LineSlots,
   type Moment,
 } from '../src/fm/lines';
-import type { FmSong } from '../src/fm/script';
+import { isSameSong, prepareBlocked, type FmSong } from '../src/fm/script';
 import {
   blockProfile,
   findAllowance,
@@ -337,6 +337,29 @@ describe('genre sets', () => {
     ];
     const pick = pickDiscoverTrack(tops, [{ artist: 'Daft Punk', title: 'Digital Love' }], () => 0);
     assert.equal(pick?.title, 'D.A.N.C.E.');
+  });
+
+  it('prepares a blocked list once and still matches isSameSong', () => {
+    const blockedSong = { artist: 'Daft Punk', title: 'Digital Love' };
+    const foundAs = { title: 'Daft Punk - Digital Love', uploader: 'Daft Punk' };
+    const blocked = prepareBlocked([blockedSong]);
+    const candidates = [
+      { artist: 'Daft Punk', title: 'Digital Love' },
+      { artist: 'Daft Punk', title: 'Digital Love (Remix)' },
+      { artist: 'Justice', title: 'D.A.N.C.E.' },
+    ];
+    for (const candidate of candidates) {
+      assert.equal(blocked.matches(candidate), isSameSong(candidate, foundAs));
+    }
+    assert.equal(blocked.matches({ artist: 'Justice', title: 'D.A.N.C.E.' }), false);
+    blocked.add({ artist: 'Justice', title: 'D.A.N.C.E.' });
+    assert.equal(
+      blocked.matches({ artist: 'Justice', title: 'D.A.N.C.E.' }),
+      isSameSong(
+        { artist: 'Justice', title: 'D.A.N.C.E.' },
+        { title: 'Justice - D.A.N.C.E.', uploader: 'Justice' },
+      ),
+    );
   });
 });
 

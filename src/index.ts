@@ -77,7 +77,15 @@ async function main(): Promise<void> {
   const playLog = new PlayLogStore();
   const catches = new RadioCatchStore();
   const quiz = new QuizManager(music, radio, played, catches, new QuizScoreStore(), logger);
-  const fm = new KitchenFm(music, played, catches, new SongReactionStore(), config, logger);
+  const fm = new KitchenFm(
+    music,
+    played,
+    catches,
+    new SongReactionStore(),
+    playLog,
+    config,
+    logger,
+  );
   kitchen.setGenreOf((songKey) => fm.genreOf(songKey));
   music.setFireCounts((guildId, track) => fm.fires(guildId, track));
   music.setOnTrackStart((guildId, track) => {

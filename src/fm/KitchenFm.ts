@@ -5,7 +5,7 @@ import type { RadioCatchStore } from '../kitchen/catches';
 import type { MusicManager } from '../music/MusicManager';
 import type { Track } from '../core/types';
 import { dedupeSongs, songFromCatch, songFromTrack } from '../quiz/songs';
-import type { PlayLogKind, PlayedTrackStore } from '../quiz/stores';
+import type { PlayLogKind, PlayLogStore, PlayedTrackStore } from '../quiz/stores';
 import { createCatalog, type FmCatalog } from './catalog';
 import { FmStation } from './FmStation';
 import { GenreBook, genreCachePath } from './GenreBook';
@@ -22,6 +22,8 @@ import { DjWriter } from './writer';
 
 /** Fewer kitchen songs than this and the station would repeat itself at once. */
 export const FM_MIN_SONGS = 3;
+/** A /play newer than this stays off the station, the same as a song it aired itself. */
+const RECENT_PLAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * How a track start is filed. A new find wins over a plain station pick.
@@ -54,6 +56,7 @@ export class KitchenFm {
     private readonly played: PlayedTrackStore,
     private readonly catches: RadioCatchStore,
     private readonly reactions: SongReactionStore,
+    private readonly playLog: PlayLogStore,
     private readonly config: Config,
     private readonly logger: Logger,
   ) {
@@ -177,6 +180,7 @@ export class KitchenFm {
         genres: this.genres,
         catalog: this.catalog,
         findBlocks: async () => (await this.reactions.tally(guild.id)).blocked,
+        aired: () => this.playLog.aired(guild.id, new Date(Date.now() - RECENT_PLAY_MS)),
         timezone: this.config.timezone,
         logger: this.logger,
       },

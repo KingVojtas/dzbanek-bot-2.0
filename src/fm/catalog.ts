@@ -14,6 +14,8 @@ const MUSICBRAINZ = `${MUSICBRAINZ_ROOT}/artist`;
 const AREA_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const USER_AGENT = 'dzbanek-bot/2.0 (https://github.com/KingVojtas/dzbanek-bot-2.0)';
 const DEEZER_GAP_MS = 250;
+/** Top tracks kept per artist. Ten was too few to fill a set the station had not aired. */
+const DEEZER_TOP_LIMIT = 25;
 /** Deezer translates genre names. English keeps them on the map in `familyOf`. */
 const DEEZER_HEADERS = { 'Accept-Language': 'en' };
 const MUSICBRAINZ_GAP_MS = 1_100;
@@ -392,7 +394,7 @@ export function createCatalog(fetchImpl: typeof fetch = fetch): FmCatalog {
       await deezer.slot();
       const body = await getJson(
         fetchImpl,
-        `${DEEZER}/artist/${artistId}/top?limit=10`,
+        `${DEEZER}/artist/${artistId}/top?limit=${DEEZER_TOP_LIMIT}`,
         DEEZER_HEADERS,
       );
       return body ? topsFromBody(body) : [];

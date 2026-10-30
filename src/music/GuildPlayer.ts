@@ -4,13 +4,13 @@ import {
   VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
-  demuxProbe,
   entersState,
 } from '@discordjs/voice';
 import type { AudioPlayer, AudioResource, VoiceConnection } from '@discordjs/voice';
 import { Readable } from 'node:stream';
 import type { Message, SendableChannels } from 'discord.js';
 import { bufferStream } from './buffer-stream';
+import { probeStream } from './probe-stream';
 import { isUnknownMessage } from '../core/discord-errors';
 import { buildNowPlayingDisplay } from '../core/display/music';
 import { upcomingQueue, type EmbedCard } from '../core/embeds';
@@ -590,7 +590,7 @@ export class GuildPlayer {
       const opening = this.openStream(track, gen).then(async (opened) => {
         if (!opened) return null;
         prefetchedHit = opened.prefetched;
-        const probed = await demuxProbe(opened.stream);
+        const probed = await probeStream(opened.stream);
         streamReadyMs = Date.now() - streamStarted;
         if (this.destroyed || gen !== this.playGeneration) {
           probed.stream.destroy();
@@ -680,11 +680,28 @@ export class GuildPlayer {
     if (!station || track === previous) return null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const waitMs = station.introWaitMs?.(track) ?? INTRO_WAIT_MS;
+    const started = Date.now();
+    const pending = station.intro(track);
     const late = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), waitMs);
     });
     try {
-      return await Promise.race([station.intro(track), late]);
+      const intro = await Promise.race([pending, late]);
+      if (intro?.pcm?.length) return intro;
+      // The wait ended with no clip. One may still finish after the song has started.
+      if (!intro) {
+        void pending.then(
+          (ready) => {
+            if (!ready?.pcm?.length) return;
+            const seconds = ((Date.now() - started) / 1000).toFixed(1);
+            this.logger.info(
+              `Kitchen FM voice: ready after the player stopped waiting (${seconds} s)`,
+            );
+          },
+          () => {},
+        );
+      }
+      return intro;
     } catch (error) {
       this.logger.debug('Station intro failed:', error);
       return null;

@@ -1,5 +1,13 @@
 import type { GenreId } from './genres';
-import { SET_MAX, isSameSong, sampleCrate, sidelined, songFits, type FmSong } from './script';
+import {
+  SET_MAX,
+  prepareBlocked,
+  sampleCrate,
+  sidelined,
+  songFits,
+  type BlockedSongs,
+  type FmSong,
+} from './script';
 
 /** A play from 30 days ago weighs half of one from today. */
 export const TASTE_HALF_LIFE_MS = 30 * 86_400_000;
@@ -142,20 +150,13 @@ export function seedArtistIds(
  */
 export function pickDiscoverTrack<T extends { artist: string; title: string; durationSec: number }>(
   tops: readonly T[],
-  blocked: readonly { artist: string; title: string }[],
+  blocked: readonly { artist: string; title: string }[] | BlockedSongs,
   rng: () => number = Math.random,
 ): T | null {
+  const blocks = 'matches' in blocked ? blocked : prepareBlocked(blocked);
   const choices = tops.filter((track) => {
     if (track.durationSec <= 0 || !songFits(track.durationSec)) return false;
-    return !blocked.some((song) =>
-      isSameSong(
-        { artist: track.artist, title: track.title },
-        {
-          title: song.artist ? `${song.artist} - ${song.title}` : song.title,
-          uploader: song.artist,
-        },
-      ),
-    );
+    return !blocks.matches(track);
   });
   if (choices.length === 0) return null;
   const pool = choices.slice(0, 5);

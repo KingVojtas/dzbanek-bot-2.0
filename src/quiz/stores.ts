@@ -82,6 +82,15 @@ export interface PlayLogRow {
   playedAt: Date;
 }
 
+/** One song the station should treat as already aired. */
+export interface AiredSong {
+  songKey: string;
+  url: string;
+  artist: string;
+  title: string;
+  playedAt: Date;
+}
+
 /** Every track start. Rows accumulate; `prune` drops what is past a year and a bit. */
 export class PlayLogStore {
   async add(input: PlayLogInput): Promise<void> {
@@ -111,6 +120,27 @@ export class PlayLogStore {
         requestedById: true,
         kind: true,
         durationSec: true,
+        playedAt: true,
+      },
+    });
+  }
+
+  /**
+   * Songs the station has already aired. Every `fm` and `find`, plus anything
+   * that started since `since` (a /play from today should not come straight back).
+   */
+  async aired(guildId: string, since: Date): Promise<AiredSong[]> {
+    return prisma.playLog.findMany({
+      where: {
+        guildId,
+        OR: [{ kind: { in: ['fm', 'find'] } }, { playedAt: { gte: since } }],
+      },
+      orderBy: { playedAt: 'asc' },
+      select: {
+        songKey: true,
+        url: true,
+        artist: true,
+        title: true,
         playedAt: true,
       },
     });

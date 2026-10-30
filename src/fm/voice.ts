@@ -6,8 +6,18 @@ import type { Logger } from '../core/logger';
 const CONNECT_TIMEOUT_MS = 4_000;
 /** No audio for this long ends the attempt. A 26-word line is spoken in about a second. */
 const SPEAK_TIMEOUT_MS = 10_000;
-/** No audio byte for this long starts a second attempt beside the first. */
+/** No audio byte for this long starts another attempt beside that one. */
 export const HEDGE_MS = 3_000;
+/**
+ * How long one line may keep trying. The opener and a dedication wait 25 s,
+ * and a later intro is prepared during the song before it.
+ */
+export const SPEAK_BUDGET_MS = 20_000;
+/** One speak places at most this many calls, and at most two of them at once. */
+export const MAX_ATTEMPTS = 6;
+const MAX_IN_FLIGHT = 2;
+/** After a dropped attempt, wait this long before the next call. */
+export const RETRY_PAUSE_MS = 500;
 const DECODE_TIMEOUT_MS = 15_000;
 /** A short DJ line is tens of kilobytes; anything near this is not one. */
 const MAX_CLIP_BYTES = 2 * 1024 * 1024;
@@ -96,110 +106,193 @@ export interface SynthesisAttempt {
   close(): void;
 }
 
-/** Which attempt spoke, and why the first one did not when the second won. */
+/** Which attempt spoke, and why the first one did not when a later one won. */
 export interface AudioRace {
   buffer: Buffer;
-  attempt: 1 | 2;
+  /** The attempt that produced `buffer`, counting from 1. */
+  attempt: number;
+  /** Why the first attempt did not win. Null when attempt 1 won. */
   attempt1Note: string | null;
+}
+
+/** Knobs for one race. Tests pass a clock; `speak` passes the line's budget. */
+export interface RaceOptions {
+  budgetMs?: number;
+  maxAttempts?: number;
+  pauseMs?: number;
+  now?: () => number;
+  /** Called once per attempt that fails on its own, not when the race closes it. */
+  onFail?: (attempt: number, elapsedMs: number, error: unknown) => void;
 }
 
 /** The info line for one spoken clip: how long Edge took, and which attempt won. */
 export function voiceTimingLine(
   elapsedMs: number,
-  attempt: 1 | 2,
+  attempt: number,
   attempt1Note: string | null,
 ): string {
   const seconds = (elapsedMs / 1000).toFixed(1);
-  if (attempt === 1) return `Kitchen FM voice: Edge ${seconds} s (attempt 1)`;
-  return `Kitchen FM voice: Edge ${seconds} s (attempt 2; attempt 1: ${attempt1Note})`;
+  const head = `Kitchen FM voice: Edge ${seconds} s (attempt ${attempt}`;
+  if (attempt <= 1 || !attempt1Note) return `${head})`;
+  return `${head}; attempt 1: ${attempt1Note})`;
+}
+
+/** Why a speak gave up. One of these is one miss, however many calls it spent. */
+class SpeakMiss extends Error {
+  constructor(
+    message: string,
+    readonly attempts: number,
+    readonly elapsedMs: number,
+  ) {
+    super(message);
+    this.name = 'SpeakMiss';
+  }
 }
 
 /**
- * The first clip to arrive. A second attempt starts when the first fails or
- * sends no audio for `hedgeMs`. The loser is closed. Never a third attempt.
+ * The first clip to arrive. A silent attempt gets one sibling after `hedgeMs`.
+ * A failed attempt is replaced after a short pause. At most two run at once,
+ * and at most `maxAttempts` run in all, until the budget is spent. The loser
+ * is closed.
+ *
+ * `wait` must not settle synchronously: the race registers every timer on it.
  */
 export function firstAudio(
   start: () => SynthesisAttempt,
   hedgeMs: number,
   wait: (ms: number) => Promise<void> = delay,
+  options: RaceOptions = {},
 ): Promise<AudioRace> {
+  const now = options.now ?? Date.now;
+  const budgetMs = options.budgetMs ?? SPEAK_BUDGET_MS;
+  const maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
+  const pauseMs = options.pauseMs ?? RETRY_PAUSE_MS;
+  const onFail = options.onFail;
+
   return new Promise((resolve, reject) => {
+    const startedAt = now();
+    const deadline = startedAt + budgetMs;
     let finished = false;
-    let second: SynthesisAttempt | null = null;
-    let heardAudio = false;
-    // The race is lost only when every attempt that started has failed.
-    let firstFailed = false;
-    let secondFailed = false;
-    let note = hedgeNote(hedgeMs);
-    const first = start();
+    let inFlight = 0;
+    let startedCount = 0;
+    let earlierNote: string | null = null;
+    let lastError: Error = new Error('the time budget ran out');
+    const slots: { heard: boolean; failed: boolean; close: () => void }[] = [];
 
-    const closeBoth = () => {
-      try {
-        first.close();
-      } catch {
-        // Already stopped.
-      }
-      try {
-        second?.close();
-      } catch {
-        // Already stopped.
+    const closeAll = () => {
+      for (const slot of slots) {
+        try {
+          slot.close();
+        } catch {
+          // Already stopped.
+        }
       }
     };
 
-    const win = (buffer: Buffer, attempt: 1 | 2) => {
+    const giveUp = () => {
       if (finished) return;
       finished = true;
-      closeBoth();
-      resolve({ buffer, attempt, attempt1Note: attempt === 2 ? note : null });
+      const miss = new SpeakMiss(lastError.message, startedCount, now() - startedAt);
+      closeAll();
+      reject(miss);
     };
 
-    const lose = (error: unknown) => {
+    const win = (buffer: Buffer, attempt: number) => {
       if (finished) return;
       finished = true;
-      closeBoth();
-      reject(error instanceof Error ? error : new Error(errorText(error)));
+      closeAll();
+      resolve({
+        buffer,
+        attempt,
+        attempt1Note: attempt === 1 ? null : earlierNote,
+      });
     };
 
-    const armSecond = (why: string) => {
-      if (finished || second) return;
-      note = why;
-      try {
-        second = start();
-      } catch (error) {
-        lose(error);
+    const arm = (ms: number, fn: () => void) => {
+      void wait(ms).then(() => {
+        if (!finished) fn();
+      });
+    };
+
+    const remember = (reason: string) => {
+      if (earlierNote === null) earlierNote = reason;
+    };
+
+    const startAttempt = (reason: string | null): void => {
+      if (
+        finished ||
+        inFlight >= MAX_IN_FLIGHT ||
+        startedCount >= maxAttempts ||
+        now() >= deadline
+      ) {
         return;
       }
-      second.audio.then(
-        (buffer) => win(buffer, 2),
+      let attempt: SynthesisAttempt;
+      try {
+        attempt = start();
+      } catch (error) {
+        startedCount += 1;
+        const wrapped = error instanceof Error ? error : new Error(errorText(error));
+        lastError = wrapped;
+        remember(wrapped.message);
+        onFail?.(startedCount, 0, wrapped);
+        if (startedCount >= maxAttempts || now() >= deadline) {
+          if (inFlight === 0) giveUp();
+          return;
+        }
+        arm(pauseMs, () => {
+          startAttempt(wrapped.message);
+          if (!finished && inFlight === 0) giveUp();
+        });
+        return;
+      }
+
+      startedCount += 1;
+      inFlight += 1;
+      const attemptNo = startedCount;
+      const began = now();
+      if (reason) remember(reason);
+      const slot = { heard: false, failed: false, close: () => attempt.close() };
+      slots.push(slot);
+
+      void attempt.heard.then(
+        () => {
+          slot.heard = true;
+        },
+        () => {},
+      );
+
+      // A call that is still open and silent shares the work with one more.
+      arm(hedgeMs, () => {
+        if (slot.failed || slot.heard) return;
+        startAttempt(hedgeNote(hedgeMs));
+      });
+
+      void attempt.audio.then(
+        (buffer) => win(buffer, attemptNo),
         (error: unknown) => {
-          secondFailed = true;
-          // A slow first attempt may still finish.
-          if (firstFailed) lose(error);
+          if (finished || slot.failed) return;
+          slot.failed = true;
+          inFlight -= 1;
+          const wrapped = error instanceof Error ? error : new Error(errorText(error));
+          lastError = wrapped;
+          remember(wrapped.message);
+          onFail?.(attemptNo, Math.max(0, now() - began), wrapped);
+          if (startedCount >= maxAttempts || now() >= deadline) {
+            if (inFlight === 0) giveUp();
+            return;
+          }
+          arm(pauseMs, () => {
+            startAttempt(wrapped.message);
+            if (!finished && inFlight === 0) giveUp();
+          });
         },
       );
     };
 
-    void first.heard.then(
-      () => {
-        heardAudio = true;
-      },
-      () => {},
-    );
-
-    first.audio.then(
-      (buffer) => win(buffer, 1),
-      (error: unknown) => {
-        firstFailed = true;
-        if (finished) return;
-        if (!second) armSecond(errorText(error));
-        else if (secondFailed) lose(error);
-      },
-    );
-
-    void wait(hedgeMs).then(() => {
-      if (finished || heardAudio || second) return;
-      armSecond(hedgeNote(hedgeMs));
-    });
+    arm(budgetMs, () => giveUp());
+    startAttempt(null);
+    if (!finished && startedCount === 0) giveUp();
   });
 }
 
@@ -285,6 +378,14 @@ function openEdgeAttempt(voiceName: string, text: string): SynthesisAttempt {
   };
 }
 
+/** Test seams. Production uses Edge, FFmpeg, and the real clock. */
+interface VoiceHooks {
+  decode?: (mp3: Buffer) => Promise<Buffer>;
+  now?: () => number;
+  /** Must not settle synchronously. See `firstAudio`. */
+  wait?: (ms: number) => Promise<void>;
+}
+
 /**
  * Reads DJ lines aloud with Microsoft Edge's read-aloud voices. The clip comes
  * back as MP3 and is decoded to PCM, the same way the radio plays. Microsoft
@@ -300,40 +401,66 @@ export class DjVoice {
     private readonly logger: Logger,
     private readonly openAttempt: (text: string) => SynthesisAttempt = (text) =>
       openEdgeAttempt(voiceName, text),
+    private readonly hooks: VoiceHooks = {},
   ) {}
 
-  async speak(text: string): Promise<Buffer | null> {
-    if (!text || Date.now() < this.restUntil) return null;
-    const started = Date.now();
+  private now(): number {
+    return this.hooks.now?.() ?? Date.now();
+  }
+
+  /**
+   * Read `text` aloud. Dropped calls are tried again until `budgetMs`.
+   * Null is a text-only line, never a thrown error.
+   */
+  async speak(text: string, budgetMs = SPEAK_BUDGET_MS): Promise<Buffer | null> {
+    if (!text || this.now() < this.restUntil) return null;
+    const started = this.now();
+    let race: AudioRace | null = null;
     try {
-      // A slow or dropped Edge call gets one parallel retry. The first clip wins.
-      const race = await firstAudio(() => this.openAttempt(text), HEDGE_MS);
-      const elapsedMs = Date.now() - started;
-      const pcm = await decodeClip(race.buffer);
+      race = await firstAudio(() => this.openAttempt(text), HEDGE_MS, this.hooks.wait ?? delay, {
+        budgetMs,
+        now: () => this.now(),
+        onFail: (attempt, elapsedMs, error) => {
+          const seconds = (elapsedMs / 1000).toFixed(1);
+          this.logger.info(
+            `Kitchen FM voice (${this.voiceName}): attempt ${attempt} failed after ${seconds} s: ${errorText(error)}`,
+          );
+        },
+      });
+      const elapsedMs = this.now() - started;
+      const decode = this.hooks.decode ?? decodeClip;
+      const pcm = await decode(race.buffer);
       if (pcm.length === 0 || pcmLoudness(pcm) < MIN_LOUDNESS_DB) {
-        throw new Error('The DJ clip is silent.');
+        throw new SpeakMiss('The DJ clip is silent.', race.attempt, elapsedMs);
       }
       this.misses = 0;
       this.logger.info(voiceTimingLine(elapsedMs, race.attempt, race.attempt1Note));
       return pcm;
     } catch (error) {
-      this.noteMiss(error);
+      const miss = error instanceof SpeakMiss ? error : null;
+      this.noteMiss(
+        miss ?? error,
+        miss?.attempts ?? race?.attempt ?? 1,
+        miss?.elapsedMs ?? this.now() - started,
+      );
       return null;
     }
   }
 
-  /** One miss. After a few in a row the voice rests and lines stay on the card. */
-  private noteMiss(error: unknown): void {
+  /** One speak that gave up. After a few in a row the voice rests and lines stay on the card. */
+  private noteMiss(error: unknown, attempts: number, elapsedMs: number): void {
+    const seconds = (elapsedMs / 1000).toFixed(1);
+    const noun = attempts === 1 ? 'attempt' : 'attempts';
+    this.logger.info(
+      `Kitchen FM voice: text only: ${attempts} ${noun} failed in ${seconds} s, last: ${errorText(error)}`,
+    );
     this.misses += 1;
-    if (this.misses >= MISSES_BEFORE_REST) {
-      this.misses = 0;
-      this.restUntil = Date.now() + REST_MS;
-      this.logger.warn(
-        `Kitchen FM voice (${this.voiceName}) failed ${MISSES_BEFORE_REST} times; lines are text only for ${REST_MS / 60_000} minutes:`,
-        error,
-      );
-      return;
-    }
-    this.logger.debug('Kitchen FM voice failed once:', error);
+    if (this.misses < MISSES_BEFORE_REST) return;
+    this.misses = 0;
+    this.restUntil = this.now() + REST_MS;
+    this.logger.warn(
+      `Kitchen FM voice (${this.voiceName}) failed ${MISSES_BEFORE_REST} times; lines are text only for ${REST_MS / 60_000} minutes:`,
+      error,
+    );
   }
 }
