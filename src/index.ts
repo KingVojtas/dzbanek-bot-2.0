@@ -223,7 +223,7 @@ async function main(): Promise<void> {
       logger.warn('Host status could not be read:', error);
       return;
     }
-    logger.info(hostLogLine(sample));
+    logger.info(`${hostLogLine(sample)}; DJ voice: ${fm.voiceStatus()}`);
     if (!checkAlerts || stopped) return;
     const decision = resourceAlerts(sample, resourceAlertState, Date.now());
     resourceAlertState = decision.state;

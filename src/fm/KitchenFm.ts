@@ -245,6 +245,11 @@ export class KitchenFm {
     return this.stations.has(guildId);
   }
 
+  /** Which engine the DJ speaks with right now, for `/status`. */
+  voiceStatus(): string {
+    return this.voice.status?.() ?? 'Edge';
+  }
+
   /** Every song the kitchen played or caught, newest plays first. A play beats a catch of the same song. */
   async pool(guildId: string): Promise<FmSong[]> {
     const [plays, caught, tally] = await Promise.all([

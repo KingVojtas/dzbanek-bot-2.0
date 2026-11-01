@@ -2,6 +2,7 @@ import { getVoiceConnections, VoiceConnectionStatus } from '@discordjs/voice';
 import { MessageFlags, PermissionFlagsBits, SlashCommandBuilder, type Client } from 'discord.js';
 import { buildStatusDisplay } from '../../core/display/status';
 import {
+  NA,
   blankBotSample,
   collectHostSample,
   statusRowsFrom,
@@ -19,6 +20,7 @@ export const status: Command = {
     const rows = statusRowsFrom(
       () => collectHostSample(),
       readBotSample(interaction.client, services.fm),
+      [{ name: 'DJ voice', value: readVoiceStatus(services.fm) }],
     );
     const card = buildStatusDisplay(rows);
     await interaction.reply({ embeds: card.embeds, flags: MessageFlags.Ephemeral });
@@ -36,6 +38,15 @@ function readBotSample(client: Client, fm: { isOn(guildId: string): boolean }): 
     };
   } catch {
     return blankBotSample();
+  }
+}
+
+/** Piper and its speed, or Edge and why. A miss is `n/a` like the other rows. */
+function readVoiceStatus(fm: { voiceStatus(): string }): string {
+  try {
+    return fm.voiceStatus() || NA;
+  } catch {
+    return NA;
   }
 }
 
