@@ -7,6 +7,14 @@ import { ChannelType, Events, Team, type Client, type User } from 'discord.js';
 import { buildCommandCollection } from './commands';
 import { DISCORD_TOKEN, config } from './config';
 import { createClient } from './core/client';
+import {
+  HOST_REPORT_EVERY_MS,
+  collectHostSample,
+  hostLogLine,
+  resourceAlerts,
+  type HostSample,
+  type ResourceAlertState,
+} from './core/host-status';
 import { claimInstance, type NewerCopy } from './core/instance-lock';
 import { logger, type Logger } from './core/logger';
 import { watchForTwin } from './core/twin-watch';
@@ -159,11 +167,15 @@ async function main(): Promise<void> {
   registerEvents(client, commands, services);
 
   const jobs: Cron[] = [];
+  let hostTimer: ReturnType<typeof setInterval> | undefined;
+  let resourceAlertState: ResourceAlertState = { diskSentAt: null, ramSentAt: null };
   let idle = false;
   let stopLock = (): void => {};
   const stopBenchmark = new AbortController();
   // Cron jobs plus the voice sessions. Shutdown exits after this; going idle does not.
   const release = () => {
+    if (hostTimer) clearInterval(hostTimer);
+    hostTimer = undefined;
     fm.stopBackgroundWork();
     fm.stopVoice();
     for (const job of jobs) job.stop();
@@ -201,6 +213,25 @@ async function main(): Promise<void> {
     },
   });
   stopLock = () => lock.stop();
+
+  // One line at boot and each hour. The hour tick is also when a low disk or RAM DMs the owner.
+  const publishHost = (checkAlerts: boolean) => {
+    let sample: HostSample;
+    try {
+      sample = collectHostSample();
+    } catch (error) {
+      logger.warn('Host status could not be read:', error);
+      return;
+    }
+    logger.info(hostLogLine(sample));
+    if (!checkAlerts || stopped) return;
+    const decision = resourceAlerts(sample, resourceAlertState, Date.now());
+    resourceAlertState = decision.state;
+    if (decision.alerts.length === 0) return;
+    const text = decision.alerts.map((alert) => alert.text).join('\n\n');
+    logger.warn(`Low resources, DMing the owner:\n${text}`);
+    void dmOwner(client, text, logger);
+  };
 
   client.once(Events.ClientReady, () => {
     if (stopped) return;
@@ -317,6 +348,12 @@ async function main(): Promise<void> {
       `yt-dlp update: cron "${YTDLP_UPDATE_CRON}" (${config.timezone}), next ${ytDlpJob.nextRun()?.toISOString() ?? '?'}.`,
     );
     logger.info(`Multi-server ready: in ${client.guilds.cache.size} guild(s).`);
+    publishHost(false);
+    hostTimer = setInterval(() => {
+      if (stopped) return;
+      publishHost(true);
+    }, HOST_REPORT_EVERY_MS);
+    hostTimer.unref?.();
     // The next show's opener is found after boot, one server at a time.
     fm.startBackgroundWork(() => client.guilds.cache.values());
   });
