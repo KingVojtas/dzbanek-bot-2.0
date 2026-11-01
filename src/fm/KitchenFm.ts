@@ -3,6 +3,7 @@ import type { Config } from '../config';
 import type { Logger } from '../core/logger';
 import type { RadioCatchStore } from '../kitchen/catches';
 import type { MusicManager } from '../music/MusicManager';
+import { pcmSeconds } from '../music/intro-wait';
 import type { Track } from '../core/types';
 import { dedupeSongs, songFromCatch, songFromTrack } from '../quiz/songs';
 import type { PlayLogKind, PlayLogStore, PlayedTrackStore } from '../quiz/stores';
@@ -12,7 +13,13 @@ import { GenreBook, genreCachePath } from './GenreBook';
 import { JingleLibrary } from './jingles';
 import { genreName, genreQuery, playlistFits, type GenreId, type GenreIndex } from './genres';
 import { GENRE_LIST_MS, rememberList, rotationAfter, type RotationCursor } from './rotation';
-import { readWhole, type PreparedOpener } from './opener';
+import {
+  OPENER_REFRESH_LEAD_MS,
+  backupGreeting,
+  openerRefreshDelay,
+  readWhole,
+  type PreparedOpener,
+} from './opener';
 import {
   playFromFire,
   reactionSongKey,
@@ -57,6 +64,31 @@ export interface KitchenFmOptions {
   jingles?: JingleLibrary | null;
   /** How long to wait before asking Edge again for a prepared line it dropped. */
   voiceRetryMs?: number;
+  /**
+   * Arms the opener-refresh timer. Omitted uses setTimeout, unref'd so it does
+   * not keep the process up. Tests pass a fake.
+   */
+  armTimer?: (fn: () => void, ms: number) => OpenerTimer;
+}
+
+/** A timer the opener refresh can cancel. Production uses `setTimeout`. */
+interface OpenerTimer {
+  clear(): void;
+}
+
+/** One short greeting voiced ahead of time, with what it was voiced for. */
+interface BackupClip {
+  text: string;
+  pcm: Buffer;
+  language: DjLanguage;
+  voice: string;
+  server: string;
+}
+
+function realTimer(fn: () => void, ms: number): OpenerTimer {
+  const timer = setTimeout(fn, ms);
+  timer.unref?.();
+  return { clear: () => clearTimeout(timer) };
 }
 
 /**
@@ -97,10 +129,17 @@ export class KitchenFm {
   private readonly prepared = new Map<string, PreparedOpener>();
   /** A preparation already running, so a second one for the same server waits on it. */
   private readonly preparing = new Map<string, Promise<void>>();
+  /** One short greeting per server, played when the full opener line is not ready. */
+  private readonly backups = new Map<string, BackupClip>();
+  /** A backup greeting already being voiced, so a second ask waits on it. */
+  private readonly backupJobs = new Map<string, Promise<void>>();
+  /** One refresh per server, so a stored opener is replaced before it goes stale. */
+  private readonly openerRefresh = new Map<string, OpenerTimer>();
   private bootTimer: ReturnType<typeof setTimeout> | null = null;
   private backgroundStopped = false;
   private gapMs = PREPARE_GAP_MS;
   private readonly voiceRetryMs: number;
+  private readonly armTimer: (fn: () => void, ms: number) => OpenerTimer;
 
   constructor(
     private readonly music: MusicManager,
@@ -119,6 +158,7 @@ export class KitchenFm {
     });
     this.voice = options.voice ?? new DjVoice(config.dj.voice, logger);
     this.voiceRetryMs = options.voiceRetryMs ?? OPENER_VOICE_RETRY_MS;
+    this.armTimer = options.armTimer ?? realTimer;
     this.jingle =
       options.jingle ?? new DjVoice(config.dj.jingleVoice ?? 'en-GB-RyanNeural', logger);
     this.jingles =
@@ -237,8 +277,13 @@ export class KitchenFm {
       void this.prepareNext(guild);
     });
     this.stations.set(guild.id, station);
+    // A show that is on does not need the refresh; the one that ends prepares again.
+    this.clearOpenerRefresh(guild.id);
+    if (!player.current) player.playOpening(station.openingClip(), guild.name);
     player.setStation(station);
+    station.wentOnAir(this.clock());
     this.logger.info(`Kitchen FM on air in ${guild.name} (#${voice.name}), ${songs} songs.`);
+    if (this.backupStale(guild)) void this.ensureBackup(guild);
     return songs;
   }
 
@@ -299,11 +344,12 @@ export class KitchenFm {
     this.bootTimer.unref?.();
   }
 
-  /** Stop boot preparation. A show already on air is left alone. */
+  /** Stop boot preparation and opener refreshes. A show already on air is left alone. */
   stopBackgroundWork(): void {
     this.backgroundStopped = true;
     if (this.bootTimer) clearTimeout(this.bootTimer);
     this.bootTimer = null;
+    for (const id of [...this.openerRefresh.keys()]) this.clearOpenerRefresh(id);
   }
 
   /** The opener stored for the next show on this server, if there is one. */
@@ -356,7 +402,9 @@ export class KitchenFm {
           ? undefined
           : () => {
               this.prepared.delete(guild.id);
+              this.clearOpenerRefresh(guild.id);
             },
+        backupGreeting: () => this.backupClip(guild),
         now: () => this.clock(),
         timezone: this.config.timezone,
         logger: this.logger,
@@ -371,6 +419,8 @@ export class KitchenFm {
       const station = this.createStation(guild as Guild, () => {}, true);
       const found = await station.prepareOpener();
       if (this.backgroundStopped || this.stations.has(guild.id)) return;
+      // The backup greeting is independent of the opener. A miss here still stores the song.
+      void this.ensureBackup(guild);
       if (!found) {
         this.logger.warn(`Kitchen FM in ${guild.name}: could not prepare the next opener.`);
         return;
@@ -392,7 +442,10 @@ export class KitchenFm {
         language: this.config.dj.language,
         voice: this.config.dj.voice,
       };
+      const previous = this.prepared.get(guild.id);
       this.prepared.set(guild.id, opener);
+      // The old buffer is this server's alone, and no show is holding it.
+      if (previous && previous !== opener) previous.audio = null;
       const seconds = opener.pcm?.length
         ? (opener.pcm.length / (48_000 * 2 * 2)).toFixed(1)
         : '0.0';
@@ -402,10 +455,168 @@ export class KitchenFm {
       this.logger.info(
         `Kitchen FM in ${guild.name}: next opener ready: "${opener.artist} - ${opener.title}" (${genreName(opener.genre, this.config.dj.language)}), clip ${seconds} s, song ${song}.`,
       );
+      this.scheduleOpenerRefresh(
+        guild,
+        opener,
+        openerRefreshDelay(opener.preparedAt, this.clock()),
+      );
       if (!opener.pcm?.length) this.retryOpenerVoice(guild, opener, 1);
+    } catch (error: unknown) {
+      if (!this.backgroundStopped) void this.ensureBackup(guild);
+      this.logger.warn(`Kitchen FM in ${guild.name}: could not prepare the next opener:`, error);
+    }
+  }
+
+  /**
+   * Replace `opener` before it goes stale. A miss keeps it and tries again
+   * an hour later. A show that starts meanwhile still gets whatever is stored.
+   */
+  private async refreshStored(
+    guild: { id: string; name: string },
+    opener: PreparedOpener,
+  ): Promise<void> {
+    if (this.backgroundStopped || this.stations.has(guild.id)) return;
+    if (this.prepared.get(guild.id) !== opener) return;
+    try {
+      await this.prepareNext(guild);
     } catch (error: unknown) {
       this.logger.warn(`Kitchen FM in ${guild.name}: could not prepare the next opener:`, error);
     }
+    if (this.backgroundStopped || this.stations.has(guild.id)) return;
+    if (this.prepared.get(guild.id) !== opener) return;
+    this.logger.info(
+      `Kitchen FM in ${guild.name}: opener refresh found nothing, keeping the one already stored.`,
+    );
+    this.scheduleOpenerRefresh(guild, opener, OPENER_REFRESH_LEAD_MS);
+  }
+
+  /** One refresh timer per server. The previous one is cancelled. */
+  private scheduleOpenerRefresh(
+    guild: { id: string; name: string },
+    opener: PreparedOpener,
+    delayMs: number,
+  ): void {
+    this.clearOpenerRefresh(guild.id);
+    const timer = this.armTimer(() => {
+      if (this.openerRefresh.get(guild.id) === timer) this.openerRefresh.delete(guild.id);
+      timer.clear();
+      void this.refreshStored(guild, opener);
+    }, delayMs);
+    this.openerRefresh.set(guild.id, timer);
+  }
+
+  private clearOpenerRefresh(guildId: string): void {
+    const timer = this.openerRefresh.get(guildId);
+    if (!timer) return;
+    this.openerRefresh.delete(guildId);
+    timer.clear();
+  }
+
+  /** The backup clip when it still matches this server. Null when it is stale. */
+  private backupClip(guild: { id: string; name: string }): Buffer | null {
+    const clip = this.backups.get(guild.id);
+    if (!clip?.pcm.length || this.backupStale(guild)) return null;
+    return clip.pcm;
+  }
+
+  /** True when the stored greeting is missing or was voiced for something else. */
+  private backupStale(guild: { id: string; name: string }): boolean {
+    const clip = this.backups.get(guild.id);
+    if (!clip?.pcm.length) return true;
+    return (
+      clip.server !== guild.name ||
+      clip.language !== this.config.dj.language ||
+      clip.voice !== this.config.dj.voice
+    );
+  }
+
+  /**
+   * Voice the short greeting when it is missing or stale. Does not block the
+   * opener. A show may be on: the clip is for the next one, or for this one
+   * if the full line is not ready.
+   */
+  private ensureBackup(guild: { id: string; name: string }): Promise<void> {
+    if (!this.backupStale(guild)) return Promise.resolve();
+    const running = this.backupJobs.get(guild.id);
+    if (running) return running;
+    const job = this.voiceBackup(guild).finally(() => {
+      if (this.backupJobs.get(guild.id) === job) this.backupJobs.delete(guild.id);
+    });
+    this.backupJobs.set(guild.id, job);
+    return job;
+  }
+
+  private async voiceBackup(guild: { id: string; name: string }): Promise<void> {
+    const language = this.config.dj.language;
+    const voice = this.config.dj.voice;
+    const voiced = {
+      text: backupGreeting({ language, server: guild.name }),
+      language,
+      voice,
+      server: guild.name,
+    };
+    let pcm: Buffer | null = null;
+    try {
+      pcm = await this.voice.speak(voiced.text);
+    } catch (error: unknown) {
+      this.logger.warn(`Kitchen FM in ${guild.name}: backup greeting failed:`, error);
+    }
+    if (!this.backupWanted(guild, voiced)) return;
+    if (!pcm?.length) {
+      this.retryBackupVoice(guild, voiced, 1);
+      return;
+    }
+    this.storeBackup(guild, voiced, pcm);
+  }
+
+  private backupWanted(
+    guild: { id: string; name: string },
+    voiced: { text: string; language: DjLanguage; voice: string; server: string },
+  ): boolean {
+    if (this.backgroundStopped) return false;
+    if (voiced.language !== this.config.dj.language || voiced.voice !== this.config.dj.voice) {
+      return false;
+    }
+    if (voiced.server !== guild.name) return false;
+    return voiced.text === backupGreeting({ language: voiced.language, server: guild.name });
+  }
+
+  private storeBackup(
+    guild: { id: string; name: string },
+    voiced: { text: string; language: DjLanguage; voice: string; server: string },
+    pcm: Buffer,
+  ): void {
+    this.backups.set(guild.id, { ...voiced, pcm });
+    this.logger.info(
+      `Kitchen FM in ${guild.name}: backup greeting ready, clip ${pcmSeconds(pcm).toFixed(1)} s.`,
+    );
+  }
+
+  /**
+   * Edge dropped the backup greeting. Ask again on the opener's schedule.
+   * Unlike the opener line, this does not wait for the show to be off.
+   */
+  private retryBackupVoice(
+    guild: { id: string; name: string },
+    voiced: { text: string; language: DjLanguage; voice: string; server: string },
+    attempt: number,
+  ): void {
+    if (attempt > OPENER_VOICE_RETRIES) return;
+    const timer = setTimeout(() => {
+      if (!this.backupWanted(guild, voiced) || !this.backupStale(guild)) return;
+      void this.voice
+        .speak(voiced.text)
+        .catch(() => null)
+        .then((pcm) => {
+          if (!this.backupWanted(guild, voiced) || !this.backupStale(guild)) return;
+          if (!pcm?.length) {
+            this.retryBackupVoice(guild, voiced, attempt + 1);
+            return;
+          }
+          this.storeBackup(guild, voiced, pcm);
+        });
+    }, this.voiceRetryMs);
+    timer.unref?.();
   }
 
   /**

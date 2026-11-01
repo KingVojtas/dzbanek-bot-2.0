@@ -124,6 +124,8 @@ function show(opts: {
   onConsume?: () => void;
   /** Undefined keeps the built-in template, so older tests do not load the line book. */
   lines?: LineBook | null;
+  /** Short greeting already voiced. Omitted means there is none. */
+  backupGreeting?: () => Buffer | null;
 }) {
   const calls = { deezer: 0, youtube: 0 };
   const genres: GenreIndex = {
@@ -204,6 +206,7 @@ function show(opts: {
       lines: opts.lines === undefined ? null : opts.lines,
       prepared: opts.prepared,
       consumeOpener: opts.onConsume,
+      backupGreeting: opts.backupGreeting,
       now: () => clock.now,
       timezone: 'Europe/Prague',
       logger: {
@@ -1620,5 +1623,189 @@ describe('FmStation prepared opener', () => {
     );
     assert.equal(found.line.includes('12 AM'), false);
     assert.equal(found.line.includes('late night'), false);
+  });
+});
+
+describe('FmStation opening and backup greeting', () => {
+  const pool = () => [0, 1, 2, 3, 4, 5].map((n) => kitchenSong('cz-rap', n));
+
+  function usedOf(station: FmStation): { ids: Set<string>; sweepers: Set<string> } {
+    return (station as unknown as { jingleUsed: { ids: Set<string>; sweepers: Set<string> } })
+      .jingleUsed;
+  }
+
+  it('plays a sweeper when a prepared opener is still young, and marks it used', async () => {
+    const songs = pool();
+    const { lib } = memJingles([
+      { name: 'sweeper-1.mp3', pcm: tone(0.2, 1_000) },
+      { name: 'sweeper-2.mp3', pcm: tone(0.2, 2_000) },
+      { name: 'id-main.mp3', pcm: tone(0.2, 3_000) },
+    ]);
+    const radio = show({ pool: songs, prepared: preparedFor(songs[0]!), jingles: lib });
+    const first = await radio.station.openingClip();
+    const second = await radio.station.openingClip();
+    assert.match(first?.stem ?? '', /^sweeper-/);
+    assert.match(second?.stem ?? '', /^sweeper-/);
+    assert.notEqual(first?.stem, second?.stem);
+    assert.ok(first?.pcm.length);
+    const used = usedOf(radio.station);
+    assert.equal(used.sweepers.size, 2);
+    assert.equal(used.ids.size, 0);
+  });
+
+  it('plays id-main when there is no usable opener, and marks that id used', async () => {
+    const songs = pool();
+    const { lib } = memJingles([
+      { name: 'sweeper-1.mp3', pcm: tone(0.2, 1_000) },
+      { name: 'id-main.mp3', pcm: tone(0.2, 3_000) },
+    ]);
+    const infos: string[] = [];
+    const stale = show({
+      pool: songs,
+      prepared: preparedFor(songs[0]!, { preparedAt: START - OPENER_MAX_AGE_MS }),
+      jingles: lib,
+      infos,
+    });
+    const clip = await stale.station.openingClip();
+    assert.equal(clip?.stem, 'id-main');
+    assert.equal(usedOf(stale.station).ids.has('main'), true);
+    assert.equal(usedOf(stale.station).sweepers.size, 0);
+    const again = await stale.station.openingClip();
+    assert.equal(again?.stem, 'id-main');
+
+    const none = show({ pool: songs, jingles: null, infos });
+    assert.equal(await none.station.openingClip(), null);
+    assert.ok(infos.some((line) => line.includes('opening jingle skipped, no files')));
+  });
+
+  it('skips the opening when the chosen kind of file is missing or will not decode', async () => {
+    const songs = pool();
+    const infos: string[] = [];
+    const warns: string[] = [];
+    const { lib } = memJingles(
+      [{ name: 'id-main.mp3', pcm: tone(0.2, 1_000) }],
+      new Set(['mem://id-main.mp3']),
+    );
+    const young = show({
+      pool: songs,
+      prepared: preparedFor(songs[0]!),
+      jingles: lib,
+      infos,
+    });
+    assert.equal(await young.station.openingClip(), null);
+    assert.ok(infos.some((line) => line.includes('opening jingle skipped, no files')));
+
+    const broken = memJingles(
+      [{ name: 'id-main.mp3', pcm: tone(0.2, 1_000) }],
+      new Set(['mem://id-main.mp3']),
+    );
+    const slow = show({
+      pool: songs,
+      jingles: new JingleLibrary({
+        list: () => broken.lib.files(),
+        decode: async (file) => {
+          if (file.endsWith('id-main.mp3')) throw new Error('broken');
+          return tone(0.2, 1_000);
+        },
+        warn: (message) => warns.push(message),
+      }),
+      infos,
+    });
+    assert.equal(await slow.station.openingClip(), null);
+    assert.ok(infos.some((line) => line.includes('opening jingle skipped, decode failed')));
+    assert.ok(warns.some((line) => line.includes('could not play id-main.mp3')));
+  });
+
+  it('gives the backup greeting for the first song only, once', async () => {
+    const songs = pool();
+    const opener = preparedFor(songs[0]!);
+    let clip: Buffer | null = null;
+    const radio = show({
+      pool: songs,
+      prepared: opener,
+      backupGreeting: () => clip,
+      searchOne: async () => {
+        throw new Error('YouTube should not be asked');
+      },
+    });
+    const first = await radio.station.upNext();
+    assert.ok(first);
+    assert.equal(radio.station.fallbackIntro(asTrack(songs[1]!)), null);
+    assert.equal(radio.station.fallbackIntro(first), null);
+    clip = Buffer.from('backup');
+    const backup = radio.station.fallbackIntro(first);
+    assert.equal(backup?.pcm, clip);
+    assert.equal(backup?.text, opener.line);
+    assert.equal(radio.station.fallbackIntro(first), null);
+    radio.station.starting(first);
+    const second = await radio.station.upNext();
+    assert.notEqual(second?.url, first.url);
+    assert.equal(radio.station.fallbackIntro(second!), null);
+  });
+
+  it('logs the first song once, and a request does not use that up', async () => {
+    const songs = pool();
+    const opener = preparedFor(songs[0]!);
+    const infos: string[] = [];
+    const radio = show({
+      pool: songs,
+      prepared: opener,
+      infos,
+      searchOne: async () => {
+        throw new Error('YouTube should not be asked');
+      },
+    });
+    const request = asTrack(kitchenSong('rock', 9));
+    radio.station.starting(request);
+    radio.station.songOnAir(request, 'spoken');
+    assert.equal(
+      infos.some((line) => line.includes('first song on air')),
+      false,
+    );
+    radio.station.wentOnAir(START);
+    const first = await radio.station.upNext();
+    assert.ok(first);
+    radio.setClock(START + 2_500);
+    radio.station.songOnAir(first, 'spoken');
+    radio.station.songOnAir(first, 'none');
+    assert.deepEqual(
+      infos.filter((line) => line.includes('first song on air')),
+      [
+        'Kitchen FM in Kitchen: first song on air 2.5 s after the show started (greeting: prepared).',
+      ],
+    );
+
+    const freshInfos: string[] = [];
+    const fresh = show({
+      pool: songs,
+      prepared: preparedFor(songs[0]!, { pcm: null }),
+      infos: freshInfos,
+      searchOne: async () => {
+        throw new Error('YouTube should not be asked');
+      },
+    });
+    fresh.station.wentOnAir(START);
+    const song = await fresh.station.upNext();
+    fresh.station.songOnAir(song!, 'spoken');
+    fresh.station.songOnAir(song!, 'backup');
+    assert.ok(freshInfos.some((line) => line.includes('greeting: fresh')));
+
+    const quietInfos: string[] = [];
+    const quiet = show({
+      pool: songs,
+      prepared: opener,
+      infos: quietInfos,
+      searchOne: async () => {
+        throw new Error('YouTube should not be asked');
+      },
+    });
+    quiet.station.wentOnAir(START);
+    const quietSong = await quiet.station.upNext();
+    quiet.station.songOnAir(quietSong!, 'backup');
+    quiet.station.songOnAir(quietSong!, 'none');
+    assert.deepEqual(
+      quietInfos.filter((line) => line.includes('first song on air')),
+      ['Kitchen FM in Kitchen: first song on air 0.0 s after the show started (greeting: backup).'],
+    );
   });
 });

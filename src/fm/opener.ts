@@ -5,6 +5,21 @@ import { cleanLine, prepareBlocked, sidelined, type DjLanguage, type OpenerSong 
 
 /** A prepared opener older than this is dropped. YouTube links go bad. */
 export const OPENER_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+/** Refresh a stored opener this long before it goes stale, and again after a miss. */
+export const OPENER_REFRESH_LEAD_MS = 60 * 60 * 1000;
+
+/**
+ * How long until a stored opener should be prepared again.
+ * Zero once it is inside the last hour of its life.
+ */
+export function openerRefreshDelay(preparedAt: number, now: number): number {
+  return Math.max(0, preparedAt + OPENER_MAX_AGE_MS - OPENER_REFRESH_LEAD_MS - now);
+}
+
+/** True while a prepared opener is young enough to open on the fast path. */
+export function openerYoung(preparedAt: number, now: number): boolean {
+  return now - preparedAt < OPENER_MAX_AGE_MS;
+}
 
 /**
  * The first song of the next show, found and voiced ahead of time.
@@ -143,6 +158,15 @@ export function preparedShowLine(
   const index = Math.min(usable.length - 1, Math.floor(rng() * usable.length));
   const text = cleanLine(fillLine(usable[index] ?? '', slots));
   return text || null;
+}
+
+/**
+ * A short greeting with no clock and no song, voiced ahead of time.
+ * Played when the full opener line is not ready.
+ */
+export function backupGreeting(facts: { language: DjLanguage; server: string }): string {
+  if (facts.language === 'cs') return `${facts.server}, posloucháte Kitchen FM.`;
+  return `${facts.server}, you're listening to Kitchen FM.`;
 }
 
 /**

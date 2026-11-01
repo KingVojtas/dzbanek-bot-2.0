@@ -76,6 +76,17 @@ export interface StationIntro {
   pcm: Buffer | null;
 }
 
+/** The jingle that plays the moment the radio is switched on. */
+export interface OpeningClip {
+  /** File stem, such as `sweeper-1` or `id-main`, for the log. */
+  stem: string;
+  /** PCM s16le, 48 kHz, stereo. */
+  pcm: Buffer;
+}
+
+/** Which greeting actually played before a song. */
+export type HeardGreeting = 'spoken' | 'backup' | 'none';
+
 /**
  * A station on the music player (Kitchen FM): it plays sets of songs whenever
  * the queue runs dry, and the DJ talks before each set.
@@ -101,8 +112,18 @@ export interface PlayerStation {
   /**
    * How long the player may wait for this intro. The show's first line is
    * synthesized cold and may take longer. Omitted means the usual wait.
+   * Called when the wait starts, which is after the opening jingle.
    */
   introWaitMs?(track: Track): number | undefined;
+  /**
+   * A short greeting already voiced, for the show's first song, when the full
+   * one is not ready. Null for any other song, or when there is no clip.
+   */
+  fallbackIntro?(track: Track): StationIntro | null;
+  /**
+   * The song's audio actually started. `heard` is which greeting played before it.
+   */
+  songOnAir?(track: Track, heard: HeardGreeting): void;
   /**
    * The whole audio of `track`, downloaded before the show, so the first song
    * starts without waiting for YouTube. Handed over once; null after that.

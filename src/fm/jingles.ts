@@ -138,6 +138,24 @@ export function mainIdJingle(
 }
 
 /**
+ * The jingle that plays the moment the radio is switched on.
+ * A usable prepared opener gets a short sweeper. Otherwise the station ID,
+ * which is marked used so the breaks prefer another one.
+ * Null when that kind of file is missing. There is no cross-fallback.
+ */
+export function openingJingle(
+  files: readonly JingleFile[],
+  prepared: boolean,
+  used: JingleUsed,
+  rng: () => number = Math.random,
+): JingleFile | null {
+  if (prepared) return pickJingle(files, 'sweeper', used.sweepers, rng);
+  const file = mainIdJingle(files, rng);
+  if (file) used.ids.add(file.id);
+  return file;
+}
+
+/**
  * A new-find jingle plays once in a rotation block, and not on the block's
  * first set: the break or the opener already played there.
  */

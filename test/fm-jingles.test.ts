@@ -17,6 +17,7 @@ import {
   mixBedAsync,
   normalizePcm,
   pcmPeak,
+  openingJingle,
   pickJingle,
   playNewFindJingle,
   readJingleNames,
@@ -120,6 +121,26 @@ describe('jingle picks', () => {
     assert.equal(pickJingle(files, 'sweeper', new Set(['1']), () => 0)?.id, '1');
     assert.equal(
       pickJingle([], 'id', used, () => 0),
+      null,
+    );
+  });
+
+  it('opens on a sweeper when a prepared opener is usable, otherwise on the station ID', () => {
+    const used = { ids: new Set<string>(), sweepers: new Set<string>(), beds: new Set<string>() };
+    assert.equal(openingJingle(files, true, used, () => 0)?.id, '1');
+    assert.equal(used.sweepers.has('1'), true);
+    assert.equal(used.ids.size, 0);
+    assert.equal(openingJingle(files, false, used, () => 0)?.id, 'main');
+    assert.equal(used.ids.has('main'), true);
+    const idsOnly = [file('id', 'main'), file('id', 'jazz')];
+    const slow = { ids: new Set<string>(), sweepers: new Set<string>(), beds: new Set<string>() };
+    assert.equal(
+      openingJingle(idsOnly, true, slow, () => 0),
+      null,
+    );
+    assert.equal(slow.ids.size, 0);
+    assert.equal(
+      openingJingle([file('sweeper', '1')], false, slow, () => 0),
       null,
     );
   });

@@ -1,6 +1,7 @@
 import type { Guild, GuildMember } from 'discord.js';
 import type { Logger } from '../core/logger';
-import type { PlayerStation, StationIntro, Track } from '../core/types';
+import type { HeardGreeting, OpeningClip, PlayerStation, StationIntro, Track } from '../core/types';
+import { firstSongGreeting } from '../music/opening-rules';
 import { zonedParts } from '../kitchen/time';
 import type { CompositeTrackSource } from '../music/sources';
 import { getStation } from '../radio/station';
@@ -36,8 +37,10 @@ import {
   JingleLibrary,
   genreJingle,
   namedJingle,
+  openingJingle,
   pickJingle,
   playNewFindJingle,
+  type JingleFile,
 } from './jingles';
 import type { GenreId, GenreIndex } from './genres';
 import { artistKey, genreName } from './genres';
@@ -56,6 +59,7 @@ import {
 import {
   openerDropReason,
   openerIsBlocked,
+  openerYoung,
   preparedShowLine,
   timelessOpener,
   type PreparedOpener,
@@ -247,6 +251,11 @@ export interface FmStationDeps {
   prepared?: PreparedOpener | null;
   /** Forget the stored opener once this show uses it or drops it. */
   consumeOpener?: () => void;
+  /**
+   * A short greeting voiced ahead of time. Null when it is missing or stale
+   * (the server name, the language, or the voice changed).
+   */
+  backupGreeting?: () => Buffer | null;
   /** Clock for the block and for a set going stale. */
   now?: () => number;
   timezone: string;
@@ -283,6 +292,12 @@ interface FmSet {
 }
 
 type SetBase = { hour: number; minute: number; set: number; newcomers: string[] };
+
+/** `mem://id-main.mp3` → `id-main`. The opening log names the file this way. */
+function jingleStem(file: JingleFile): string {
+  const base = file.file.replace(/\\/g, '/').split('/').pop() ?? file.file;
+  return base.replace(/\.(mp3|wav)$/i, '');
+}
 
 /**
  * Kitchen FM in one server, in the style of Spotify's DJ. When the queue runs
@@ -371,6 +386,12 @@ export class FmStation implements PlayerStation {
     sweepers: new Set<string>(),
     beds: new Set<string>(),
   };
+  /** The backup greeting already stood in for this show's first song. */
+  private usedFallback = false;
+  /** When the show went on air, for the first-song log. Null until then. */
+  private onAirAt: number | null = null;
+  /** The first song of the opener set has been logged. */
+  private announcedFirst = false;
   /** The rotation block that already played its new-find jingle. */
   private newFindJingleGenre: GenreId | null = null;
   private breakBookCache: BreakBook | null | undefined;
@@ -557,6 +578,61 @@ export class FmStation implements PlayerStation {
     this.dedications.returnFront(again);
   }
 
+  /**
+   * The jingle that plays the moment the radio is switched on.
+   * A young prepared opener gets a sweeper; otherwise the station ID.
+   * Null when that file is missing or will not decode.
+   */
+  async openingClip(): Promise<OpeningClip | null> {
+    const name = this.deps.guild.name;
+    const lib = this.deps.jingles;
+    if (!lib) {
+      this.deps.logger.info(`Kitchen FM in ${name}: opening jingle skipped, no files.`);
+      return null;
+    }
+    const file = openingJingle(lib.files(), this.preparedUsable(), this.jingleUsed, Math.random);
+    if (!file) {
+      this.deps.logger.info(`Kitchen FM in ${name}: opening jingle skipped, no files.`);
+      return null;
+    }
+    try {
+      const pcm = await lib.clip(file);
+      if (!pcm?.length) {
+        this.deps.logger.info(`Kitchen FM in ${name}: opening jingle skipped, decode failed.`);
+        return null;
+      }
+      return { stem: jingleStem(file), pcm };
+    } catch (error: unknown) {
+      this.deps.logger.warn('Kitchen FM jingle failed:', error);
+      this.deps.logger.info(`Kitchen FM in ${name}: opening jingle skipped, decode failed.`);
+      return null;
+    }
+  }
+
+  /** The moment the show went on air. The first-song log measures from here. */
+  wentOnAir(at: number): void {
+    this.onAirAt = at;
+  }
+
+  /**
+   * The first song of the opener set started. Logged once. A request before
+   * that set does not count, and neither does any later song.
+   */
+  songOnAir(track: Track, heard: HeardGreeting): void {
+    if (this.announcedFirst || this.onAirAt === null) return;
+    const set = this.setOf.get(track);
+    if (!set?.opener || set.tracks[0] !== track) return;
+    this.announcedFirst = true;
+    const greeting = firstSongGreeting({
+      heard,
+      preparedClip: Boolean(set.preparedClip?.length),
+    });
+    const seconds = ((this.now() - this.onAirAt) / 1000).toFixed(1);
+    this.deps.logger.info(
+      `Kitchen FM in ${this.deps.guild.name}: first song on air ${seconds} s after the show started (greeting: ${greeting}).`,
+    );
+  }
+
   intro(track: Track): Promise<StationIntro | null> {
     if (this.ended) return Promise.resolve(null);
     const dedication = this.dedicationOf.get(track);
@@ -584,6 +660,28 @@ export class FmStation implements PlayerStation {
     if (this.dedicationOf.get(track)) return DEDICATION_WAIT_MS;
     if (set?.opener && set.tracks[0] === track) return OPENER_WAIT_MS;
     return undefined;
+  }
+
+  /**
+   * The backup greeting, once, for the show's first song. The words are the
+   * set's own line; the clip is the short one voiced ahead of time.
+   * A miss does not use up the one chance.
+   */
+  fallbackIntro(track: Track): StationIntro | null {
+    if (this.ended || this.usedFallback) return null;
+    const set = this.setOf.get(track);
+    if (!set?.opener || set.tracks[0] !== track) return null;
+    const pcm = this.deps.backupGreeting?.() ?? null;
+    if (!pcm?.length) return null;
+    this.usedFallback = true;
+    return { text: set.line, pcm };
+  }
+
+  /** A prepared opener still inside its 12 hours, so the opening can be short. */
+  private preparedUsable(): boolean {
+    const opener = this.prepared;
+    if (!opener) return false;
+    return openerYoung(opener.preparedAt, this.now());
   }
 
   /** The prepared opener's downloaded audio, once, for that song only. */
@@ -786,9 +884,9 @@ export class FmStation implements PlayerStation {
   }
 
   /**
-   * `new-find` once in a later set of the block. The opener has no jingle: the
-   * show should get to its first song as fast as it can, and `id-main` plays in
-   * the breaks.
+   * `new-find` once in a later set of the block. The opener's line has no
+   * jingle of its own: the opening jingle already played when the radio was
+   * switched on.
    */
   private stationLead(set: FmSet): Promise<Buffer | null> {
     const lib = this.deps.jingles;

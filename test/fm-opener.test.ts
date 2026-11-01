@@ -12,8 +12,12 @@ import type { GenreId, GenreIndex } from '../src/fm/genres';
 import type { LineSlots } from '../src/fm/lines';
 import {
   OPENER_MAX_AGE_MS,
+  OPENER_REFRESH_LEAD_MS,
+  backupGreeting,
   openerDropReason,
   openerIsBlocked,
+  openerRefreshDelay,
+  openerYoung,
   preparedShowLine,
   readWhole,
   timelessLines,
@@ -159,6 +163,28 @@ describe('prepared opener rules', () => {
     assert.equal(czech.includes('0:00'), false);
     assert.match(czech, /Numb – Linkin Park/);
   });
+
+  it('refreshes an opener an hour before it is 12 hours old', () => {
+    assert.equal(openerRefreshDelay(1_000, 1_000), OPENER_MAX_AGE_MS - OPENER_REFRESH_LEAD_MS);
+    assert.equal(openerRefreshDelay(0, OPENER_MAX_AGE_MS - OPENER_REFRESH_LEAD_MS), 0);
+    assert.equal(openerRefreshDelay(0, OPENER_MAX_AGE_MS), 0);
+  });
+
+  it('treats an opener as young until the moment it is 12 hours old', () => {
+    assert.equal(openerYoung(0, OPENER_MAX_AGE_MS - 1), true);
+    assert.equal(openerYoung(0, OPENER_MAX_AGE_MS), false);
+  });
+
+  it('builds a backup greeting with no clock and no song', () => {
+    assert.equal(
+      backupGreeting({ language: 'en', server: 'Kitchen' }),
+      "Kitchen, you're listening to Kitchen FM.",
+    );
+    assert.equal(
+      backupGreeting({ language: 'cs', server: 'Kuchyně' }),
+      'Kuchyně, posloucháte Kitchen FM.',
+    );
+  });
 });
 
 /** One server's kitchen, clock, and the counts a preparation must not touch. */
@@ -171,8 +197,14 @@ function harness(jingles: JingleLibrary | null = null) {
   const searches = { n: 0 };
   const poolEntered = { n: 0 };
   const rows = new Map<string, PlayedTrackRow[]>();
-  const flags = { holdPool: null as Promise<void> | null, holdSpeak: false, failVoice: 0 };
-  let releaseSpeak: (pcm: Buffer | null) => void = () => {};
+  const flags = {
+    holdPool: null as Promise<void> | null,
+    holdSpeak: false,
+    failVoice: 0,
+    failPool: false,
+  };
+  const speakWaiters: ((pcm: Buffer | null) => void)[] = [];
+  const timers: { ms: number; cleared: boolean; fire: () => void }[] = [];
   const players = new Map<
     string,
     { onAir: boolean; stop: () => void; setStation: (station: { end: () => void }) => void }
@@ -202,7 +234,7 @@ function harness(jingles: JingleLibrary | null = null) {
       }
       if (!flags.holdSpeak) return Buffer.alloc(48_000 * 2 * 2);
       return new Promise<Buffer | null>((resolve) => {
-        releaseSpeak = resolve;
+        speakWaiters.push(resolve);
       });
     },
   } as unknown as DjVoice;
@@ -230,7 +262,14 @@ function harness(jingles: JingleLibrary | null = null) {
       let station: { end: () => void } | null = null;
       const player = {
         onAir: true,
+        current: null,
         setAnnounceChannel() {},
+        playOpening(clip: Promise<unknown>) {
+          void clip.then(
+            () => {},
+            () => {},
+          );
+        },
         setStation(next: { end: () => void }) {
           station = next;
         },
@@ -263,6 +302,7 @@ function harness(jingles: JingleLibrary | null = null) {
       all: async (guildId: string) => {
         poolEntered.n += 1;
         if (flags.holdPool) await flags.holdPool;
+        if (flags.failPool) throw new Error('pool down');
         return rows.get(guildId) ?? [];
       },
     } as unknown as PlayedTrackStore,
@@ -278,7 +318,23 @@ function harness(jingles: JingleLibrary | null = null) {
     } as unknown as PlayLogStore,
     config,
     logger,
-    { now: () => clock.now, catalog, genres, voice, jingles, voiceRetryMs: 5 },
+    {
+      now: () => clock.now,
+      catalog,
+      genres,
+      voice,
+      jingles,
+      voiceRetryMs: 5,
+      armTimer: (fn, ms) => {
+        const entry = { ms, cleared: false, fire: fn };
+        timers.push(entry);
+        return {
+          clear() {
+            entry.cleared = true;
+          },
+        };
+      },
+    },
   );
 
   return {
@@ -287,6 +343,8 @@ function harness(jingles: JingleLibrary | null = null) {
     infos,
     warns,
     speaks,
+    timers,
+    config,
     adds,
     searches,
     poolEntered,
@@ -330,9 +388,13 @@ function harness(jingles: JingleLibrary | null = null) {
     failVoice(times: number) {
       flags.failVoice = times;
     },
+    failPool(down = true) {
+      flags.failPool = down;
+    },
     releaseSpeak(pcm: Buffer | null) {
       flags.holdSpeak = false;
-      releaseSpeak(pcm);
+      const waiting = speakWaiters.splice(0);
+      for (const resolve of waiting) resolve(pcm);
     },
     async goOnAir(guild: { id: string; name: string }) {
       const channel = {
@@ -425,8 +487,8 @@ describe('KitchenFm prepares the next opener', () => {
     assert.ok(stored);
     assert.equal(stored.pcm, null);
     await waitFor(() => Boolean(h.fm.openerFor('g1')?.pcm?.length));
-    assert.equal(h.speaks.length, 3);
-    assert.ok(h.infos.some((line) => line.includes('line is voiced now (try 3)')));
+    await waitFor(() => h.infos.some((line) => line.includes('backup greeting ready')));
+    assert.ok(h.infos.some((line) => line.includes('line is voiced now')));
     h.close();
   });
 
@@ -435,10 +497,18 @@ describe('KitchenFm prepares the next opener', () => {
     h.setRows('g1', 5);
     h.failVoice(10);
     await h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
-    await waitFor(() => h.speaks.length === 4);
+    await waitFor(() => h.speaks.length >= 8);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(h.speaks.length, 4);
-    assert.equal(h.fm.openerFor('g1')?.pcm, null);
+    assert.equal(h.speaks.length, 8);
+    assert.equal(h.fm.openerFor('g1')?.pcm ?? null, null);
+    assert.equal(
+      h.infos.some((line) => line.includes('backup greeting ready')),
+      false,
+    );
+    assert.equal(
+      h.infos.some((line) => line.includes('line is voiced now')),
+      false,
+    );
     h.close();
   });
 
@@ -478,7 +548,7 @@ describe('KitchenFm prepares the next opener', () => {
       await h.fm.prepareNext(guild);
       await h.fm.prepareNext(guild);
       assert.equal(h.fm.openerFor(guild.id), null);
-      assert.equal(h.speaks.length, 0);
+      assert.deepEqual(h.speaks, ["Kitchen, you're listening to Kitchen FM."]);
       assert.equal(h.fm.stop(guild.id), true);
       await waitFor(() => h.fm.openerFor(guild.id) !== null);
       const stored = h.fm.openerFor(guild.id);
@@ -514,7 +584,7 @@ describe('KitchenFm prepares the next opener', () => {
       h.setRows(guild.id, 5);
       h.holdSpeak();
       const pending = h.fm.prepareNext(guild);
-      await waitFor(() => h.speaks.length === 1);
+      await waitFor(() => h.speaks.length >= 1);
       await h.goOnAir(guild);
       h.releaseSpeak(Buffer.alloc(4));
       await pending;
@@ -530,11 +600,15 @@ describe('KitchenFm prepares the next opener', () => {
     h.setRows('g1', 5);
     h.holdSpeak();
     const pending = h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
-    await waitFor(() => h.speaks.length === 1);
+    await waitFor(() => h.speaks.length >= 1);
     h.fm.stopBackgroundWork();
     h.releaseSpeak(Buffer.alloc(4));
     await pending;
     assert.equal(h.fm.openerFor('g1'), null);
+    assert.equal(
+      h.infos.some((line) => line.includes('backup greeting ready')),
+      false,
+    );
   });
 
   it('prepares at most ten kitchens after boot, and skips a kitchen that is too small', async () => {
@@ -578,5 +652,136 @@ describe('KitchenFm prepares the next opener', () => {
     } finally {
       h.close();
     }
+  });
+
+  it('voices the backup greeting once, and again when the server name changes', async () => {
+    const h = harness();
+    h.setRows('g1', 5);
+    await h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
+    await waitFor(() => h.infos.some((line) => line.includes('backup greeting ready, clip 1.0 s')));
+    const kitchenLine = "Kitchen, you're listening to Kitchen FM.";
+    assert.equal(h.speaks.filter((line) => line === kitchenLine).length, 1);
+    await h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
+    assert.equal(h.speaks.filter((line) => line === kitchenLine).length, 1);
+    await h.fm.prepareNext({ id: 'g1', name: 'Pantry' });
+    const pantry = "Pantry, you're listening to Kitchen FM.";
+    assert.equal(h.speaks.filter((line) => line === pantry).length, 1);
+    h.config.dj.voice = 'other-voice';
+    await h.fm.prepareNext({ id: 'g1', name: 'Pantry' });
+    assert.equal(h.speaks.filter((line) => line === pantry).length, 2);
+    h.close();
+  });
+
+  it('refreshes a stored opener an hour before it goes stale', async () => {
+    const h = harness();
+    try {
+      h.setRows('g1', 5);
+      await h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
+      const first = h.fm.openerFor('g1');
+      assert.ok(first?.audio);
+      const armed = h.timers.filter((timer) => !timer.cleared);
+      assert.equal(armed.length, 1);
+      assert.equal(armed[0]?.ms, OPENER_MAX_AGE_MS - OPENER_REFRESH_LEAD_MS);
+      h.clock.now += OPENER_MAX_AGE_MS - OPENER_REFRESH_LEAD_MS;
+      armed[0]?.fire();
+      await waitFor(() => h.fm.openerFor('g1') !== first);
+      const next = h.fm.openerFor('g1');
+      assert.ok(next);
+      assert.equal(next.preparedAt, h.clock.now);
+      assert.equal(first.audio, null);
+      assert.ok(next.audio?.length);
+      const live = h.timers.filter((timer) => !timer.cleared);
+      assert.equal(live.length, 1);
+      assert.equal(live[0]?.ms, OPENER_MAX_AGE_MS - OPENER_REFRESH_LEAD_MS);
+    } finally {
+      h.close();
+    }
+  });
+
+  it('does not refresh while a show is on', async () => {
+    const h = harness();
+    try {
+      const guild = h.guild();
+      h.setRows(guild.id, 5);
+      await h.fm.prepareNext(guild);
+      const kept = h.fm.openerFor(guild.id);
+      const armed = h.timers.filter((timer) => !timer.cleared);
+      assert.equal(armed.length, 1);
+      await h.goOnAir(guild);
+      assert.equal(armed[0]?.cleared, true);
+      armed[0]?.fire();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(h.fm.openerFor(guild.id), kept);
+      assert.equal(h.timers.filter((timer) => !timer.cleared).length, 0);
+    } finally {
+      h.close();
+    }
+  });
+
+  it('keeps the stored opener and tries again an hour later when a refresh finds nothing', async () => {
+    const h = harness();
+    try {
+      h.setRows('g1', 5);
+      await h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
+      const kept = h.fm.openerFor('g1');
+      assert.ok(kept);
+      h.setRows('g1', 0);
+      const armed = h.timers.filter((timer) => !timer.cleared);
+      armed[0]?.fire();
+      await waitFor(() =>
+        h.infos.some((line) =>
+          line.includes('opener refresh found nothing, keeping the one already stored'),
+        ),
+      );
+      assert.equal(h.fm.openerFor('g1'), kept);
+      const retry = h.timers.filter((timer) => !timer.cleared);
+      assert.equal(retry.length, 1);
+      assert.equal(retry[0]?.ms, OPENER_REFRESH_LEAD_MS);
+      h.setRows('g1', 5);
+      h.clock.now += OPENER_REFRESH_LEAD_MS;
+      retry[0]?.fire();
+      await waitFor(() => h.fm.openerFor('g1') !== kept);
+      assert.equal(h.fm.openerFor('g1')?.preparedAt, h.clock.now);
+    } finally {
+      h.close();
+    }
+  });
+
+  it('retries an hour later when the refresh throws', async () => {
+    const h = harness();
+    try {
+      h.setRows('g1', 5);
+      await h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
+      const kept = h.fm.openerFor('g1');
+      h.failPool();
+      const armed = h.timers.filter((timer) => !timer.cleared);
+      armed[0]?.fire();
+      await waitFor(() =>
+        h.infos.some((line) =>
+          line.includes('opener refresh found nothing, keeping the one already stored'),
+        ),
+      );
+      assert.equal(h.fm.openerFor('g1'), kept);
+      assert.equal(h.timers.filter((timer) => !timer.cleared)[0]?.ms, OPENER_REFRESH_LEAD_MS);
+      assert.ok(h.warns.some((line) => line.includes('could not prepare the next opener')));
+    } finally {
+      h.close();
+    }
+  });
+
+  it('stops refreshing after background work stops', async () => {
+    const h = harness();
+    h.setRows('g1', 5);
+    await h.fm.prepareNext({ id: 'g1', name: 'Kitchen' });
+    const kept = h.fm.openerFor('g1');
+    const speaks = h.speaks.length;
+    const armed = h.timers.filter((timer) => !timer.cleared);
+    h.fm.stopBackgroundWork();
+    assert.equal(armed[0]?.cleared, true);
+    armed[0]?.fire();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(h.fm.openerFor('g1'), kept);
+    assert.equal(h.speaks.length, speaks);
+    assert.equal(h.timers.filter((timer) => !timer.cleared).length, 0);
   });
 });

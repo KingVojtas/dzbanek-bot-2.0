@@ -15,8 +15,24 @@ import { isUnknownMessage } from '../core/discord-errors';
 import { buildNowPlayingDisplay } from '../core/display/music';
 import { upcomingQueue, type EmbedCard } from '../core/embeds';
 import type { Logger } from '../core/logger';
-import type { LoopMode, PlayerStation, StationIntro, Track, TrackSource } from '../core/types';
+import type {
+  HeardGreeting,
+  LoopMode,
+  OpeningClip,
+  PlayerStation,
+  StationIntro,
+  Track,
+  TrackSource,
+} from '../core/types';
 import { introPlayMs, pcmSeconds, streamOpenDelayMs } from './intro-wait';
+import {
+  OPENING_READY_MS,
+  greetingToPlay,
+  idleEndsTrack,
+  introWaitAfterOpening,
+  openSongStreamNow,
+  openingPlay,
+} from './opening-rules';
 import { afterTrackEnds, earlyEndWarning, pushHistory, takeNext } from './queue-rules';
 
 const VOLUME_MIN = 0.25;
@@ -90,6 +106,12 @@ export class GuildPlayer {
   /** What the DJ said before the current track. */
   private djLine: string | null = null;
   private introPlaying = false;
+  /** Opening jingles in flight. Idle during one of them is not a song ending. */
+  private clipHold = 0;
+  /** Resolves when the opening jingle has finished or was skipped. */
+  private openingGate: Promise<void> = Promise.resolve();
+  /** True until that jingle finishes or is skipped. The intro wait stays put. */
+  private openingPending = false;
   /** The track that last started: the DJ's "that was…", and no intro for a repeat of it. */
   private lastStarted: Track | null = null;
   /** 🔥 on the song that is on. The card reads this; a press sets it before the lookup returns. */
@@ -183,6 +205,68 @@ export class GuildPlayer {
       station.heard?.(this.current);
       this.warmStation(this.current);
     } else void this.processQueue();
+  }
+
+  /**
+   * Play the opening jingle as soon as it decodes, the way the DJ's talk plays.
+   * A clip that is still decoding after about 2s is skipped. Nothing is played
+   * when a song or the DJ is already on. `server` names the log line.
+   */
+  playOpening(clip: Promise<OpeningClip | null>, server: string): void {
+    if (this.destroyed || this.current || this.introPlaying) {
+      void clip.then(
+        () => {},
+        () => {},
+      );
+      return;
+    }
+    this.openingPending = true;
+    let settled = false;
+    let resolveGate: () => void = () => {};
+    this.openingGate = new Promise<void>((resolve) => {
+      resolveGate = resolve;
+    });
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      this.openingPending = false;
+      resolveGate();
+    };
+    const started = Date.now();
+    const timer = setTimeout(() => {
+      if (settled) return;
+      if (!this.destroyed) {
+        this.logger.info(`Kitchen FM in ${server}: opening jingle skipped, not ready in time.`);
+      }
+      finish();
+    }, OPENING_READY_MS);
+    timer.unref?.();
+    void clip.then(
+      (jingle) => {
+        if (settled) return;
+        clearTimeout(timer);
+        const decision = openingPlay({
+          destroyed: this.destroyed,
+          busy: this.current !== null || this.introPlaying,
+          elapsedMs: Date.now() - started,
+          hasPcm: Boolean(jingle?.pcm.length),
+        });
+        if (decision === 'late') {
+          this.logger.info(`Kitchen FM in ${server}: opening jingle skipped, not ready in time.`);
+        }
+        if (decision !== 'play' || !jingle) {
+          finish();
+          return;
+        }
+        const seconds = pcmSeconds(jingle.pcm).toFixed(1);
+        this.logger.info(`Kitchen FM in ${server}: opening jingle ${jingle.stem} (${seconds} s).`);
+        void this.playOpeningClip(jingle.pcm).then(finish, finish);
+      },
+      () => {
+        clearTimeout(timer);
+        finish();
+      },
+    );
   }
 
   get onAir(): boolean {
@@ -480,7 +564,7 @@ export class GuildPlayer {
 
   private onPlayerBecameIdle(): void {
     if (this.destroyed) return;
-    if (this.queuePumpRunning) return;
+    if (!idleEndsTrack({ clip: this.clipHold > 0, queueRunning: this.queuePumpRunning })) return;
     if (this.player.state.status !== AudioPlayerStatus.Idle) return;
 
     const finished = this.current;
@@ -572,13 +656,6 @@ export class GuildPlayer {
     const gen = ++this.playGeneration;
     const previous = this.lastStarted;
     this.lastError = null;
-    this.current = track;
-    this.djLine = null;
-    this.currentPrefetched = false;
-    this.firesGeneration += 1;
-    this.fireCount = 0;
-    this.firesTouched = false;
-    if (this.station) this.loadFireCount(track);
 
     try {
       this.logger.info(`Starting stream for: ${track.title} (${track.url})`);
@@ -586,8 +663,15 @@ export class GuildPlayer {
       // ready, so a long intro does not look like a slow download.
       // A break of a few minutes waits to open YouTube until just before it ends,
       // unless this song was already prefetched during the one before it.
+      // The opening jingle is the exception: the stream opens during it.
       const prefetched = this.prefetched?.url === track.url;
-      const longIntro = (this.station?.introWaitMs?.(track) ?? 0) >= LONG_INTRO_WAIT_MS;
+      const settled = !this.openingPending;
+      const earlyWait = introWaitAfterOpening(
+        settled,
+        settled ? this.station?.introWaitMs?.(track) : undefined,
+        INTRO_WAIT_MS,
+      );
+      const longIntro = (earlyWait ?? 0) >= LONG_INTRO_WAIT_MS;
       let streamStarted = Date.now();
       let prefetchedHit = false;
       let streamReadyMs = 0;
@@ -613,9 +697,32 @@ export class GuildPlayer {
         });
         return opening;
       };
-      // Short intros, and a song already in memory, open now. A long break does not.
-      if (!longIntro || prefetched) begin();
-      const intro = await this.stationIntro(track, previous);
+      const startedEarly = openSongStreamNow({
+        openingSettled: settled,
+        longIntro,
+        prefetched,
+      })
+        ? begin()
+        : null;
+      // Ask for the intro now, so Edge runs during the opening jingle.
+      const asked = this.beginIntro(track, previous);
+      if (earlyWait === null) await this.takeOpening();
+      if (this.destroyed || gen !== this.playGeneration) {
+        void startedEarly?.then(
+          (probed) => probed?.stream.destroy(),
+          () => {},
+        );
+        return false;
+      }
+      // `current` stays empty until the jingle is done, so a fast opener does not look busy.
+      this.current = track;
+      this.djLine = null;
+      this.currentPrefetched = false;
+      this.firesGeneration += 1;
+      this.fireCount = 0;
+      this.firesTouched = false;
+      if (this.station) this.loadFireCount(track);
+      const { intro, heard } = await asked.finish();
       const delayMs = streamOpenDelayMs(
         intro?.pcm?.length ? pcmSeconds(intro.pcm) : 0,
         prefetched || !longIntro,
@@ -670,6 +777,7 @@ export class GuildPlayer {
         `Audio player started: ${track.title} (stream ready in ${readySec} s${via}; ${this.queue.length} still queued)`,
       );
       this.lastStarted = track;
+      this.station?.songOnAir?.(track, heard);
       this.onTrackStart?.(track);
 
       // A DJ intro already brought this song's card down.
@@ -705,20 +813,34 @@ export class GuildPlayer {
       .catch((error: unknown) => this.logger.debug('Kitchen FM reactions:', error));
   }
 
-  /** The station's intro for `track`, if it is ready in time. A repeat gets none. */
-  private async stationIntro(track: Track, previous: Track | null): Promise<StationIntro | null> {
+  /** Ask for the intro now. The wait starts in `finish`, after the opening jingle. */
+  private beginIntro(
+    track: Track,
+    previous: Track | null,
+  ): { finish: () => Promise<{ intro: StationIntro | null; heard: HeardGreeting }> } {
     const station = this.station;
-    if (!station || track === previous) return null;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const waitMs = station.introWaitMs?.(track) ?? INTRO_WAIT_MS;
-    const started = Date.now();
+    if (!station || track === previous) {
+      return { finish: () => Promise.resolve({ intro: null, heard: 'none' }) };
+    }
     const pending = station.intro(track);
+    return { finish: () => this.finishIntro(station, track, pending) };
+  }
+
+  /** The station's intro, if it is ready in time. A late full greeting yields to the backup. */
+  private async finishIntro(
+    station: PlayerStation,
+    track: Track,
+    pending: Promise<StationIntro | null>,
+  ): Promise<{ intro: StationIntro | null; heard: HeardGreeting }> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waitMs =
+      introWaitAfterOpening(true, station.introWaitMs?.(track), INTRO_WAIT_MS) ?? INTRO_WAIT_MS;
+    const started = Date.now();
     const late = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), waitMs);
     });
     try {
       const intro = await Promise.race([pending, late]);
-      if (intro?.pcm?.length) return intro;
       // The wait ended with no clip. One may still finish after the song has started.
       if (!intro) {
         void pending.then(
@@ -732,12 +854,47 @@ export class GuildPlayer {
           () => {},
         );
       }
-      return intro;
+      const fallback = intro?.pcm?.length ? null : (station.fallbackIntro?.(track) ?? null);
+      return greetingToPlay(intro, fallback);
     } catch (error) {
       this.logger.debug('Station intro failed:', error);
-      return null;
+      return greetingToPlay(null, station.fallbackIntro?.(track) ?? null);
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /** The opening jingle's gate. Only the first song of a new show waits on it. */
+  private takeOpening(): Promise<void> {
+    const gate = this.openingGate;
+    this.openingGate = Promise.resolve();
+    return gate;
+  }
+
+  /**
+   * Play the opening jingle and wait for it to end. Skip and Stop cut it short,
+   * the same as the DJ. Idle here is not a song ending.
+   */
+  private async playOpeningClip(pcm: Buffer): Promise<void> {
+    this.clipHold += 1;
+    try {
+      const resource = createAudioResource(Readable.from([pcm], { objectMode: false }), {
+        inputType: StreamType.Raw,
+        inlineVolume: true,
+      });
+      if (this.destroyed) return;
+      resource.volume?.setVolume(this.volume);
+      this.introPlaying = true;
+      this.player.play(resource);
+      await entersState(this.player, AudioPlayerStatus.Idle, introPlayMs(pcm));
+    } catch (error) {
+      this.logger.warn('The DJ clip did not play through:', error);
+      if (this.introPlaying) this.player.stop(true);
+    } finally {
+      this.introPlaying = false;
+      setImmediate(() => {
+        this.clipHold = Math.max(0, this.clipHold - 1);
+      });
     }
   }
 
