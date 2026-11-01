@@ -37,6 +37,14 @@ import {
   type V2Display,
 } from '../src/core/display/v2';
 import { buildNowPlayingDisplay, buildQueueDisplay } from '../src/core/display/music';
+import { buildStatusDisplay } from '../src/core/display/status';
+import {
+  blankBotSample,
+  blankHostSample,
+  hostStatusRows,
+  type BotSample,
+  type HostSample,
+} from '../src/core/host-status';
 import {
   collectMessageTextContent,
   extractEpicTitles,
@@ -1306,6 +1314,74 @@ checkEmbedCard(
       'quiz:abc123:again',
     ],
   );
+}
+
+/* ---------- /status ---------- */
+
+{
+  const GB = 1024 ** 3;
+  const MB = 1024 ** 2;
+  const host: HostSample = {
+    cpuModel: 'Intel(R) Core(TM) i5-4278U',
+    cores: 4,
+    load: [0.42, 0.4, 0.38],
+    memTotalBytes: 8 * GB,
+    memAvailableBytes: 5.1 * GB,
+    diskFreeBytes: 41.2 * GB,
+    diskTotalBytes: 112 * GB,
+    hostUptimeSec: 12 * 86_400 + 4 * 3_600,
+    osName: 'Ubuntu 22.04.3 LTS',
+    libc: 'glibc 2.36',
+    containerLimitBytes: 512 * MB,
+    botUptimeSec: 2 * 3_600 + 10 * 60,
+    rssBytes: 182 * MB,
+    heapUsedBytes: 64 * MB,
+    nodeVersion: 'v22.14.0',
+  };
+  const bot: BotSample = {
+    pingMs: 42,
+    guildCount: 2,
+    voiceConnections: 1,
+    fmOnAir: ['Late Kitchen'],
+  };
+  checkEmbedCard(
+    'status-card',
+    () =>
+      buildStatusDisplay(
+        hostStatusRows(host, bot, [{ name: 'DJ voice', value: 'quiet between sets' }]),
+      ),
+    [
+      '🖥️ Mac mini',
+      'Intel(R) Core(TM) i5-4278U',
+      '4 cores',
+      '0.42 / 0.40 / 0.38',
+      '11% / 10% / 10% of the cores',
+      '8.0 GB total',
+      '2.9 GB used',
+      '5.1 GB available',
+      '41.2 GB free of 112.0 GB',
+      '12 d 4 h',
+      'Ubuntu 22.04.3 LTS',
+      'glibc 2.36',
+      '512 MB limit',
+      'RSS 182 MB',
+      'heap 64 MB',
+      'Node v22.14.0',
+      '42 ms',
+      '2 servers',
+      '1 connection',
+      'Late Kitchen',
+      'DJ voice',
+      'quiet between sets',
+    ],
+  );
+
+  const unknown = checkEmbedCard('status-unknown', () =>
+    buildStatusDisplay(hostStatusRows(blankHostSample(), blankBotSample())),
+  );
+  if (unknown.includes('Container') || unknown.includes('""')) {
+    fail('status-unknown-shape', 'a missing read drew a container line or an empty field');
+  } else ok('status-unknown-shape', 'missing reads are n/a, and no container line');
 }
 
 /* ---------- /help (Components V2) ---------- */

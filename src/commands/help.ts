@@ -31,7 +31,7 @@ const GROUPS: { title: string; names: string[]; note?: string }[] = [
   { title: '📻 Radio', names: ['radio'] },
   { title: '🎯 Steam wishlist', names: ['steam'] },
   { title: '🎧 Kitchen Quiz', names: ['quiz'] },
-  { title: '🍪 Kitchen & setup', names: ['setup'], note: 'Manage Server' },
+  { title: '🍪 Kitchen & setup', names: ['setup', 'status'], note: 'Manage Server' },
   { title: '🚪 Rooms', names: ['textroom', 'voiceroom'], note: 'Admin' },
   { title: '❓ Help', names: ['help'] },
 ];

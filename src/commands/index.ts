@@ -1,6 +1,7 @@
 import { Collection } from 'discord.js';
 import type { Command } from '../core/types';
 import { setup } from './admin/setup';
+import { status } from './admin/status';
 import { buildHelpCommand } from './help';
 import { textRoom, voiceRoom } from './rooms';
 import { quiz } from './quiz';
@@ -17,6 +18,7 @@ import { volume } from './music/volume';
 
 const commandList: Command[] = [
   setup,
+  status,
   textRoom,
   voiceRoom,
   radio,
