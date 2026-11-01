@@ -64,7 +64,7 @@ import {
   timelessOpener,
   type PreparedOpener,
 } from './opener';
-import { pcmLoudness, type DjVoice } from './voice';
+import { pcmLoudness, type DjSpeaker } from './voice';
 import type { DjWriter } from './writer';
 import {
   CRATE_SIZE,
@@ -203,7 +203,7 @@ export interface FmStationDeps {
   pool: () => Promise<FmSong[]>;
   source: CompositeTrackSource;
   writer: DjWriter;
-  voice: DjVoice;
+  voice: DjSpeaker;
   language: DjLanguage;
   /** New finds a set may hold, songs the kitchen never played. */
   discover: number;
@@ -217,7 +217,7 @@ export interface FmStationDeps {
   /** Seconds of break between rotation blocks. 0 keeps the usual block line. */
   breakSeconds?: number;
   /** Station IDs, promos, and outros. Separate from `voice`, so a miss does not rest the DJ. */
-  jingle?: DjVoice;
+  jingle?: DjSpeaker;
   /** Sung jingles. A missing file falls back to the chime and the Edge voice. */
   jingles?: JingleLibrary | null;
   /** Genre cache. Blocks start once it knows enough of this server's songs. */
@@ -242,7 +242,7 @@ export interface FmStationDeps {
   genreTracks?: (genre: GenreId) => Promise<DeezerTop[]>;
   /** The DJ's line book. Loaded for `language` when omitted. */
   lines?: LineBook | null;
-  /** Edge voice name the prepared opener was made with. */
+  /** `piper:<name>` or an Edge voice. A prepared opener voiced with another is dropped. */
   voiceName?: string;
   /**
    * First song of the next show, already found and voiced.

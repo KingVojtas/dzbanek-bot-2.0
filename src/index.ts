@@ -165,6 +165,7 @@ async function main(): Promise<void> {
   // Cron jobs plus the voice sessions. Shutdown exits after this; going idle does not.
   const release = () => {
     fm.stopBackgroundWork();
+    fm.stopVoice();
     for (const job of jobs) job.stop();
     radio.stopAll();
     music.stopAll();

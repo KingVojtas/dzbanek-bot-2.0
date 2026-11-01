@@ -13,7 +13,7 @@ import {
 } from '../src/fm/jingles';
 import type { GenreId, GenreIndex } from '../src/fm/genres';
 import type { RotationCursor } from '../src/fm/rotation';
-import type { DjVoice } from '../src/fm/voice';
+import type { DjSpeaker } from '../src/fm/voice';
 import { LINE_MOMENTS, LineBook, type LineFile, type Moment } from '../src/fm/lines';
 import { OPENER_MAX_AGE_MS, type PreparedOpener } from '../src/fm/opener';
 import { reactionSongKey, tallyReactions, toggleReaction } from '../src/fm/reactions';
@@ -102,7 +102,7 @@ function show(opts: {
   /** Break between blocks, in seconds. Omitted uses the default, 180. */
   breakSeconds?: number;
   /** Station IDs and promos. Omitted means those parts are left out. */
-  jingle?: DjVoice;
+  jingle?: DjSpeaker;
   /** Sung jingles. Omitted means the show has none. */
   jingles?: JingleLibrary | null;
   /** Clock start. The default is 18:00 in Prague on 2026-10-26. */
@@ -1325,7 +1325,7 @@ describe('FmStation genre rotation', () => {
       blockSongs: 5,
       breakSeconds: 8,
       speak: voice.speak,
-      jingle: voice as DjVoice,
+      jingle: voice as DjSpeaker,
       searchOne: async () => null,
     });
     await radio.play(5);

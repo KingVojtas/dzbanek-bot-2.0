@@ -25,7 +25,7 @@ const MAX_CLIP_BYTES = 2 * 1024 * 1024;
 const MISSES_BEFORE_REST = 3;
 const REST_MS = 10 * 60_000;
 /** Quieter than this is silence, not a voice, and counts as a miss. */
-const MIN_LOUDNESS_DB = -50;
+export const MIN_LOUDNESS_DB = -50;
 
 /** The text goes into SSML, so `&`, `<`, and `>` in a song title must not end it. */
 function escapeXml(text: string): string {
@@ -378,6 +378,17 @@ function openEdgeAttempt(voiceName: string, text: string): SynthesisAttempt {
   };
 }
 
+/**
+ * Something that can read a line aloud. Null is a text-only line.
+ * `ready` resolves once a speaker that starts in the background has settled.
+ */
+export interface DjSpeaker {
+  speak(text: string, budgetMs?: number): Promise<Buffer | null>;
+  ready?(): Promise<void>;
+  /** One line for a later status command. */
+  status?(): string;
+}
+
 /** Test seams. Production uses Edge, FFmpeg, and the real clock. */
 interface VoiceHooks {
   decode?: (mp3: Buffer) => Promise<Buffer>;
@@ -392,7 +403,7 @@ interface VoiceHooks {
  * changes this service now and then; a failure means a text-only line, never
  * a stopped show.
  */
-export class DjVoice {
+export class DjVoice implements DjSpeaker {
   private misses = 0;
   private restUntil = 0;
 

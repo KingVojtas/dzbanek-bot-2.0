@@ -2,6 +2,8 @@ import './env';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { logger } from '../core/logger';
+import { DEFAULT_PIPER_JINGLE_VOICE, DEFAULT_PIPER_VOICE, PIPER_VOICE_IDS } from '../fm/piper-pins';
 
 export interface Config {
   discord: {
@@ -56,6 +58,14 @@ export interface Config {
     breakSeconds: number;
     /** Edge voice for station IDs, promos, and outros. The DJ voice still reads the recap. */
     jingleVoice: string;
+    /** `piper` speaks on the host. `edge` keeps the read-aloud service as the only engine. */
+    engine: 'piper' | 'edge';
+    /** Pinned Piper voice for the DJ. Ignored for Czech, which has no pinned voice. */
+    piperVoice: string;
+    /** Pinned Piper voice for station IDs, promos, and outros. */
+    piperJingleVoice: string;
+    /** Piper `length_scale`. 1 is the voice's own pace. Lower is a little faster. */
+    piperLengthScale: number;
     /** Claude-planned sets a server gets per day. Past it the station plans its own. */
     setsPerServerPerDay: number;
     /** Claude-planned sets per day across every server, a ceiling on the API bill. */
@@ -96,6 +106,12 @@ function clampWhole(value: unknown, min: number, max: number, fallback: number):
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
+/** A number clamped to a range, or `fallback` when the value is missing. */
+function clampFloat(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
 /** A whole number from config, or null when it is missing or not a number. */
 function wholeAtLeastZero(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
@@ -118,8 +134,34 @@ function parseColor(value: unknown): number {
   return color;
 }
 
-function loadConfig(): Config {
-  const raw = loadRawConfig();
+function warnConfig(message: string): void {
+  logger.warn(message);
+}
+
+/** `piper` unless config names `edge`. Anything else is piper, with a warning. */
+function engineOf(value: unknown, warn: (message: string) => void): 'piper' | 'edge' {
+  if (value == null || value === '') return 'piper';
+  if (value === 'piper' || value === 'edge') return value;
+  warn(`Kitchen FM: dj.engine "${String(value)}" is not piper or edge; using piper.`);
+  return 'piper';
+}
+
+/** A pinned Piper voice, or `fallback` when the name is missing or not pinned. */
+function pinnedVoice(
+  value: unknown,
+  fallback: string,
+  field: string,
+  warn: (message: string) => void,
+): string {
+  const name = optionalString(value);
+  if (!name) return fallback;
+  if (PIPER_VOICE_IDS.has(name)) return name;
+  warn(`Kitchen FM: dj.${field} "${name}" is not a pinned Piper voice; using ${fallback}.`);
+  return fallback;
+}
+
+/** Read `config.json` into the settings the rest of the bot uses. */
+export function parseConfig(raw: Json, warn: (message: string) => void = warnConfig): Config {
   const discord = (raw.discord ?? {}) as Json;
   const music = (raw.music ?? {}) as Json;
   const steam = (raw.steam ?? {}) as Json;
@@ -175,11 +217,24 @@ function loadConfig(): Config {
           : 2,
       breakSeconds: clampWhole(dj.breakSeconds, 0, 300, 180),
       jingleVoice: optionalString(dj.jingleVoice) ?? JINGLE_VOICE,
+      engine: engineOf(dj.engine, warn),
+      piperVoice: pinnedVoice(dj.piperVoice, DEFAULT_PIPER_VOICE, 'piperVoice', warn),
+      piperJingleVoice: pinnedVoice(
+        dj.piperJingleVoice,
+        DEFAULT_PIPER_JINGLE_VOICE,
+        'piperJingleVoice',
+        warn,
+      ),
+      piperLengthScale: clampFloat(dj.piperLengthScale, 0.7, 1.3, 1),
       setsPerServerPerDay: wholeAtLeastZero(dj.setsPerServerPerDay) ?? 20,
       setsPerDay: wholeAtLeastZero(dj.setsPerDay) ?? 100,
     },
     embedColor: parseColor(raw.embedColor),
   };
+}
+
+function loadConfig(): Config {
+  return parseConfig(loadRawConfig());
 }
 
 function loadToken(): string {

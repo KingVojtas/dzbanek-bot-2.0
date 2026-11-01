@@ -25,7 +25,7 @@ import {
   type OpenerCheck,
   type PreparedOpener,
 } from '../src/fm/opener';
-import type { DjVoice } from '../src/fm/voice';
+import type { DjSpeaker } from '../src/fm/voice';
 import type { MusicManager } from '../src/music/MusicManager';
 import type { RadioCatchStore } from '../src/kitchen/catches';
 import type { SongReactionStore } from '../src/fm/reactions';
@@ -237,7 +237,7 @@ function harness(jingles: JingleLibrary | null = null) {
         speakWaiters.push(resolve);
       });
     },
-  } as unknown as DjVoice;
+  } as unknown as DjSpeaker;
   const logger = {
     debug() {},
     info(message: string, ...args: unknown[]) {

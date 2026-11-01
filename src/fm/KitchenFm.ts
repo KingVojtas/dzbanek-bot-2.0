@@ -26,8 +26,9 @@ import {
   type ReactionKind,
   type SongReactionStore,
 } from './reactions';
+import { djVoiceIdentity, openKitchenVoices, waitForReady } from './piper';
 import type { DjLanguage, FmSong } from './script';
-import { DjVoice } from './voice';
+import { DjVoice, type DjSpeaker } from './voice';
 import { DjWriter } from './writer';
 
 /** Fewer kitchen songs than this and the station would repeat itself at once. */
@@ -36,6 +37,11 @@ export const FM_MIN_SONGS = 3;
 const RECENT_PLAY_MS = 24 * 60 * 60 * 1000;
 /** Boot preparation waits so startup is not competing with it. */
 const BOOT_DELAY_MS = 30_000;
+/**
+ * How long boot preparation waits for Piper before voicing stored lines.
+ * A show that starts meanwhile speaks with Edge and does not wait.
+ */
+const BOOT_VOICE_WAIT_MS = 5 * 60_000;
 /** One server, then a short pause, so the YouTube and Deezer gates are not piled up. */
 const PREPARE_GAP_MS = 3_000;
 /** Openers prepared on boot. The rest wait until a show on that server ends. */
@@ -54,9 +60,9 @@ export interface KitchenFmOptions {
   now?: () => number;
   catalog?: FmCatalog;
   genres?: GenreIndex;
-  voice?: DjVoice;
+  voice?: DjSpeaker;
   /** Station IDs and promos. A miss here does not rest the DJ's voice. */
-  jingle?: DjVoice;
+  jingle?: DjSpeaker;
   /**
    * Sung jingles. Null skips them. Omitted reads `assets/fm/jingles`.
    * The file is joined when a clip is played, not when an opener is prepared.
@@ -114,8 +120,9 @@ export function playLogKind(
 export class KitchenFm {
   private readonly stations = new Map<string, FmStation>();
   private readonly writer: DjWriter;
-  private readonly voice: DjVoice;
-  private readonly jingle: DjVoice;
+  private readonly voice: DjSpeaker;
+  private readonly jingle: DjSpeaker;
+  private readonly stopVoiceEngine: () => void;
   private readonly jingles: JingleLibrary | null;
   private readonly genres: GenreIndex;
   private readonly catalog: FmCatalog;
@@ -156,11 +163,20 @@ export class KitchenFm {
       setsPerDay: config.dj.setsPerDay,
       timezone: config.timezone,
     });
-    this.voice = options.voice ?? new DjVoice(config.dj.voice, logger);
     this.voiceRetryMs = options.voiceRetryMs ?? OPENER_VOICE_RETRY_MS;
     this.armTimer = options.armTimer ?? realTimer;
-    this.jingle =
-      options.jingle ?? new DjVoice(config.dj.jingleVoice ?? 'en-GB-RyanNeural', logger);
+    if (options.voice) {
+      // A test (or a caller) brought its own speakers. Do not download Piper.
+      this.voice = options.voice;
+      this.jingle =
+        options.jingle ?? new DjVoice(config.dj.jingleVoice ?? 'en-GB-RyanNeural', logger);
+      this.stopVoiceEngine = () => {};
+    } else {
+      const voices = openKitchenVoices(config.dj, logger);
+      this.voice = voices.dj;
+      this.jingle = options.jingle ?? voices.jingle;
+      this.stopVoiceEngine = () => voices.stop();
+    }
     this.jingles =
       options.jingles !== undefined
         ? options.jingles
@@ -183,6 +199,19 @@ export class KitchenFm {
   /** The line book the DJ is speaking. Dedications use it for `{song}`. */
   get language(): DjLanguage {
     return this.config.dj.language;
+  }
+
+  /**
+   * Piper or Edge, whichever will speak the stored lines.
+   * Prepared openers and the backup greeting are dropped when this changes.
+   */
+  private voiceId(): string {
+    return djVoiceIdentity(this.config.dj);
+  }
+
+  /** Stop Piper's download and its hourly retry. Edge has nothing to stop. */
+  stopVoice(): void {
+    this.stopVoiceEngine();
   }
 
   /** English genre name for a song key, when the cache knows it. */
@@ -383,7 +412,7 @@ export class KitchenFm {
         writer: this.writer,
         voice: this.voice,
         language: this.config.dj.language,
-        voiceName: this.config.dj.voice,
+        voiceName: this.voiceId(),
         discover: this.config.dj.discover,
         blockSets: this.config.dj.blockSets,
         blockSongs: this.config.dj.blockSongs,
@@ -440,7 +469,7 @@ export class KitchenFm {
         audio,
         preparedAt: this.clock(),
         language: this.config.dj.language,
-        voice: this.config.dj.voice,
+        voice: this.voiceId(),
       };
       const previous = this.prepared.get(guild.id);
       this.prepared.set(guild.id, opener);
@@ -526,7 +555,7 @@ export class KitchenFm {
     return (
       clip.server !== guild.name ||
       clip.language !== this.config.dj.language ||
-      clip.voice !== this.config.dj.voice
+      clip.voice !== this.voiceId()
     );
   }
 
@@ -548,7 +577,7 @@ export class KitchenFm {
 
   private async voiceBackup(guild: { id: string; name: string }): Promise<void> {
     const language = this.config.dj.language;
-    const voice = this.config.dj.voice;
+    const voice = this.voiceId();
     const voiced = {
       text: backupGreeting({ language, server: guild.name }),
       language,
@@ -574,7 +603,7 @@ export class KitchenFm {
     voiced: { text: string; language: DjLanguage; voice: string; server: string },
   ): boolean {
     if (this.backgroundStopped) return false;
-    if (voiced.language !== this.config.dj.language || voiced.voice !== this.config.dj.voice) {
+    if (voiced.language !== this.config.dj.language || voiced.voice !== this.voiceId()) {
       return false;
     }
     if (voiced.server !== guild.name) return false;
@@ -679,6 +708,9 @@ export class KitchenFm {
   }
 
   private async prepareAtBoot(guilds: () => Iterable<{ id: string; name: string }>): Promise<void> {
+    // The first stored lines should be Piper's when the install finishes in time.
+    await waitForReady(this.voice, BOOT_VOICE_WAIT_MS);
+    if (this.backgroundStopped) return;
     let started = 0;
     let gap = false;
     for (const guild of guilds()) {

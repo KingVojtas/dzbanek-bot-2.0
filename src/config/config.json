@@ -39,6 +39,10 @@
     "blockSets": 2,
     "breakSeconds": 180,
     "jingleVoice": "en-GB-RyanNeural",
+    "engine": "piper",
+    "piperVoice": "en_US-ryan-high",
+    "piperJingleVoice": "en_GB-alan-medium",
+    "piperLengthScale": 1,
     "setsPerServerPerDay": 20,
     "setsPerDay": 100
   },
