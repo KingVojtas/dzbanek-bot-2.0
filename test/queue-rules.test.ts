@@ -5,9 +5,13 @@ import {
   EARLY_BY_SEC,
   HISTORY_MAX,
   INSTANT_END_MS,
+  STATION_MISSES,
   afterTrackEnds,
   earlyEndWarning,
+  idleOutcome,
   pushHistory,
+  shouldAskStation,
+  stationPickStale,
   takeNext,
   type EarlyEnd,
   type TrackEnd,
@@ -153,5 +157,57 @@ describe('takeNext', () => {
 
   it('returns nothing on loop-queue with no snapshot', () => {
     assert.equal(takeNext([], 'queue', []), undefined);
+  });
+});
+
+describe('shouldAskStation', () => {
+  it('asks only while the queue is empty and misses are under the cap', () => {
+    assert.equal(shouldAskStation(undefined, 0), true);
+    assert.equal(shouldAskStation(undefined, STATION_MISSES - 1), true);
+    assert.equal(shouldAskStation(undefined, STATION_MISSES), false);
+    assert.equal(shouldAskStation(track('a'), 0), false);
+  });
+});
+
+describe('stationPickStale', () => {
+  it('looks again when the station changed or a request arrived', () => {
+    assert.equal(stationPickStale(true, 0), false);
+    assert.equal(stationPickStale(true, 1), true);
+    assert.equal(stationPickStale(false, 0), true);
+  });
+});
+
+describe('idleOutcome', () => {
+  it('retries with the fresh-stream warning', () => {
+    assert.deepEqual(idleOutcome('retry', 'Lavazza'), {
+      kind: 'retry',
+      warn: 'Track "Lavazza" ended immediately — retrying with a fresh stream.',
+    });
+  });
+
+  it('gives up with the skip warning and the error the card keeps', () => {
+    assert.deepEqual(idleOutcome('give-up', 'Lavazza'), {
+      kind: 'give-up',
+      warn: 'Track "Lavazza" ended immediately again — skipping it.',
+      error: '"Lavazza" ended immediately twice.',
+    });
+  });
+
+  it('puts a looped track back and sends a finished one to history', () => {
+    assert.deepEqual(idleOutcome('requeue', 'Lavazza'), {
+      kind: 'continue',
+      requeue: true,
+      history: false,
+    });
+    assert.deepEqual(idleOutcome('history', 'Lavazza'), {
+      kind: 'continue',
+      requeue: false,
+      history: true,
+    });
+    assert.deepEqual(idleOutcome('none', 'Lavazza'), {
+      kind: 'continue',
+      requeue: false,
+      history: false,
+    });
   });
 });

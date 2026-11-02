@@ -90,3 +90,13 @@ export function firstSongGreeting(facts: {
   if (facts.heard === 'none') return 'none';
   return facts.preparedClip ? 'prepared' : 'fresh';
 }
+
+/** The opening clip missed its deadline. */
+export function openingLateLine(server: string): string {
+  return `Kitchen FM in ${server}: opening jingle skipped, not ready in time.`;
+}
+
+/** The opening clip started. `seconds` is already formatted. */
+export function openingPlayedLine(server: string, stem: string, seconds: string): string {
+  return `Kitchen FM in ${server}: opening jingle ${stem} (${seconds} s).`;
+}

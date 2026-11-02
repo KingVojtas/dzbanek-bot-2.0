@@ -31,23 +31,46 @@ import {
   idleEndsTrack,
   introWaitAfterOpening,
   openSongStreamNow,
+  openingLateLine,
   openingPlay,
+  openingPlayedLine,
 } from './opening-rules';
-import { afterTrackEnds, earlyEndWarning, pushHistory, takeNext } from './queue-rules';
+import {
+  INTRO_WAIT_MS,
+  introIsLong,
+  lateVoiceLine,
+  playSuperseded,
+  showIntroCard,
+  stationSpeaks,
+  streamStartedLine,
+} from './playback-rules';
+import {
+  PREFETCH_BYTES,
+  dropPrefetchOnStationChange,
+  hasPreloadedAudio,
+  prefetchedStreamReady,
+  prefetchIsStale,
+  queuedPrefetchKeep,
+  stationPrefetchBlocked,
+  stationPrefetchKeep,
+  stationWarmsAhead,
+  upcomingHeld,
+} from './prefetch-rules';
+import {
+  afterTrackEnds,
+  earlyEndWarning,
+  idleOutcome,
+  pushHistory,
+  shouldAskStation,
+  stationPickStale,
+  takeNext,
+} from './queue-rules';
 
 const VOLUME_MIN = 0.25;
 const VOLUME_MAX = 1.5;
 const VOLUME_STEP = 0.25;
 /** Discord allows about 5 edits per 5 s per channel; leave room for buttons and the board. */
 const PROGRESS_TICK_MS = 5_000;
-/** The next intro is written during the song before; an unprepared one gets this long. */
-const INTRO_WAIT_MS = 12_000;
-/** A break asks the player to wait this long for its clip to be ready. */
-const LONG_INTRO_WAIT_MS = 60_000;
-/** Station picks that fail in a row before the show stops trying (YouTube is down). */
-const STATION_MISSES = 3;
-/** Whole song, so yt-dlp exits and closes YouTube. Songs are 3–8 MB; a 12-minute cap stays under 16 MB. */
-const PREFETCH_BYTES = 16 * 1024 * 1024;
 
 /**
  * Owns the voice connection, audio player, and queue for a single guild.
@@ -197,7 +220,8 @@ export class GuildPlayer {
     this.station = station;
     // A station pick is no longer next. A queued request's prefetch stays.
     const queuedNext = this.queue.find((track) => track !== this.current);
-    if (!queuedNext || this.prefetched?.url !== queuedNext.url) this.invalidatePrefetch();
+    if (dropPrefetchOnStationChange(queuedNext?.url, this.prefetched?.url))
+      this.invalidatePrefetch();
     if (!station) return;
     this.clearIdleTimer();
     // The song already on counts as just played, before the first set is planned.
@@ -236,7 +260,7 @@ export class GuildPlayer {
     const timer = setTimeout(() => {
       if (settled) return;
       if (!this.destroyed) {
-        this.logger.info(`Kitchen FM in ${server}: opening jingle skipped, not ready in time.`);
+        this.logger.info(openingLateLine(server));
       }
       finish();
     }, OPENING_READY_MS);
@@ -252,14 +276,14 @@ export class GuildPlayer {
           hasPcm: Boolean(jingle?.pcm.length),
         });
         if (decision === 'late') {
-          this.logger.info(`Kitchen FM in ${server}: opening jingle skipped, not ready in time.`);
+          this.logger.info(openingLateLine(server));
         }
         if (decision !== 'play' || !jingle) {
           finish();
           return;
         }
         const seconds = pcmSeconds(jingle.pcm).toFixed(1);
-        this.logger.info(`Kitchen FM in ${server}: opening jingle ${jingle.stem} (${seconds} s).`);
+        this.logger.info(openingPlayedLine(server, jingle.stem, seconds));
         void this.playOpeningClip(jingle.pcm).then(finish, finish);
       },
       () => {
@@ -580,24 +604,23 @@ export class GuildPlayer {
     const early = earlyEndWarning({ ...end, prefetched: this.currentPrefetched, stopped: false });
     if (early) this.logger.warn(early);
     const next = afterTrackEnds(end);
+    const plan = idleOutcome(next, finished?.title ?? '');
 
-    if (finished && next === 'retry') {
+    if (finished && plan.kind === 'retry') {
       this.retriedUrl = finished.url;
       this.invalidatePrefetch();
       this.currentResource = null;
       this.queue.unshift(finished);
       this.current = null;
-      this.logger.warn(
-        `Track "${finished.title}" ended immediately — retrying with a fresh stream.`,
-      );
+      this.logger.warn(plan.warn);
       void this.processQueue();
       return;
     }
 
-    if (finished && next === 'give-up') {
+    if (finished && plan.kind === 'give-up') {
       // Second instant end in a row: the stream is broken, so move on instead of looping.
-      this.lastError = `"${finished.title}" ended immediately twice.`;
-      this.logger.warn(`Track "${finished.title}" ended immediately again — skipping it.`);
+      this.lastError = plan.error;
+      this.logger.warn(plan.warn);
       this.retriedUrl = null;
       this.current = null;
       this.currentResource = null;
@@ -610,8 +633,9 @@ export class GuildPlayer {
     this.current = null;
     this.currentResource = null;
 
-    if (finished && next === 'requeue') this.queue.unshift(finished);
-    else if (finished && next === 'history') pushHistory(this.history, finished);
+    if (finished && plan.kind === 'continue' && plan.requeue) this.queue.unshift(finished);
+    else if (finished && plan.kind === 'continue' && plan.history)
+      pushHistory(this.history, finished);
     this.skipRequested = false;
     this.goingBack = false;
 
@@ -629,10 +653,10 @@ export class GuildPlayer {
         let next = takeNext(this.queue, this.loopMode, this.queueSnapshot);
         let picked = false;
         const station = this.station;
-        if (!next && station && stationMisses < STATION_MISSES) {
+        if (station && shouldAskStation(next, stationMisses)) {
           const pick = await station.upNext();
           // Taken off air meanwhile, or a request arrived while the station picked: look again.
-          if (this.station !== station || this.queue.length > 0) continue;
+          if (stationPickStale(this.station === station, this.queue.length)) continue;
           next = pick ?? undefined;
           picked = pick !== null;
         }
@@ -671,7 +695,7 @@ export class GuildPlayer {
         settled ? this.station?.introWaitMs?.(track) : undefined,
         INTRO_WAIT_MS,
       );
-      const longIntro = (earlyWait ?? 0) >= LONG_INTRO_WAIT_MS;
+      const longIntro = introIsLong(earlyWait);
       let streamStarted = Date.now();
       let prefetchedHit = false;
       let streamReadyMs = 0;
@@ -686,7 +710,7 @@ export class GuildPlayer {
           prefetchedHit = opened.prefetched;
           const probed = await probeStream(opened.stream);
           streamReadyMs = Date.now() - streamStarted;
-          if (this.destroyed || gen !== this.playGeneration) {
+          if (playSuperseded(this.destroyed, gen === this.playGeneration)) {
             probed.stream.destroy();
             return null;
           }
@@ -707,7 +731,7 @@ export class GuildPlayer {
       // Ask for the intro now, so Edge runs during the opening jingle.
       const asked = this.beginIntro(track, previous);
       if (earlyWait === null) await this.takeOpening();
-      if (this.destroyed || gen !== this.playGeneration) {
+      if (playSuperseded(this.destroyed, gen === this.playGeneration)) {
         void startedEarly?.then(
           (probed) => probed?.stream.destroy(),
           () => {},
@@ -729,7 +753,7 @@ export class GuildPlayer {
       );
       if (delayMs === 0) begin();
       // A song that already failed keeps its dedication for the next one (`missed` below).
-      if (intro && !streamFailed) {
+      if (showIntroCard(intro, streamFailed)) {
         this.djLine = intro.text;
         if (!this.destroyed) void this.publishFreshNowPlaying(track).catch(() => {});
         if (intro.pcm) {
@@ -749,7 +773,7 @@ export class GuildPlayer {
       }
       // Skip during the intro cuts it short. Open the song now if it is not open yet.
       const pending = begin();
-      if (this.destroyed || gen !== this.playGeneration) {
+      if (playSuperseded(this.destroyed, gen === this.playGeneration)) {
         void pending.then(
           (probed) => probed?.stream.destroy(),
           () => {},
@@ -758,7 +782,8 @@ export class GuildPlayer {
       }
       const probed = await pending;
       if (!probed) {
-        if (!this.destroyed && gen === this.playGeneration) this.station?.missed?.(track);
+        if (!playSuperseded(this.destroyed, gen === this.playGeneration))
+          this.station?.missed?.(track);
         return false;
       }
 
@@ -772,9 +797,13 @@ export class GuildPlayer {
       this.currentPrefetched = prefetchedHit;
       this.player.play(resource);
       const readySec = (streamReadyMs / 1000).toFixed(1);
-      const via = prefetchedHit ? ', prefetched' : '';
       this.logger.info(
-        `Audio player started: ${track.title} (stream ready in ${readySec} s${via}; ${this.queue.length} still queued)`,
+        streamStartedLine({
+          title: track.title,
+          readySec,
+          prefetched: prefetchedHit,
+          queued: this.queue.length,
+        }),
       );
       this.lastStarted = track;
       this.station?.songOnAir?.(track, heard);
@@ -790,7 +819,8 @@ export class GuildPlayer {
       this.warmStation(track);
       return true;
     } catch (error) {
-      if (!this.destroyed && gen === this.playGeneration) this.station?.missed?.(track);
+      if (!playSuperseded(this.destroyed, gen === this.playGeneration))
+        this.station?.missed?.(track);
       const lastMsg = error instanceof Error ? error.message : String(error);
       this.lastError = lastMsg;
       this.current = null;
@@ -819,7 +849,7 @@ export class GuildPlayer {
     previous: Track | null,
   ): { finish: () => Promise<{ intro: StationIntro | null; heard: HeardGreeting }> } {
     const station = this.station;
-    if (!station || track === previous) {
+    if (!stationSpeaks(station, track === previous)) {
       return { finish: () => Promise.resolve({ intro: null, heard: 'none' }) };
     }
     const pending = station.intro(track);
@@ -847,9 +877,7 @@ export class GuildPlayer {
           (ready) => {
             if (!ready?.pcm?.length) return;
             const seconds = ((Date.now() - started) / 1000).toFixed(1);
-            this.logger.info(
-              `Kitchen FM voice: ready after the player stopped waiting (${seconds} s)`,
-            );
+            this.logger.info(lateVoiceLine(seconds));
           },
           () => {},
         );
@@ -905,7 +933,7 @@ export class GuildPlayer {
         inputType: StreamType.Raw,
         inlineVolume: true,
       });
-      if (this.destroyed || gen !== this.playGeneration) return;
+      if (playSuperseded(this.destroyed, gen === this.playGeneration)) return;
       resource.volume?.setVolume(this.volume);
       this.introPlaying = true;
       this.player.play(resource);
@@ -926,11 +954,11 @@ export class GuildPlayer {
    */
   private warmStation(current: Track): void {
     const station = this.station;
-    if (!station || this.loopMode !== 'off') return;
+    if (!station || !stationWarmsAhead(this.loopMode)) return;
     const queued = this.queue.find((track) => track !== current);
     void (queued ? Promise.resolve(queued) : station.upNext())
       .then((upcoming) => {
-        if (!upcoming || this.station !== station || this.loopMode !== 'off') return null;
+        if (!upcoming || !upcomingHeld(this.station === station, this.loopMode)) return null;
         const next = this.queue.find((track) => track !== this.current);
         if (!next) this.prefetchStation(station, upcoming);
         return station.intro(upcoming);
@@ -953,14 +981,18 @@ export class GuildPlayer {
       slot.taken = true;
       this.prefetched = null;
       await slot.ready;
+      const warmed = slot.stream;
       if (
-        !slot.drop &&
-        slot.stream &&
-        this.streamUsable(slot.stream) &&
-        !this.destroyed &&
-        gen === this.playGeneration
+        warmed &&
+        prefetchedStreamReady({
+          drop: slot.drop,
+          hasStream: true,
+          usable: this.streamUsable(warmed),
+          destroyed: this.destroyed,
+          sameGeneration: gen === this.playGeneration,
+        })
       ) {
-        return { stream: slot.stream, prefetched: true };
+        return { stream: warmed, prefetched: true };
       }
       try {
         slot.stream?.destroy();
@@ -971,12 +1003,12 @@ export class GuildPlayer {
 
     // The show's prepared opener arrives with its audio already downloaded.
     const preloaded = this.station?.preloadedAudio?.(track);
-    if (preloaded?.length) {
+    if (hasPreloadedAudio(preloaded)) {
       return { stream: Readable.from([preloaded], { objectMode: false }), prefetched: true };
     }
 
     const fresh = await this.source.stream(track);
-    if (this.destroyed || gen !== this.playGeneration) {
+    if (playSuperseded(this.destroyed, gen === this.playGeneration)) {
       fresh.destroy();
       return null;
     }
@@ -1018,10 +1050,13 @@ export class GuildPlayer {
       .then((raw) => {
         // A request that landed in the queue, or a new prefetch, wins over this one.
         // A taken slot belongs to playTrack, which checks its own generation.
-        const stale =
-          slot.drop ||
-          this.destroyed ||
-          (!slot.taken && (gen !== this.playGeneration || !keep(url)));
+        const stale = prefetchIsStale({
+          drop: slot.drop,
+          destroyed: this.destroyed,
+          taken: slot.taken,
+          sameGeneration: gen === this.playGeneration,
+          keep: () => keep(url),
+        });
         if (stale) {
           raw.destroy();
           if (this.prefetched === slot) this.prefetched = null;
@@ -1041,7 +1076,7 @@ export class GuildPlayer {
     if (!next || this.destroyed) return;
     this.prefetchTrack(next, (url) => {
       const queued = this.queue.find((track) => track !== this.current);
-      return queued?.url === url;
+      return queuedPrefetchKeep(queued?.url, url);
     });
   }
 
@@ -1050,13 +1085,25 @@ export class GuildPlayer {
    * different song now at the front, is left alone.
    */
   private prefetchStation(station: PlayerStation, upcoming: Track): void {
-    if (this.destroyed || this.station !== station || this.loopMode !== 'off') return;
-    if (this.queue.find((track) => track !== this.current)) return;
+    if (
+      stationPrefetchBlocked({
+        destroyed: this.destroyed,
+        sameStation: this.station === station,
+        loopMode: this.loopMode,
+        requestWaiting: this.queue.some((track) => track !== this.current),
+      })
+    ) {
+      return;
+    }
     this.prefetchTrack(upcoming, (url) => {
       const queued = this.queue.find((track) => track !== this.current);
-      if (queued) return queued.url === url;
-      if (this.station !== station || this.loopMode !== 'off') return false;
-      return station.queued()?.url === url;
+      if (queued) return queuedPrefetchKeep(queued.url, url);
+      return stationPrefetchKeep({
+        sameStation: this.station === station,
+        loopMode: this.loopMode,
+        stationUrl: station.queued()?.url,
+        url,
+      });
     });
   }
 

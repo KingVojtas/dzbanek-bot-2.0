@@ -87,3 +87,43 @@ export function takeNext(queue: Track[], loopMode: LoopMode, snapshot: Track[]):
   queue.push(...snapshot);
   return queue.shift();
 }
+
+/** Station picks that fail in a row before the show stops trying (YouTube is down). */
+export const STATION_MISSES = 3;
+
+/** The queue is empty and the station is still allowed to offer a song. */
+export function shouldAskStation(next: Track | undefined, misses: number): boolean {
+  return next === undefined && misses < STATION_MISSES;
+}
+
+/** Taken off air meanwhile, or a request arrived while the station was picking. */
+export function stationPickStale(sameStation: boolean, queued: number): boolean {
+  return !sameStation || queued > 0;
+}
+
+/**
+ * What Idle does once `afterTrackEnds` has classified the track.
+ * The warn lines are the ones the player logs.
+ */
+export function idleOutcome(
+  next: AfterTrackEnds,
+  title: string,
+):
+  | { kind: 'retry'; warn: string }
+  | { kind: 'give-up'; warn: string; error: string }
+  | { kind: 'continue'; requeue: boolean; history: boolean } {
+  if (next === 'retry') {
+    return {
+      kind: 'retry',
+      warn: `Track "${title}" ended immediately — retrying with a fresh stream.`,
+    };
+  }
+  if (next === 'give-up') {
+    return {
+      kind: 'give-up',
+      warn: `Track "${title}" ended immediately again — skipping it.`,
+      error: `"${title}" ended immediately twice.`,
+    };
+  }
+  return { kind: 'continue', requeue: next === 'requeue', history: next === 'history' };
+}

@@ -8,54 +8,12 @@ import { getStation } from '../radio/station';
 import { songFromTrack } from '../quiz/songs';
 import type { AiredSong } from '../quiz/stores';
 import type { DeezerTop, FmCatalog } from './catalog';
-import { pcmSeconds } from '../music/intro-wait';
-import {
-  BREAK_SPEAK_MS,
-  BREAK_TAIL_SEC,
-  applyBedAsync,
-  breakTailReserve,
-  emptyBreak,
-  joinBreak,
-  renderBreakHead,
-  renderBreakTail,
-  type BreakClip,
-  type BreakFiles,
-  type BreakUsed,
-  type BreakVoices,
-} from './break-show';
-import { loadBreakBook, type BreakBook } from './breaks';
-import {
-  DedicationQueue,
-  dedicationText,
-  joinClips,
-  joinIntro,
-  type WaitingDedication,
-} from './dedications';
-import {
-  GENRE_JINGLE_RESERVE_SEC,
-  JINGLE_GAP_MS,
-  JingleLibrary,
-  genreJingle,
-  namedJingle,
-  openingJingle,
-  pickJingle,
-  playNewFindJingle,
-  type JingleFile,
-} from './jingles';
+import { DedicationQueue, dedicationText, type WaitingDedication } from './dedications';
+import { JingleLibrary, openingJingle, type JingleFile } from './jingles';
 import type { GenreId, GenreIndex } from './genres';
-import { artistKey, genreName } from './genres';
+import { genreName } from './genres';
 import { rotationAfter, GENRE_ROTATION, type RotationCursor } from './rotation';
-import {
-  joinNames,
-  lineDaypart,
-  lineTime,
-  loadLineBook,
-  momentsFor,
-  songPhrase,
-  type LineBook,
-  type LineSlots,
-  type Moment,
-} from './lines';
+import type { LineBook } from './lines';
 import {
   openerDropReason,
   openerIsBlocked,
@@ -73,12 +31,10 @@ import {
   isSameSong,
   plainTitle,
   pickSong,
-  prepareBlocked,
   relativeDay,
   sampleCrate,
   sidelined,
   songFits,
-  templateOpener,
   themeName,
   themedSet,
   type BlockedSongs,
@@ -88,14 +44,17 @@ import {
   type PlannedSong,
   type Theme,
 } from './script';
+import { StationAired } from './station-aired';
+import { StationIntros } from './station-intros';
+import { blockSongCount, breakLength, StationBreaks } from './station-breaks';
+import { NEW_FIND, StationDiscover } from './station-discover';
+import type { FmSet, SetBase } from './station-types';
 import {
   blockProfile,
   findAllowance,
   genreSongs,
   kitchenSlots,
   nextGenre,
-  pickDiscoverTrack,
-  seedArtistIds,
   tasteProfile,
 } from './taste';
 
@@ -112,87 +71,15 @@ const OPENER_WAIT_MS = 8_000;
 const DEDICATION_WAIT_MS = 25_000;
 /** A between-blocks break is built ahead. The player still waits this long for it. */
 const BREAK_WAIT_MS = 60_000;
-/** Once the player is waiting, a break whose tail is still missing goes out with its head. */
-const BREAK_DEADLINE_MS = 45_000;
-/** Related-artist and top-track calls one mixed set may spend on Deezer. */
-const DISCOVER_DEEZER_CALLS = 8;
-/** YouTube searches one mixed set may spend looking for a new find. */
-const DISCOVER_YOUTUBE_CALLS = 4;
-/** YouTube searches a find pass may have in flight at once. */
-const SEARCH_AT_ONCE = 3;
-/** Missed find queries kept per server. The oldest drop off once this fills. */
-const DEAD_CAP = 500;
 /** Fewer unaired kitchen songs than this: one set of them, then sets of new finds. */
 const SMALL_KITCHEN = 10;
 /** What Claude hears of this show: its last vibes and songs. */
 const VIBES_SHOWN = 6;
-const PLAYED_SHOWN = 30;
-/** Shown under "Brought in by" for a song nobody in the kitchen brought. */
-const NEW_FIND = '🎙️ Kitchen FM · new find';
-
-/** `played` stores "Artist – Title". Split it back so a find is not that song again. */
-function splitPlayed(label: string): { artist: string; title: string } {
-  const parts = label.split(/\s+[–—-]\s+/);
-  if (parts.length >= 2 && parts[0] && parts.slice(1).join(' - ')) {
-    return { artist: parts[0], title: parts.slice(1).join(' - ') };
-  }
-  return { artist: '', title: label };
-}
-
-/** A find search running beside the others. `reserved` fires once that pick is taken. */
-interface SearchJob {
-  reserved: Promise<void>;
-  result: Promise<{ pick: { artist: string; title: string }; hit: Track } | null>;
-}
-
-function shuffleItems<T>(items: readonly T[]): T[] {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const swap = copy[i]!;
-    copy[i] = copy[j]!;
-    copy[j] = swap;
-  }
-  return copy;
-}
 
 /** A pool song is this track: by its link, or by its title when the song has none. */
 function playedMatches(song: FmSong, track: Track): boolean {
   if (song.url) return song.url === track.url;
   return song.key === songFromTrack(track, { kind: 'play' }).key;
-}
-
-/** Keys, links, and the latest play of everything `aired()` returned for one set. */
-interface AiredMemory {
-  keys: Set<string>;
-  urls: Set<string>;
-  lastByKey: Map<string, number>;
-  lastByUrl: Map<string, number>;
-  rows: readonly AiredSong[];
-}
-
-function emptyAired(): AiredMemory {
-  return { keys: new Set(), urls: new Set(), lastByKey: new Map(), lastByUrl: new Map(), rows: [] };
-}
-
-/** The latest `playedAt` wins when the same song aired more than once. */
-function indexAired(rows: readonly AiredSong[]): AiredMemory {
-  const memory = emptyAired();
-  memory.rows = rows;
-  for (const row of rows) {
-    const at = row.playedAt.getTime();
-    if (row.songKey) {
-      memory.keys.add(row.songKey);
-      const prev = memory.lastByKey.get(row.songKey);
-      if (prev === undefined || at > prev) memory.lastByKey.set(row.songKey, at);
-    }
-    if (row.url) {
-      memory.urls.add(row.url);
-      const prev = memory.lastByUrl.get(row.url);
-      if (prev === undefined || at > prev) memory.lastByUrl.set(row.url, at);
-    }
-  }
-  return memory;
 }
 
 export interface FmStationDeps {
@@ -262,37 +149,6 @@ export interface FmStationDeps {
   logger: Logger;
 }
 
-/** A few songs that share a vibe. The DJ talks before the first one only. */
-interface FmSet {
-  vibe: string;
-  line: string;
-  tracks: Track[];
-  /** The next of `tracks` to hand out. */
-  next: number;
-  plannedAt: number;
-  /** The show's first set. Its clip is synthesized before anything is playing. */
-  opener?: boolean;
-  /** First set of a rotation block. The break or the opener already played. */
-  blockStart?: boolean;
-  /** Set when the set belongs to a rotation block. */
-  rotationGenre?: GenreId | null;
-  /** Still loading later songs. `peek` waits for those instead of planning another set. */
-  filling?: Promise<void> | null;
-  /** Wakes a `peek` that ran out of loaded songs while `filling` is set. */
-  wake?: (() => void) | null;
-  /** PCM prepared before the show. Absent means synthesize `line` when it is asked for. */
-  preparedClip?: Buffer;
-  /** The break before this set. Only the first song of a later rotation block has one. */
-  breakClip?: Promise<StationIntro | null>;
-  /**
-   * Starts the break's own deadline. Called when the player starts waiting for
-   * it, not when it is planned: the song before still has minutes to run then.
-   */
-  breakDue?: () => void;
-}
-
-type SetBase = { hour: number; minute: number; set: number; newcomers: string[] };
-
 /** `mem://id-main.mp3` → `id-main`. The opening log names the file this way. */
 function jingleStem(file: JingleFile): string {
   const base = file.file.replace(/\\/g, '/').split('/').pop() ?? file.file;
@@ -318,27 +174,20 @@ export class FmStation implements PlayerStation {
   private readonly songKeys = new WeakMap<Track, string>();
   /** The DJ already read this track's intro, so a failed start does not repeat it. */
   private readonly spoken = new WeakSet<Track>();
-  /** Set lines in flight or ready. A clip that came back empty is dropped. */
-  private readonly intros = new WeakMap<FmSet, Promise<StationIntro | null>>();
   private readonly dedications = new DedicationQueue();
   /** Handed over in `starting`, so an early `intro` cannot spend it. */
   private readonly dedicationOf = new WeakMap<Track, WaitingDedication>();
-  /** Dedication clips in flight or ready. A clip that came back empty is dropped. */
-  private readonly dedicationClips = new WeakMap<WaitingDedication, Promise<Buffer | null>>();
-  /** Joined intro. Dropped when a part that should have audio came back empty. */
-  private readonly combined = new WeakMap<Track, Promise<StationIntro | null>>();
+  /** Set lines, dedications, and the new-find jingle. */
+  private readonly intros: StationIntros;
   private lastTheme: Theme['kind'] | undefined;
   /** Who was listening when the current set started. */
   private wasListening = new Set<string>();
   /** Requests, and the song already on when the station started. Pushed into `recent` at plan time. */
   private readonly justPlayed: Track[] = [];
-  /** Keys and URLs this show has already planned. Uncapped, so nothing is planned twice. */
-  private readonly plannedKeys = new Set<string>();
-  private readonly plannedUrls = new Set<string>();
-  /** Find queries this show noted, when the server did not hand in a shared list. */
-  private readonly ownDead: { artist: string; title: string }[] = [];
-  /** Picks a search has taken, so a parallel search does not ask for the same song. */
-  private readonly reservedFinds: { artist: string; title: string }[] = [];
+  /** What already aired, and what this show has planned, so a song is not picked twice. */
+  private readonly aired: StationAired;
+  /** Related artists, playlists, and the YouTube searches for a new find. */
+  private readonly finds: StationDiscover;
   /** The opener prepared before this show. Cleared once it is used or dropped. */
   private prepared: PreparedOpener | null = null;
   /** Line and clip for the prepared song, applied when that song publishes the set. */
@@ -376,55 +225,86 @@ export class FmStation implements PlayerStation {
     /** No more sets. The next plan starts the following genre. */
     closed: boolean;
   } | null = null;
-  /** Steps 1–3 of the break after this block. Started once the block's songs are known. */
-  private breakHead: Promise<BreakClip> | null = null;
-  /** Promos and station IDs already said this show. */
-  private readonly breakUsed: BreakUsed = { ids: new Set(), promos: new Set() };
+  /** The break between rotation blocks, and jingle files already played this show. */
+  private readonly breaks: StationBreaks;
   /** Jingle files already played this show, so the next pick is a different one. */
-  private readonly jingleUsed = {
-    ids: new Set<string>(),
-    sweepers: new Set<string>(),
-    beds: new Set<string>(),
-  };
+  private get jingleUsed() {
+    return this.breaks.jingleUsed;
+  }
   /** The backup greeting already stood in for this show's first song. */
   private usedFallback = false;
   /** When the show went on air, for the first-song log. Null until then. */
   private onAirAt: number | null = null;
   /** The first song of the opener set has been logged. */
   private announcedFirst = false;
-  /** The rotation block that already played its new-find jingle. */
-  private newFindJingleGenre: GenreId | null = null;
-  private breakBookCache: BreakBook | null | undefined;
   /**
    * A thin genre is being filled to five songs while preparing an opener.
    * The one-song cap stays off until that fill decides the genre is playable.
    */
   private rotationScan = false;
-  /** Related artists, one Deezer fetch per artist for the whole show. */
-  private readonly relatedCache = new Map<number, { id: number; name: string }[]>();
-  /** Top tracks, one Deezer fetch per artist for the whole show. */
-  private readonly topCache = new Map<
-    number,
-    { title: string; artist: string; durationSec: number }[]
-  >();
-  /** Artists whose top list has nothing left to pick this show. */
-  private readonly exhaustedArtists = new Set<number>();
-  /** What `aired()` returned for the set being planned. */
-  private airedNow: AiredMemory = emptyAired();
   private ended = false;
   /** The genre block on air: how many sets it should hold, and how many are planned. */
   private block: { genre: GenreId; sets: number; limit: number } | null = null;
   private readonly blockHistory: GenreId[] = [];
-  /** Line indexes already said this show, so a line is not repeated while others remain. */
-  private readonly usedLines = new Map<Moment, Set<number>>();
-  private readonly lineBook: LineBook | null;
 
   constructor(
     private readonly deps: FmStationDeps,
     private readonly onEnd: () => void,
   ) {
-    this.lineBook = deps.lines === undefined ? loadLineBook(deps.language) : deps.lines;
     this.prepared = deps.prepared ?? null;
+    this.intros = new StationIntros({
+      guildName: deps.guild.name,
+      language: deps.language,
+      voice: deps.voice,
+      jingles: deps.jingles,
+      logger: deps.logger,
+      lines: deps.lines,
+      ended: () => this.ended,
+      setOf: (track) => this.setOf.get(track),
+      about: (track) => this.about.get(track),
+      dedications: this.dedications,
+      dedicationOf: this.dedicationOf,
+    });
+    this.aired = new StationAired({
+      logger: deps.logger,
+      aired: deps.aired,
+      deadFinds: deps.deadFinds,
+      played: () => this.played,
+    });
+    this.breaks = new StationBreaks({
+      guildName: deps.guild.name,
+      language: deps.language,
+      voice: deps.voice,
+      jingle: deps.jingle,
+      jingles: deps.jingles,
+      blockSongs: deps.blockSongs,
+      breakSeconds: deps.breakSeconds,
+      logger: deps.logger,
+      rotationCursor: deps.rotationCursor,
+      preparingOpener: () => this.preparingOpener,
+      ended: () => this.ended,
+      rotation: () => this.rotation,
+      about: (track) => this.about.get(track),
+      speak: (base, vibe, first, newBlock) => this.intros.speak(base, vibe, first, newBlock),
+    });
+    this.finds = new StationDiscover({
+      catalog: deps.catalog,
+      youtube: deps.source.youtube,
+      logger: deps.logger,
+      genreTracks: deps.genreTracks,
+      findBlocks: deps.findBlocks,
+      ended: () => this.ended,
+      oneSong: () => this.oneSong(),
+      played: () => this.played,
+      deadList: () => this.aired.deadList(),
+      airedRows: () =>
+        this.aired.airedNow.rows.map((row) => ({ artist: row.artist, title: row.title })),
+      urlTaken: (url) => this.aired.plannedUrls.has(url) || this.aired.airedNow.urls.has(url),
+      noteDead: (artist, title) => this.aired.noteDead(artist, title),
+      place: (tracks, track) => this.place(tracks, track),
+      rememberFind: (hit) => this.rememberFind(hit),
+      aboutSet: (hit, about) => this.about.set(hit, about),
+    });
   }
 
   upNext(): Promise<Track | null> {
@@ -497,11 +377,15 @@ export class FmStation implements PlayerStation {
   }): 'ok' | 'yours' | 'full' {
     const block = this.dedications.block(input.userId);
     if (block) return block;
-    const text = dedicationText(this.lineBook?.of('dedication') ?? [], input, this.deps.language);
+    const text = dedicationText(
+      this.intros.lineBook?.of('dedication') ?? [],
+      input,
+      this.deps.language,
+    );
     const dedication: WaitingDedication = { ...input, text, speech: Promise.resolve(null) };
     this.dedications.add(dedication);
     // Starts now, so playback is not waiting on a cold call later.
-    this.speakDedication(dedication);
+    this.intros.speakDedication(dedication);
     return 'ok';
   }
 
@@ -522,7 +406,7 @@ export class FmStation implements PlayerStation {
 
   starting(track: Track): void {
     this.justPlayed.push(track);
-    this.handDedication(track);
+    this.intros.handDedication(track);
     const set = this.setOf.get(track);
     if (!set) return;
     if (set === this.pending && set.tracks[0] === track) {
@@ -551,11 +435,11 @@ export class FmStation implements PlayerStation {
     const dedication = this.dedicationOf.get(track);
     if (!dedication) return;
     this.dedicationOf.delete(track);
-    this.combined.delete(track);
+    this.intros.combined.delete(track);
     const song = dedication.song.trim();
     if (song && dedication.text.includes(song)) {
       const text = dedicationText(
-        this.lineBook?.of('dedication') ?? [],
+        this.intros.lineBook?.of('dedication') ?? [],
         { from: dedication.from, to: dedication.to, message: dedication.message, song: '' },
         this.deps.language,
       );
@@ -567,13 +451,13 @@ export class FmStation implements PlayerStation {
         speech: Promise.resolve(null),
       };
       this.dedications.returnFront(again);
-      this.speakDedication(again);
+      this.intros.speakDedication(again);
       return;
     }
     const again: WaitingDedication = { ...dedication, track: null };
-    const existing = this.dedicationClips.get(dedication);
-    if (existing) this.dedicationClips.set(again, existing);
-    this.dedicationClips.delete(dedication);
+    const existing = this.intros.dedicationClips.get(dedication);
+    if (existing) this.intros.dedicationClips.set(again, existing);
+    this.intros.dedicationClips.delete(dedication);
     if (existing) again.speech = existing;
     this.dedications.returnFront(again);
   }
@@ -636,12 +520,12 @@ export class FmStation implements PlayerStation {
   intro(track: Track): Promise<StationIntro | null> {
     if (this.ended) return Promise.resolve(null);
     const dedication = this.dedicationOf.get(track);
-    const setLine = this.setIntro(track);
+    const setLine = this.intros.setIntro(track);
     if (!dedication) return setLine ?? Promise.resolve(null);
-    const pending = this.combined.get(track);
+    const pending = this.intros.combined.get(track);
     if (pending) return pending;
-    const next = this.withDedication(track, dedication, setLine);
-    this.combined.set(track, next);
+    const next = this.intros.withDedication(track, dedication, setLine);
+    this.intros.combined.set(track, next);
     return next;
   }
 
@@ -705,7 +589,7 @@ export class FmStation implements PlayerStation {
     this.ended = true;
     this.preloaded = null;
     if (this.live) this.live.ignore = true;
-    this.rememberRotation();
+    this.breaks.rememberRotation();
     this.current?.wake?.();
     this.pending?.wake?.();
     this.dedications.clear();
@@ -725,8 +609,8 @@ export class FmStation implements PlayerStation {
     this.preparingOpener = true;
     try {
       const pool = (await this.deps.pool()).filter((song) => songFits(song.durationSec));
-      await this.readAired();
-      const unaired = pool.filter((song) => !this.taken(song));
+      await this.aired.readAired();
+      const unaired = pool.filter((song) => !this.aired.taken(song));
       const base: SetBase = { hour: 0, minute: 0, set: 1, newcomers: [] };
       const set = await this.planRotation(pool, unaired, base, []);
       const track = set?.tracks[0];
@@ -763,10 +647,10 @@ export class FmStation implements PlayerStation {
       now: this.now(),
       language: this.deps.language,
       voice: this.deps.voiceName ?? '',
-      airedKeys: this.airedNow.keys,
-      airedUrls: this.airedNow.urls,
-      plannedKeys: this.plannedKeys,
-      plannedUrls: this.plannedUrls,
+      airedKeys: this.aired.airedNow.keys,
+      airedUrls: this.aired.airedNow.urls,
+      plannedKeys: this.aired.plannedKeys,
+      plannedUrls: this.aired.plannedUrls,
       after: this.deps.rotationCursor?.genre ?? null,
       blocked: openerIsBlocked(opener, pool, blocks),
     });
@@ -801,7 +685,7 @@ export class FmStation implements PlayerStation {
       how: opener.how,
     });
     this.remember(track, opener.key);
-    this.markPlanned(opener.key, track.url);
+    this.aired.markPlanned(opener.key, track.url);
     if (opener.key && opener.key !== '|') this.recent.push(opener.key);
     this.heldLine = opener.line;
     this.heldClip = opener.pcm?.length ? opener.pcm : undefined;
@@ -817,9 +701,9 @@ export class FmStation implements PlayerStation {
   /** A showOpen line with no clock in it, or the built-in greeting when the book has none. */
   private lineForLater(genre: GenreId, song: OpenerSong): string {
     const vibe = genreName(genre, this.deps.language);
-    const slots = this.slots({ hour: 0, minute: 0, set: 1, newcomers: [] }, vibe, song);
+    const slots = this.intros.slots({ hour: 0, minute: 0, set: 1, newcomers: [] }, vibe, song);
     return (
-      preparedShowLine(this.lineBook?.of('showOpen') ?? [], slots) ??
+      preparedShowLine(this.intros.lineBook?.of('showOpen') ?? [], slots) ??
       timelessOpener({
         language: this.deps.language,
         server: this.deps.guild.name,
@@ -827,152 +711,6 @@ export class FmStation implements PlayerStation {
         song,
       })
     );
-  }
-
-  /** Bind the dedication this song should read. An early `intro` has not called this. */
-  private handDedication(track: Track): void {
-    if (this.ended || this.dedicationOf.has(track)) return;
-    const dedication = this.dedications.take(track);
-    if (dedication) this.dedicationOf.set(track, dedication);
-  }
-
-  /**
-   * The set line for the first song of a set. Null for any other song.
-   * Callers that ask together share one synthesis. A clip that came back
-   * empty is forgotten, so the next `intro` tries again before the song.
-   */
-  private setIntro(track: Track): Promise<StationIntro | null> | null {
-    const set = this.setOf.get(track);
-    if (!set || set.tracks[0] !== track) return null;
-    if (set.breakClip) {
-      const pending = this.intros.get(set);
-      if (pending) return pending;
-      this.intros.set(set, set.breakClip);
-      return set.breakClip;
-    }
-    const pending = this.intros.get(set);
-    if (pending) return pending;
-    const next = this.speakSetLine(set);
-    this.intros.set(set, next);
-    return next;
-  }
-
-  /**
-   * The set line, with a station ID in front of the opener and a new-find
-   * jingle in front of a later set. The file is decoded beside the voice,
-   * and a failed decode leaves the line on its own.
-   */
-  private speakSetLine(set: FmSet): Promise<StationIntro | null> {
-    const lead = this.stationLead(set);
-    if (set.preparedClip?.length) {
-      const pcm = set.preparedClip;
-      return lead.then((jingle) => this.withLead(set, { text: set.line, pcm }, jingle));
-    }
-    return Promise.all([this.deps.voice.speak(set.line), lead])
-      .then(([pcm, jingle]) => {
-        if (!pcm?.length) {
-          this.intros.delete(set);
-          return { text: set.line, pcm: null };
-        }
-        return this.withLead(set, { text: set.line, pcm }, jingle);
-      })
-      .catch((error: unknown) => {
-        this.deps.logger.warn('Kitchen FM intro failed:', error);
-        this.intros.delete(set);
-        return { text: set.line, pcm: null };
-      });
-  }
-
-  /**
-   * `new-find` once in a later set of the block. The opener's line has no
-   * jingle of its own: the opening jingle already played when the radio was
-   * switched on.
-   */
-  private stationLead(set: FmSet): Promise<Buffer | null> {
-    const lib = this.deps.jingles;
-    if (!lib) return Promise.resolve(null);
-    return this.loadLead(set, lib).catch((error: unknown) => {
-      this.deps.logger.warn('Kitchen FM jingle failed:', error);
-      return null;
-    });
-  }
-
-  private async loadLead(set: FmSet, lib: JingleLibrary): Promise<Buffer | null> {
-    if (set.opener) return null;
-    const first = set.tracks[0];
-    const how = (first && this.about.get(first)?.how) || 'play';
-    if (
-      !playNewFindJingle({
-        how,
-        opener: Boolean(set.opener),
-        blockStart: Boolean(set.blockStart),
-        played: this.newFindJingleGenre !== null && this.newFindJingleGenre === set.rotationGenre,
-        rotation: Boolean(set.rotationGenre),
-      })
-    ) {
-      return null;
-    }
-    const pcm = await lib.clip(namedJingle(lib.files(), 'new-find'));
-    if (!pcm?.length) return null;
-    return pcm;
-  }
-
-  /** The jingle, half a second of quiet, then the line. The card text stays the line. */
-  private withLead(set: FmSet, intro: StationIntro, lead: Buffer | null): StationIntro {
-    if (!intro.pcm?.length || !lead?.length) return { text: intro.text, pcm: intro.pcm };
-    if (!set.opener && set.rotationGenre) this.newFindJingleGenre = set.rotationGenre;
-    return { text: intro.text, pcm: joinClips([lead, intro.pcm], JINGLE_GAP_MS) };
-  }
-
-  /**
-   * The dedication clip. A failure is dropped, so the next `intro` tries
-   * again instead of replaying the empty buffer. Two callers share one call.
-   */
-  private speakDedication(dedication: WaitingDedication): Promise<Buffer | null> {
-    const cached = this.dedicationClips.get(dedication);
-    if (cached) return cached;
-    const pending = this.deps.voice
-      .speak(dedication.text)
-      .then((pcm) => {
-        if (!pcm?.length) this.dedicationClips.delete(dedication);
-        return pcm;
-      })
-      .catch((error: unknown) => {
-        this.deps.logger.warn('Kitchen FM dedication failed:', error);
-        this.dedicationClips.delete(dedication);
-        return null;
-      });
-    this.dedicationClips.set(dedication, pending);
-    dedication.speech = pending;
-    return pending;
-  }
-
-  /** Dedication first, a short gap, then the set line. The card shows both texts. */
-  private async withDedication(
-    track: Track,
-    dedication: WaitingDedication,
-    setLine: Promise<StationIntro | null> | null,
-  ): Promise<StationIntro> {
-    const [spoken, set] = await Promise.all([
-      this.speakDedication(dedication),
-      setLine ?? Promise.resolve(null),
-    ]);
-    const jingle = spoken?.length ? await this.dedicationClip() : null;
-    const text = [dedication.text, set?.text].filter(Boolean).join(' ');
-    const pcm = joinIntro(spoken, set?.pcm ?? null, jingle);
-    // A missing part is not final: the next intro tries that part again.
-    if (!spoken?.length || (setLine && !set?.pcm?.length)) this.combined.delete(track);
-    return { text, pcm };
-  }
-
-  /** `dedication.mp3` ahead of the spoken message. Null when the file is missing. */
-  private dedicationClip(): Promise<Buffer | null> {
-    const lib = this.deps.jingles;
-    if (!lib) return Promise.resolve(null);
-    return lib.clip(namedJingle(lib.files(), 'dedication')).catch((error: unknown) => {
-      this.deps.logger.warn('Kitchen FM jingle failed:', error);
-      return null;
-    });
   }
 
   private async peek(): Promise<Track | null> {
@@ -1018,13 +756,13 @@ export class FmStation implements PlayerStation {
     }
     const pool = (await this.deps.pool()).filter((song) => songFits(song.durationSec));
     this.noteJustPlayed(pool);
-    await this.readAired();
-    const unaired = pool.filter((song) => !this.taken(song));
+    await this.aired.readAired();
+    const unaired = pool.filter((song) => !this.aired.taken(song));
     const clock = zonedParts(this.deps.timezone);
     const number = this.vibes.length + 1;
     if (number === 1) {
       this.deps.logger.info(
-        `Kitchen FM in ${this.deps.guild.name}: ${this.airedNow.keys.size} songs already aired, ` +
+        `Kitchen FM in ${this.deps.guild.name}: ${this.aired.airedNow.keys.size} songs already aired, ` +
           `${unaired.length} of ${pool.length} kitchen songs not aired yet.`,
       );
       await this.considerPrepared(pool);
@@ -1211,7 +949,7 @@ export class FmStation implements PlayerStation {
       this.heldClip = undefined;
       const set: FmSet = {
         vibe: live.vibe,
-        line: held ?? this.speak(live.base, live.vibe, track, live.newBlock),
+        line: held ?? this.intros.speak(live.base, live.vibe, track, live.newBlock),
         tracks,
         next: 0,
         plannedAt: this.now(),
@@ -1261,7 +999,7 @@ export class FmStation implements PlayerStation {
     }
     return {
       vibe,
-      line: holdLine ? '' : this.speak(base, vibe, tracks[0], newBlock),
+      line: holdLine ? '' : this.intros.speak(base, vibe, tracks[0], newBlock),
       tracks,
       next: 0,
       plannedAt: this.now(),
@@ -1295,7 +1033,7 @@ export class FmStation implements PlayerStation {
     listeners: GuildMember[],
   ): Promise<FmSet | null> {
     if (!this.deps.writer.ready) return null;
-    const open = unaired.filter((song) => !this.plannedThisShow(song));
+    const open = unaired.filter((song) => !this.aired.plannedThisShow(song));
     // An empty crate with no finds allowed is a wasted call.
     if (open.length === 0 && (base.set === 1 || this.deps.discover <= 0)) return null;
     const crateSongs = sampleCrate(open, this.recent, CRATE_SIZE);
@@ -1307,7 +1045,7 @@ export class FmStation implements PlayerStation {
         time,
         ...base,
         earlierVibes: this.vibes.slice(-VIBES_SHOWN),
-        playedThisShow: this.playedForClaude(),
+        playedThisShow: this.aired.playedForClaude(),
         listeners: listeners.map((member) => member.displayName),
         discover: base.set === 1 ? 0 : this.deps.discover,
         crate: crateSongs.map((song, i) => ({
@@ -1326,7 +1064,7 @@ export class FmStation implements PlayerStation {
 
     const tracks: Track[] = [];
     this.claim(tracks, plan.vibe, false);
-    const airedNames = this.airedNames();
+    const airedNames = this.aired.airedNames();
     const first = await this.loadPlannedOrdered(
       plan.songs,
       crateSongs,
@@ -1351,7 +1089,7 @@ export class FmStation implements PlayerStation {
     listeners: GuildMember[],
   ): Promise<FmSet | null> {
     const listenerMap = new Map(listeners.map((member) => [member.id, member.displayName]));
-    const fresh = unaired.filter((song) => !this.plannedThisShow(song));
+    const fresh = unaired.filter((song) => !this.aired.plannedThisShow(song));
     const picked =
       fresh.length > 0
         ? themedSet(fresh, [], { listeners: listenerMap, last: this.lastTheme })
@@ -1376,7 +1114,7 @@ export class FmStation implements PlayerStation {
     const index = this.deps.genres;
     if (allowance > 0 && this.deps.catalog && index && tracks.length < SET_MAX) {
       const listenerIds = new Set(listeners.map((member) => member.id));
-      await this.discover(pool, null, allowance, listenerIds, index, tracks);
+      await this.finds.discover(pool, null, allowance, listenerIds, index, tracks);
     }
     await this.fill(tracks, fresh);
     const set = this.sealed(base, vibe, false, tracks);
@@ -1403,7 +1141,7 @@ export class FmStation implements PlayerStation {
     const now = this.now();
     const listenerIds = new Set(listeners.map((member) => member.id));
     const genreOf = (song: FmSong) => index.genreOf(song.key);
-    const open = unaired.filter((song) => !this.plannedThisShow(song));
+    const open = unaired.filter((song) => !this.aired.plannedThisShow(song));
     const profile = blockProfile(
       tasteProfile(pool, genreOf, { now, listenerIds }),
       open,
@@ -1486,12 +1224,12 @@ export class FmStation implements PlayerStation {
     const index = this.deps.genres;
     if (!this.deps.catalog || !index || this.deps.discover <= 0) return null;
     const listenerIds = new Set(listeners.map((member) => member.id));
-    const open = unaired.filter((song) => !this.plannedThisShow(song));
+    const open = unaired.filter((song) => !this.aired.plannedThisShow(song));
     const reserve = open.length < SET_MIN ? Math.min(open.length, SET_MAX) : 0;
     const vibe = this.deps.language === 'cs' ? 'podobní interpreti' : 'similar artists';
     const tracks: Track[] = [];
     this.claim(tracks, vibe, false);
-    await this.discover(pool, null, SET_MAX - reserve, listenerIds, index, tracks);
+    await this.finds.discover(pool, null, SET_MAX - reserve, listenerIds, index, tracks);
     if (tracks.length < SET_MAX) await this.fill(tracks, open);
     return this.sealed(base, vibe, false, tracks);
   }
@@ -1506,10 +1244,10 @@ export class FmStation implements PlayerStation {
       `Kitchen FM in ${this.deps.guild.name}: nothing new could be found. Playing songs that aired longest ago.`,
     );
     const list = pool.filter((song) => !sidelined(song));
-    const waiting = list.filter((song) => !this.plannedThisShow(song));
+    const waiting = list.filter((song) => !this.aired.plannedThisShow(song));
     const source = waiting.length > 0 ? waiting : list.length > 0 ? list : pool;
     const ordered = [...source].sort(
-      (a, b) => this.lastAiredAt(a) - this.lastAiredAt(b) || a.key.localeCompare(b.key),
+      (a, b) => this.aired.lastAiredAt(a) - this.aired.lastAiredAt(b) || a.key.localeCompare(b.key),
     );
     const vibe = themeName({ kind: 'throwbacks' }, this.deps.language);
     const tracks: Track[] = [];
@@ -1550,47 +1288,18 @@ export class FmStation implements PlayerStation {
     const kitchen = picked.slice(0, kitchenSlots(picked.length, finds));
     await this.loadOrdered(kitchen, tracks);
     if (finds > 0 && this.deps.catalog && tracks.length < SET_MAX) {
-      await this.discover(pool, genre, finds, listenerIds, index, tracks);
+      await this.finds.discover(pool, genre, finds, listenerIds, index, tracks);
     }
     // Top up only with unaired songs of the same genre: a short set beats one under the wrong name.
     const same = unaired.filter(
-      (song) => index.genreOf(song.key) === genre && !this.plannedThisShow(song),
+      (song) => index.genreOf(song.key) === genre && !this.aired.plannedThisShow(song),
     );
     await this.fill(tracks, same);
-  }
-
-  /** Station songs in one rotation block, clamped to 5–30. */
-  private blockSongCount(): number {
-    const count = this.deps.blockSongs;
-    if (typeof count !== 'number' || !Number.isFinite(count)) return 15;
-    return Math.min(30, Math.max(5, Math.round(count)));
-  }
-
-  /** Break length in seconds, clamped to 0–300. 0 means the usual block line. */
-  private breakLength(): number {
-    const seconds = this.deps.breakSeconds;
-    if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return 180;
-    return Math.min(300, Math.max(0, Math.round(seconds)));
   }
 
   /** Preparing an opener loads one song, unless a thin genre is being proved. */
   private oneSong(): boolean {
     return this.preparingOpener && !this.rotationScan;
-  }
-
-  private breakLines(): BreakBook | null {
-    if (this.breakBookCache === undefined) this.breakBookCache = loadBreakBook();
-    return this.breakBookCache;
-  }
-
-  /** The DJ reads the recap. Station IDs use the jingle voice, or nothing. */
-  private breakVoices(): BreakVoices {
-    const dj = this.deps.voice;
-    const jingle = this.deps.jingle;
-    return {
-      dj: (text, budget) => dj.speak(text, budget),
-      jingle: jingle ? (text, budget) => jingle.speak(text, budget) : async () => null,
-    };
   }
 
   /**
@@ -1607,7 +1316,7 @@ export class FmStation implements PlayerStation {
     if (this.ended) return null;
     const index = this.deps.genres;
     const listenerIds = new Set(listeners.map((member) => member.id));
-    const open = unaired.filter((song) => !this.plannedThisShow(song));
+    const open = unaired.filter((song) => !this.aired.plannedThisShow(song));
 
     if (this.rotation && !this.rotation.closed && this.rotation.songs < this.rotation.limit) {
       const genre = this.rotation.genre;
@@ -1628,7 +1337,7 @@ export class FmStation implements PlayerStation {
         return set;
       }
       this.rotation.closed = true;
-      this.startBreakHead();
+      this.breaks.startBreakHead();
     }
 
     // A show with a prepared opener starts at its genre: the preparation already
@@ -1643,9 +1352,12 @@ export class FmStation implements PlayerStation {
       if (this.ended) return null;
       if (seen.has(genre)) break;
       seen.add(genre);
-      const cap = Math.min(SET_MAX, this.blockSongCount());
+      const cap = Math.min(SET_MAX, blockSongCount(this.deps.blockSongs));
       const hold =
-        base.set > 1 && this.breakHead !== null && this.breakLength() > 0 && !this.preparingOpener;
+        base.set > 1 &&
+        this.breaks.breakHead !== null &&
+        breakLength(this.deps.breakSeconds) > 0 &&
+        !this.preparingOpener;
       const set = await this.buildRotationSet(
         genre,
         pool,
@@ -1660,7 +1372,7 @@ export class FmStation implements PlayerStation {
       if (set?.tracks.length) {
         // The previous block's break is already rendered. Take it before this
         // set, which may itself be a whole block, starts the next one.
-        if (base.set > 1) this.armBreak(set, genre, base);
+        if (base.set > 1) this.breaks.armBreak(set, genre, base);
         this.noteRotation(genre, set.tracks, cap);
         return set;
       }
@@ -1669,7 +1381,7 @@ export class FmStation implements PlayerStation {
       );
       genre = rotationAfter(genre);
     }
-    this.breakHead = null;
+    this.breaks.breakHead = null;
     return null;
   }
 
@@ -1689,7 +1401,7 @@ export class FmStation implements PlayerStation {
     cap: number,
     holdLine: boolean,
   ): Promise<FmSet | null> {
-    const required = newBlock ? Math.min(SET_MAX, this.blockSongCount()) : 1;
+    const required = newBlock ? Math.min(SET_MAX, blockSongCount(this.deps.blockSongs)) : 1;
     const take = Math.min(SET_MAX, Math.max(1, cap));
     const fresh = this.freshFor(genre, open, index);
     const vibe = genreName(genre, this.deps.language);
@@ -1747,7 +1459,7 @@ export class FmStation implements PlayerStation {
       index &&
       !this.oneSong()
     ) {
-      await this.discover(pool, genre, take - tracks.length, listenerIds, index, tracks);
+      await this.finds.discover(pool, genre, take - tracks.length, listenerIds, index, tracks);
     }
     if (tracks.length > take) this.dropTracks(tracks.splice(take));
     if (newBlock && tracks.length < required && !this.live?.set && !this.oneSong()) {
@@ -1783,17 +1495,17 @@ export class FmStation implements PlayerStation {
       await this.loadOrdered(fresh.slice(0, take), tracks, take);
       const gap = (): number => Math.max(0, take - tracks.length);
       if (gap() > 0 && tracks.length < required && this.deps.catalog && index) {
-        await this.discover(pool, genre, gap(), listenerIds, index, tracks);
+        await this.finds.discover(pool, genre, gap(), listenerIds, index, tracks);
       }
       if (gap() > 0 && tracks.length < required && this.deps.genreTracks) {
-        await this.addPlaylist(genre, pool, tracks, gap());
+        await this.finds.addPlaylist(genre, pool, tracks, gap());
       }
       // Keep filling the set once it is viable, up to `take`.
       if (tracks.length >= required && gap() > 0 && this.deps.catalog && index) {
-        await this.discover(pool, genre, gap(), listenerIds, index, tracks);
+        await this.finds.discover(pool, genre, gap(), listenerIds, index, tracks);
       }
       if (tracks.length >= required && gap() > 0 && this.deps.genreTracks) {
-        await this.addPlaylist(genre, pool, tracks, gap());
+        await this.finds.addPlaylist(genre, pool, tracks, gap());
       }
       return tracks.length;
     } finally {
@@ -1855,12 +1567,12 @@ export class FmStation implements PlayerStation {
     for (const track of tracks) {
       const key = this.songKeys.get(track);
       if (key) {
-        this.plannedKeys.delete(key);
+        this.aired.plannedKeys.delete(key);
         const at = this.recent.lastIndexOf(key);
         if (at >= 0) this.recent.splice(at, 1);
         this.songKeys.delete(track);
       }
-      if (track.url) this.plannedUrls.delete(track.url);
+      if (track.url) this.aired.plannedUrls.delete(track.url);
       this.about.delete(track);
       this.setOf.delete(track);
     }
@@ -1869,7 +1581,7 @@ export class FmStation implements PlayerStation {
 
   /** Count this set toward the block. A short set, or a full block, closes it. */
   private noteRotation(genre: GenreId, tracks: readonly Track[], wanted: number): void {
-    const limit = this.blockSongCount();
+    const limit = blockSongCount(this.deps.blockSongs);
     if (this.preparingOpener) {
       this.rotation = { genre, songs: tracks.length, limit, artists: [], closed: false };
       return;
@@ -1888,7 +1600,7 @@ export class FmStation implements PlayerStation {
     block.songs += tracks.length;
     if (block.songs >= block.limit || tracks.length < wanted) {
       block.closed = true;
-      this.startBreakHead();
+      this.breaks.startBreakHead();
     }
   }
 
@@ -1897,199 +1609,6 @@ export class FmStation implements PlayerStation {
     this.deps.logger.info(
       `Kitchen FM in ${this.deps.guild.name}: ${name(genre)} for ${limit} songs (next: ${name(rotationAfter(genre))}).`,
     );
-  }
-
-  /** Steps 1–3, as soon as the block's artists are known. No-op when the break is off. */
-  private startBreakHead(): void {
-    if (this.preparingOpener || this.breakLength() <= 0 || this.breakHead || !this.rotation) return;
-    const book = this.breakLines();
-    if (!book) return;
-    const slots = {
-      server: this.deps.guild.name,
-      lastGenre: genreName(this.rotation.genre, 'en'),
-      artists: joinNames(this.rotation.artists.slice(0, 3), 'en'),
-    };
-    const files = this.breakFiles(null);
-    this.breakHead = this.renderHead(book, slots, files).catch((error: unknown) => {
-      this.deps.logger.warn('Kitchen FM break failed:', error);
-      return emptyBreak();
-    });
-  }
-
-  /** The head, leaving room for the tail's real jingle files when the folder has them. */
-  private async renderHead(
-    book: BreakBook,
-    slots: { server: string; lastGenre: string; artists: string },
-    files: BreakFiles | null,
-  ): Promise<BreakClip> {
-    let tail = BREAK_TAIL_SEC;
-    if (files) {
-      const back = await files.back().catch(() => null);
-      tail = breakTailReserve(back?.length ? pcmSeconds(back) : 0, this.genreReserveSec());
-    }
-    return renderBreakHead(
-      book,
-      slots,
-      this.breakVoices(),
-      this.breakUsed,
-      this.breakLength(),
-      Math.random,
-      tail,
-      files,
-    );
-  }
-
-  /** A station-ID or sweeper file, marked used so the next break can pick another. */
-  private pickClip(kind: 'id' | 'sweeper'): Promise<Buffer | null> {
-    const lib = this.deps.jingles;
-    if (!lib) return Promise.resolve(null);
-    const used = kind === 'id' ? this.jingleUsed.ids : this.jingleUsed.sweepers;
-    return lib.clip(pickJingle(lib.files(), kind, used, Math.random));
-  }
-
-  /** Files for one break. `genre` null means the tail does not know the next block yet. */
-  private breakFiles(genre: GenreId | null): BreakFiles | null {
-    const lib = this.deps.jingles;
-    if (!lib) return null;
-    return {
-      id: () => this.pickClip('id'),
-      sweeper: () => this.pickClip('sweeper'),
-      back: () => lib.clip(namedJingle(lib.files(), 'back-to-music')),
-      genre: () => (genre ? lib.clip(genreJingle(lib.files(), genre)) : Promise.resolve(null)),
-    };
-  }
-
-  /** How long a genre jingle might be. Zero when the folder has none. */
-  private genreReserveSec(): number {
-    const lib = this.deps.jingles;
-    if (!lib?.files().some((file) => file.kind === 'genre')) return 0;
-    return GENRE_JINGLE_RESERVE_SEC;
-  }
-
-  /** The next block's first song carries the break. The card names only the genre. */
-  private armBreak(set: FmSet, genre: GenreId, base: SetBase): void {
-    if (!this.breakHead || this.breakLength() <= 0 || this.preparingOpener || !set.tracks[0]) {
-      return;
-    }
-    const vibe = genreName(genre, this.deps.language);
-    set.line = `📻 Kitchen FM break · next up: ${genreName(genre, 'en')}`;
-    set.breakClip = this.composeBreak(genre, set, base, vibe);
-  }
-
-  /**
-   * Head, then the tail. Ready within a minute: a slow tail still plays the
-   * head, and a break with no voice at all falls back to the block line.
-   */
-  private composeBreak(
-    genre: GenreId,
-    set: FmSet,
-    base: SetBase,
-    vibe: string,
-  ): Promise<StationIntro | null> {
-    const card = `📻 Kitchen FM break · next up: ${genreName(genre, 'en')}`;
-    const head = this.breakHead ?? Promise.resolve(emptyBreak());
-    this.breakHead = null;
-    const book = this.breakLines();
-    const tail = book
-      ? renderBreakTail(
-          book,
-          {
-            genre: genreName(genre, 'en'),
-            songs: this.comingSongs(set.tracks),
-            count: String(this.blockSongCount()),
-          },
-          this.breakVoices(),
-          Math.random,
-          this.breakFiles(genre),
-        ).catch((error: unknown) => {
-          this.deps.logger.warn('Kitchen FM break failed:', error);
-          return emptyBreak();
-        })
-      : Promise.resolve(emptyBreak());
-
-    let headReady: BreakClip | null = null;
-    void head.then((clip) => {
-      headReady = clip;
-    });
-
-    return new Promise((resolve) => {
-      let settled = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const deliver = (clip: BreakClip | null): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (this.ended) {
-          resolve(null);
-          return;
-        }
-        void this.finishBreak(clip, card, base, vibe, set).then(resolve, () =>
-          resolve({ text: card, pcm: null }),
-        );
-      };
-      // A late tail still lets the head play. The fallback block line needs a
-      // few seconds of its own, so this fires before the player stops waiting.
-      set.breakDue = () => {
-        if (settled || timer) return;
-        timer = setTimeout(() => {
-          deliver(headReady?.voiced ? headReady : null);
-        }, BREAK_DEADLINE_MS);
-        timer.unref?.();
-      };
-      void Promise.all([head, tail])
-        .then(([heard, next]) => deliver(joinBreak(heard, next)))
-        .catch((error: unknown) => {
-          this.deps.logger.warn('Kitchen FM break failed:', error);
-          deliver(headReady?.voiced ? headReady : null);
-        });
-    });
-  }
-
-  /** The break clip, or the usual new-block line when no voice made it in. */
-  private async finishBreak(
-    clip: BreakClip | null,
-    card: string,
-    base: SetBase,
-    vibe: string,
-    set: FmSet,
-  ): Promise<StationIntro> {
-    const laid = await this.layBed(clip);
-    if (laid?.voiced && laid.pcm?.length) return { text: card, pcm: laid.pcm };
-    const first = set.tracks[0];
-    const line = first ? this.speak(base, vibe, first, true) : card;
-    const pcm = await this.deps.voice.speak(line, BREAK_SPEAK_MS).catch(() => null);
-    return { text: line, pcm };
-  }
-
-  /** One music bed under the whole break. A missing file leaves the voices as they are. */
-  private async layBed(clip: BreakClip | null): Promise<BreakClip | null> {
-    if (!clip?.pcm?.length) return clip;
-    const lib = this.deps.jingles;
-    if (!lib) return clip;
-    try {
-      const file = pickJingle(lib.files(), 'bed', this.jingleUsed.beds, Math.random);
-      const bed = await lib.bed(file, Math.max(0.1, clip.seconds));
-      return await applyBedAsync(clip, bed);
-    } catch (error: unknown) {
-      this.deps.logger.warn('Kitchen FM bed failed:', error);
-      return clip;
-    }
-  }
-
-  /** The next block's first songs, as "Title by Artist", up to three. */
-  private comingSongs(tracks: readonly Track[]): string {
-    const names = tracks.slice(0, 3).map((track) => {
-      const about = this.about.get(track);
-      return songPhrase(about?.artist ?? '', about?.title || track.title, 'en');
-    });
-    return joinNames(names, 'en');
-  }
-
-  /** The genre this show got to, so the next one starts after it. */
-  private rememberRotation(): void {
-    const cursor = this.deps.rotationCursor;
-    if (!cursor || !this.rotation) return;
-    cursor.genre = this.rotation.genre;
   }
 
   /** Load `songs` together, and append each one in list order as soon as it is ready. */
@@ -2156,452 +1675,6 @@ export class FmStation implements PlayerStation {
     return first;
   }
 
-  /**
-   * Related artists the kitchen has not played, then one of their top tracks
-   * from YouTube. When that ring runs out, the next ring, then the kitchen
-   * artists' own unplayed tops. Up to three searches run at once, and results
-   * are kept in candidate order. A cache hit is not a Deezer call. A finds-only
-   * set (more than 3) may look further than a mixed one.
-   */
-  private async discover(
-    pool: FmSong[],
-    genre: GenreId | null,
-    allowance: number,
-    listenerIds: ReadonlySet<string>,
-    index: GenreIndex,
-    into?: Track[],
-  ): Promise<Track[]> {
-    const tracks = into ?? [];
-    const catalog = this.deps.catalog;
-    if (!catalog || allowance <= 0 || this.ended) return tracks;
-    const started = tracks.length;
-    const added = (): number => tracks.length - started;
-    const kitchenArtists = new Set(pool.map((song) => artistKey(song.artist)).filter(Boolean));
-    const blocked = await this.blockedSongs(pool);
-    // A genre block seeds from that genre. A themed set seeds from the whole kitchen.
-    const seeded = genre === null ? pool : pool.filter((song) => index.genreOf(song.key) === genre);
-    const seeds = seedArtistIds(
-      seeded.map((song) => ({ from: song.from, deezerArtistId: index.artistId(song.key) })),
-      listenerIds,
-    );
-    const budget = { deezer: 0, youtube: 0 };
-    const deezerCap = allowance > 3 ? allowance * 4 + 4 : DISCOVER_DEEZER_CALLS;
-    const youtubeCap = allowance > 3 ? allowance * 2 : DISCOVER_YOUTUBE_CALLS;
-    // Preparation stops at the first song. The caps stay what a full opening set may spend.
-    const limit = this.oneSong() ? Math.min(allowance, 1) : allowance;
-    const room = (): boolean =>
-      !this.ended &&
-      added() < limit &&
-      tracks.length < SET_MAX &&
-      budget.deezer < deezerCap &&
-      budget.youtube < youtubeCap;
-    const seen = new Set<number>(seeds);
-    let frontier = [...seeds];
-    let frontierPos = 0;
-    const nextFrontier: number[] = [];
-    let related: { id: number; name: string }[] = [];
-    let relatedPos = 0;
-    let loaded = false;
-    let phase: 'rings' | 'seeds' = 'rings';
-    let seedPos = 0;
-
-    const nextId = async (): Promise<number | null> => {
-      while (phase === 'rings' && room()) {
-        if (!loaded) {
-          if (frontierPos >= frontier.length) {
-            if (nextFrontier.length === 0) {
-              phase = 'seeds';
-              break;
-            }
-            frontier = nextFrontier.splice(0);
-            frontierPos = 0;
-            continue;
-          }
-          related = await this.cachedRelated(frontier[frontierPos]!, budget, deezerCap);
-          relatedPos = 0;
-          loaded = true;
-        }
-        while (relatedPos < related.length && room()) {
-          const artist = related[relatedPos++]!;
-          if (kitchenArtists.has(artistKey(artist.name)) || seen.has(artist.id)) continue;
-          seen.add(artist.id);
-          nextFrontier.push(artist.id);
-          return artist.id;
-        }
-        frontierPos += 1;
-        loaded = false;
-      }
-      // Still short: more from the kitchen's own artists, songs it has not played.
-      while (seedPos < seeds.length && room()) return seeds[seedPos++]!;
-      return null;
-    };
-
-    await this.runWindow(
-      async () => {
-        if (!room()) return null;
-        const id = await nextId();
-        if (id === null || !room()) return null;
-        return this.beginTake(id, blocked, budget, deezerCap, youtubeCap);
-      },
-      tracks,
-      limit,
-      started,
-    );
-    return tracks;
-  }
-
-  /** Related artists for `id`. A hit in this show's cache is not a Deezer call. */
-  private async cachedRelated(
-    id: number,
-    budget: { deezer: number },
-    cap: number,
-  ): Promise<{ id: number; name: string }[]> {
-    const cached = this.relatedCache.get(id);
-    if (cached) return cached;
-    const catalog = this.deps.catalog;
-    if (!catalog || budget.deezer >= cap) return [];
-    budget.deezer += 1;
-    const list = await catalog.relatedArtists(id);
-    // A failed call is also empty: ask again next set.
-    if (list.length > 0) this.relatedCache.set(id, list);
-    return list;
-  }
-
-  /**
-   * Top tracks for `id`. Null when the artist is exhausted or the cap is spent,
-   * without another Deezer call. A cached list is free.
-   */
-  private async cachedTops(
-    id: number,
-    budget: { deezer: number },
-    cap: number,
-  ): Promise<{ title: string; artist: string; durationSec: number }[] | null> {
-    if (this.exhaustedArtists.has(id)) return null;
-    const cached = this.topCache.get(id);
-    if (cached) return cached;
-    const catalog = this.deps.catalog;
-    if (!catalog || budget.deezer >= cap) return null;
-    budget.deezer += 1;
-    const list = await catalog.topTracks(id);
-    // A failed call is also empty: ask again next set rather than retire the artist.
-    if (list.length === 0) return null;
-    this.topCache.set(id, list);
-    return list;
-  }
-
-  /**
-   * One playable top track from `artistId`, or nothing. A query YouTube cannot
-   * match is blocked for the rest of the show. A search that throws is not.
-   * `ready` fires once this artist has taken its pick, so the next search may start.
-   */
-  private async takeFrom(
-    artistId: number,
-    blocked: BlockedSongs,
-    budget: { deezer: number; youtube: number },
-    deezerCap: number,
-    youtubeCap: number,
-    ready: () => void,
-  ): Promise<{ pick: { artist: string; title: string }; hit: Track } | null> {
-    try {
-      if (this.ended || this.exhaustedArtists.has(artistId) || budget.youtube >= youtubeCap) {
-        return null;
-      }
-      const tops = await this.cachedTops(artistId, budget, deezerCap);
-      if (!tops || this.ended) return null;
-      const view = this.holding(blocked);
-      while (!this.ended && budget.youtube < youtubeCap) {
-        const pick = pickDiscoverTrack(tops, view, Math.random);
-        if (!pick) {
-          this.exhaustedArtists.add(artistId);
-          return null;
-        }
-        this.reserve(pick);
-        budget.youtube += 1;
-        ready();
-        const found = await this.lookup(pick, blocked);
-        if (found === 'threw') return null;
-        if (found) return found;
-      }
-      return null;
-    } finally {
-      ready();
-    }
-  }
-
-  /** Playlist tracks for `genre`, shuffled, searched like a find. Empty on failure. */
-  private async addPlaylist(
-    genre: GenreId,
-    pool: FmSong[],
-    into: Track[],
-    allowance: number,
-  ): Promise<void> {
-    const load = this.deps.genreTracks;
-    if (!load || allowance <= 0 || this.ended) return;
-    let list: DeezerTop[];
-    try {
-      list = await load(genre);
-    } catch (error: unknown) {
-      this.deps.logger.warn(`Kitchen FM could not load playlist tracks for ${genre}:`, error);
-      return;
-    }
-    const blocked = await this.blockedSongs(pool);
-    const candidates = shuffleItems(list);
-    let index = 0;
-    const budget = { youtube: 0 };
-    const youtubeCap = allowance > 3 ? allowance * 2 : DISCOVER_YOUTUBE_CALLS;
-    const limit = this.oneSong() ? Math.min(allowance, 1) : allowance;
-    const started = into.length;
-    await this.runWindow(
-      () => {
-        if (this.ended || budget.youtube >= youtubeCap) return null;
-        const view = this.holding(blocked);
-        while (index < candidates.length) {
-          const pick = candidates[index++]!;
-          if (!songFits(pick.durationSec) || view.matches(pick)) continue;
-          budget.youtube += 1;
-          return this.beginLookup(pick, blocked);
-        }
-        return null;
-      },
-      into,
-      limit,
-      started,
-    );
-  }
-
-  /**
-   * Keep up to `SEARCH_AT_ONCE` lookups in flight. A hit is appended in the
-   * order its search was started, so a later result cannot jump the queue.
-   */
-  private async runWindow(
-    start: () => Promise<SearchJob | null> | SearchJob | null,
-    into: Track[],
-    allowance: number,
-    started: number,
-  ): Promise<void> {
-    const jobs: SearchJob[] = [];
-    let commit = 0;
-    const added = (): number => into.length - started;
-    let sourceDone = false;
-
-    const placeNext = async (): Promise<void> => {
-      const job = jobs[commit];
-      if (!job) return;
-      commit += 1;
-      const found = await job.result;
-      if (!found || this.ended) return;
-      if (added() >= allowance || into.length >= SET_MAX) return;
-      this.acceptFind(found.pick, found.hit);
-      this.place(into, found.hit);
-    };
-
-    while (!sourceDone || commit < jobs.length) {
-      while (!sourceDone && jobs.length - commit < SEARCH_AT_ONCE) {
-        if (this.ended || added() >= allowance || into.length >= SET_MAX) {
-          sourceDone = true;
-          break;
-        }
-        const job = await start();
-        if (!job) {
-          sourceDone = true;
-          break;
-        }
-        jobs.push(job);
-        await job.reserved;
-      }
-      if (commit >= jobs.length) break;
-      await placeNext();
-    }
-  }
-
-  private beginTake(
-    artistId: number,
-    blocked: BlockedSongs,
-    budget: { deezer: number; youtube: number },
-    deezerCap: number,
-    youtubeCap: number,
-  ): SearchJob {
-    const { reserved, ready } = this.readyGate();
-    return {
-      reserved,
-      result: this.takeFrom(artistId, blocked, budget, deezerCap, youtubeCap, ready),
-    };
-  }
-
-  private beginLookup(pick: { artist: string; title: string }, blocked: BlockedSongs): SearchJob {
-    this.reserve(pick);
-    const { reserved, ready } = this.readyGate();
-    return { reserved, result: this.finishLookup(pick, blocked, ready) };
-  }
-
-  /** Resolves on the first `ready` call. A second call does nothing. */
-  private readyGate(): { reserved: Promise<void>; ready: () => void } {
-    let signal = (): void => {};
-    const reserved = new Promise<void>((resolve) => {
-      signal = resolve;
-    });
-    let opened = false;
-    return {
-      reserved,
-      ready: () => {
-        if (opened) return;
-        opened = true;
-        signal();
-      },
-    };
-  }
-
-  /** One playlist candidate. A miss is noted here. A hit is accepted when it is placed. */
-  private async finishLookup(
-    pick: { artist: string; title: string },
-    blocked: BlockedSongs,
-    ready: () => void,
-  ): Promise<{ pick: { artist: string; title: string }; hit: Track } | null> {
-    try {
-      ready();
-      const found = await this.lookup(pick, blocked);
-      return found === 'threw' ? null : found;
-    } finally {
-      ready();
-    }
-  }
-
-  /**
-   * Search YouTube for `pick`. A miss or an already-aired upload is a dead find.
-   * A thrown search is not, and the pick is free for a later set.
-   */
-  private async lookup(
-    pick: { artist: string; title: string },
-    blocked: BlockedSongs,
-  ): Promise<{ pick: { artist: string; title: string }; hit: Track } | null | 'threw'> {
-    // "(2012 Remaster)" is Deezer's label, not part of any upload's title.
-    const query = `${pick.artist} - ${plainTitle(pick.title)}`;
-    let threw = false;
-    const hit = await this.deps.source.youtube
-      .searchOne(query, NEW_FIND)
-      .catch((error: unknown) => {
-        threw = true;
-        this.deps.logger.warn(`Kitchen FM: YouTube search failed for "${query}":`, error);
-        return null;
-      });
-    this.unreserve(pick);
-    if (threw) return 'threw';
-    if (!hit || !songFits(hit.durationSec) || !isSameSong(pick, hit)) {
-      this.rejectFind(pick, blocked, false);
-      return null;
-    }
-    if (this.plannedUrls.has(hit.url) || this.airedNow.urls.has(hit.url)) {
-      this.rejectFind(pick, blocked, true);
-      return null;
-    }
-    blocked.add(pick);
-    return { pick, hit };
-  }
-
-  private acceptFind(pick: { artist: string; title: string }, hit: Track): void {
-    this.deps.logger.info(`Kitchen FM: new find "${pick.artist} - ${pick.title}".`);
-    hit.stationPick = true;
-    this.about.set(hit, { artist: pick.artist, title: pick.title, by: null, how: 'new' });
-    this.rememberFind(hit);
-  }
-
-  private rejectFind(
-    pick: { artist: string; title: string },
-    blocked: BlockedSongs,
-    aired: boolean,
-  ): void {
-    const query = `${pick.artist} - ${pick.title}`;
-    this.noteDead(pick.artist, pick.title);
-    blocked.add(pick);
-    this.deps.logger.info(
-      aired
-        ? `Kitchen FM: "${query}" already aired.`
-        : `Kitchen FM: no YouTube match for the new find "${query}".`,
-    );
-  }
-
-  /** Blocked songs plus picks a search has already taken. */
-  private holding(blocked: BlockedSongs): BlockedSongs {
-    const reserved = this.reservedFinds;
-    return {
-      matches: (song) =>
-        blocked.matches(song) ||
-        reserved.some((item) => item.artist === song.artist && item.title === song.title),
-      add: (song) => blocked.add(song),
-    };
-  }
-
-  private reserve(pick: { artist: string; title: string }): void {
-    this.reservedFinds.push({ artist: pick.artist, title: pick.title });
-  }
-
-  private unreserve(pick: { artist: string; title: string }): void {
-    const at = this.reservedFinds.findIndex(
-      (item) => item.artist === pick.artist && item.title === pick.title,
-    );
-    if (at >= 0) this.reservedFinds.splice(at, 1);
-  }
-
-  /** Kitchen songs, this show, dead finds, thumbs-down, and what already aired. */
-  private async blockedSongs(pool: readonly FmSong[]): Promise<BlockedSongs> {
-    const extra = (await this.deps.findBlocks?.()) ?? [];
-    return prepareBlocked([
-      ...pool.map((song) => ({ artist: song.artist, title: song.title })),
-      ...this.played.map(splitPlayed),
-      ...this.deadList(),
-      ...extra,
-      ...this.airedNow.rows.map((row) => ({ artist: row.artist, title: row.title })),
-    ]);
-  }
-
-  /** The line book, then the short built-in line when the book has nothing. */
-  private speak(base: SetBase, vibe: string, first: Track, newBlock: boolean): string {
-    const about = this.about.get(first) ?? {
-      artist: '',
-      title: first.title,
-      by: null,
-      how: 'play' as const,
-    };
-    const line = this.lineBook?.speak(
-      momentsFor({
-        set: base.set,
-        newBlock,
-        hour: base.hour,
-        newcomers: base.newcomers,
-        how: about.how,
-        by: about.by,
-      }),
-      this.slots(base, vibe, about),
-      this.usedLines,
-    );
-    if (line) return line;
-    return templateOpener({
-      language: this.deps.language,
-      server: this.deps.guild.name,
-      ...base,
-      vibe,
-      first: about,
-    });
-  }
-
-  private slots(base: SetBase, genre: string, song: OpenerSong): LineSlots {
-    const language = this.deps.language;
-    return {
-      server: this.deps.guild.name,
-      time: lineTime(base.hour, base.minute, language),
-      daypart: lineDaypart(base.hour, language),
-      genre,
-      song: songPhrase(song.artist, song.title, language),
-      artist: song.artist,
-      by: song.by ?? '',
-      names: joinNames(base.newcomers, language),
-      station: 'Kitchen FM',
-      from: '',
-      to: '',
-      message: '',
-    };
-  }
-
   private now(): number {
     return this.deps.now?.() ?? Date.now();
   }
@@ -2615,7 +1688,7 @@ export class FmStation implements PlayerStation {
   ): Promise<Track | null> {
     if (song.crate !== null) {
       const kitchen = crate[song.crate - 1];
-      if (!kitchen || this.plannedThisShow(kitchen)) return null;
+      if (!kitchen || this.aired.plannedThisShow(kitchen)) return null;
       return this.loadSong(kitchen);
     }
     // A crate-less name that already aired is not loaded, even when the kitchen has it.
@@ -2628,12 +1701,12 @@ export class FmStation implements PlayerStation {
     const query = song.artist ? `${song.artist} - ${title}` : title;
     const hit = await this.deps.source.youtube.searchOne(query, NEW_FIND);
     if (!hit || !songFits(hit.durationSec) || !isSameSong(song, hit)) {
-      this.noteDead(song.artist, song.title);
+      this.aired.noteDead(song.artist, song.title);
       this.deps.logger.info(`Kitchen FM: no YouTube match for the new find "${query}".`);
       return null;
     }
-    if (this.plannedUrls.has(hit.url) || this.airedNow.urls.has(hit.url)) {
-      this.noteDead(song.artist, song.title);
+    if (this.aired.plannedUrls.has(hit.url) || this.aired.airedNow.urls.has(hit.url)) {
+      this.aired.noteDead(song.artist, song.title);
       return null;
     }
     hit.stationPick = true;
@@ -2646,7 +1719,7 @@ export class FmStation implements PlayerStation {
   private rememberFind(hit: Track): void {
     const key = songFromTrack(hit, { kind: 'play' }).key;
     this.remember(hit, key);
-    this.markPlanned(key, hit.url);
+    this.aired.markPlanned(key, hit.url);
   }
 
   private remember(track: Track, key: string): void {
@@ -2657,9 +1730,9 @@ export class FmStation implements PlayerStation {
   private async fill(tracks: Track[], pool: FmSong[]): Promise<void> {
     let misses = 0;
     while (tracks.length < SET_MAX && misses < FILL_TRIES) {
-      const open = pool.filter((song) => !this.plannedThisShow(song));
+      const open = pool.filter((song) => !this.aired.plannedThisShow(song));
       const song = open.length > 0 ? pickSong(open, this.recent) : null;
-      if (!song || this.plannedThisShow(song)) return;
+      if (!song || this.aired.plannedThisShow(song)) return;
       const before = tracks.length;
       const track = await this.loadSong(song);
       if (track) this.place(tracks, track);
@@ -2678,7 +1751,7 @@ export class FmStation implements PlayerStation {
     for (const track of tracks) {
       const song = pool.find((item) => playedMatches(item, track));
       const named = song ?? songFromTrack(track, { kind: 'play' });
-      this.markPlanned(song?.key ?? named.key, track.url);
+      this.aired.markPlanned(song?.key ?? named.key, track.url);
       if (song && !this.recent.includes(song.key)) this.recent.push(song.key);
       const label = named.artist ? `${named.artist} – ${named.title}` : named.title;
       if (label.trim()) this.played.push(label);
@@ -2712,7 +1785,7 @@ export class FmStation implements PlayerStation {
       };
       this.about.set(track, about);
       this.remember(track, song.key);
-      this.markPlanned(song.key, song.url);
+      this.aired.markPlanned(song.key, song.url);
       return track;
     }
     const hit = await this.deps.source.youtube
@@ -2727,95 +1800,8 @@ export class FmStation implements PlayerStation {
     hit.thumbnail ??= song.thumbnail;
     this.about.set(hit, about);
     this.remember(hit, song.key);
-    this.markPlanned(song.key, hit.url);
+    this.aired.markPlanned(song.key, hit.url);
     return hit;
-  }
-
-  /** `fm` and `find` rows, plus today's plays. A failed read leaves the show with nothing aired. */
-  private async readAired(): Promise<void> {
-    const read = this.deps.aired;
-    if (!read) {
-      this.airedNow = emptyAired();
-      return;
-    }
-    try {
-      this.airedNow = indexAired(await read());
-    } catch (error: unknown) {
-      this.deps.logger.warn('Kitchen FM could not read what it already aired:', error);
-      this.airedNow = emptyAired();
-    }
-  }
-
-  /** Aired already, or planned earlier in this show. */
-  private taken(song: FmSong): boolean {
-    return this.plannedThisShow(song) || this.airedKitchen(song);
-  }
-
-  /** Planned earlier in this show, by pool key or link. */
-  private plannedThisShow(song: FmSong): boolean {
-    if (this.plannedKeys.has(song.key)) return true;
-    return Boolean(song.url && this.plannedUrls.has(song.url));
-  }
-
-  /** A kitchen song whose key or link is in the aired log. */
-  private airedKitchen(song: FmSong): boolean {
-    if (this.airedNow.keys.has(song.key)) return true;
-    return Boolean(song.url && this.airedNow.urls.has(song.url));
-  }
-
-  /** Latest time this kitchen song aired. Never aired is 0, so it sorts first. */
-  private lastAiredAt(song: FmSong): number {
-    const byKey = this.airedNow.lastByKey.get(song.key) ?? 0;
-    const byUrl = song.url ? (this.airedNow.lastByUrl.get(song.url) ?? 0) : 0;
-    return Math.max(byKey, byUrl);
-  }
-
-  private markPlanned(key: string | undefined, url: string | undefined): void {
-    if (key && key !== '|') this.plannedKeys.add(key);
-    if (url) this.plannedUrls.add(url);
-  }
-
-  /** Find queries YouTube could not match, shared across shows when the server passed one in. */
-  private deadList(): { artist: string; title: string }[] {
-    return this.deps.deadFinds ?? this.ownDead;
-  }
-
-  /** Remember a find query that YouTube could not match. A thrown search does not come here. */
-  private noteDead(artist: string, title: string): void {
-    const list = this.deadList();
-    if (list.some((song) => song.artist === artist && song.title === title)) return;
-    list.push({ artist, title });
-    if (list.length > DEAD_CAP) list.splice(0, list.length - DEAD_CAP);
-  }
-
-  /** Aired songs and dead finds, so Claude's crate-less names can be refused. */
-  private airedNames(): BlockedSongs {
-    return prepareBlocked([
-      ...this.airedNow.rows.map((row) => ({ artist: row.artist, title: row.title })),
-      ...this.deadList(),
-    ]);
-  }
-
-  /**
-   * What Claude is told already played. This show first, then the most recent
-   * aired songs, never more than `PLAYED_SHOWN`.
-   */
-  private playedForClaude(): string[] {
-    const own = this.played.slice(-PLAYED_SHOWN);
-    if (own.length >= PLAYED_SHOWN) return own;
-    const seen = new Set(own.map((label) => label.toLowerCase()));
-    const labels = [...own];
-    const recent = [...this.airedNow.rows].sort(
-      (a, b) => b.playedAt.getTime() - a.playedAt.getTime(),
-    );
-    for (const row of recent) {
-      if (labels.length >= PLAYED_SHOWN) break;
-      const label = row.artist ? `${row.artist} – ${row.title}` : row.title;
-      if (!label || seen.has(label.toLowerCase())) continue;
-      seen.add(label.toLowerCase());
-      labels.push(label);
-    }
-    return labels;
   }
 
   /** Display names of who brought each song, by user id. */

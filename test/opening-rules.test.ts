@@ -8,7 +8,9 @@ import {
   idleEndsTrack,
   introWaitAfterOpening,
   openSongStreamNow,
+  openingLateLine,
   openingPlay,
+  openingPlayedLine,
 } from '../src/music/opening-rules';
 
 const USUAL_MS = 12_000;
@@ -119,5 +121,18 @@ describe('firstSongGreeting', () => {
     assert.equal(firstSongGreeting({ heard: 'spoken', preparedClip: false }), 'fresh');
     assert.equal(firstSongGreeting({ heard: 'backup', preparedClip: true }), 'backup');
     assert.equal(firstSongGreeting({ heard: 'none', preparedClip: true }), 'none');
+  });
+});
+
+describe('opening lines', () => {
+  it('names a late clip and a clip that started', () => {
+    assert.equal(
+      openingLateLine('Kitchen'),
+      'Kitchen FM in Kitchen: opening jingle skipped, not ready in time.',
+    );
+    assert.equal(
+      openingPlayedLine('Kitchen', 'id-main', '3.2'),
+      'Kitchen FM in Kitchen: opening jingle id-main (3.2 s).',
+    );
   });
 });
