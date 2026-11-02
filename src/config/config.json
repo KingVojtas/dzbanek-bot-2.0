@@ -40,7 +40,7 @@
     "breakSeconds": 180,
     "jingleVoice": "en-GB-RyanNeural",
     "engine": "piper",
-    "piperVoice": "en_US-ryan-high",
+    "piperVoice": "en_US-ryan-medium",
     "piperJingleVoice": "en_GB-alan-medium",
     "piperLengthScale": 1,
     "setsPerServerPerDay": 20,

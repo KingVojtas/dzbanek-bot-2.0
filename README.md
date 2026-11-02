@@ -109,7 +109,7 @@ The genre changes every 15 songs, in a fixed order on every server: rock, rap, E
 - **The DJ’s words** are a line book, `src/fm/lines/en.json` and `cs.json`. The bot only fills in the time, the genre, the song, and the name. It does not call an AI to write them. A line is not repeated in the same show while unused ones remain. From midnight to 5 AM a new block gets a quieter line.
 - **New finds** are songs the kitchen has not played. A rotation set plays the kitchen's unaired songs of that genre first, then related artists, then playlist tracks, up to five. The first of those goes on air immediately when the shelf already has five kitchen songs. From the second set of a taste or themed block, the station asks Deezer for artists related to the ones in the block, takes one of their top tracks, and plays it from YouTube only when the upload is that song and at most 12 minutes. A find YouTube cannot match is not asked again until the bot restarts. A set aims for five songs and fills with finds when the kitchen runs short. Songs under a minute are left out, and a song does not come back while another is waiting. The card says `Czech rap · new find`. `/play` requests and dedications do not count toward the 15.
 - **A small kitchen** (fewer than 10 songs) plays its own songs in the first set, then sets of new finds from similar artists, so a few songs never loop.
-- **The voice** on the Mac mini is Piper, an offline voice the bot downloads into `data/piper` (English only, a male US voice for the DJ). Each line is leveled to about the same loudness as before. While Piper is installing, missing, or the language is Czech, Microsoft Edge's read-aloud voice speaks instead: free, no key. Edge returns MP3, and FFmpeg decodes it to audio the same way the radio plays. When both fail, the line still shows on the card and the music carries on.
+- **The voice** on the Mac mini is Piper, an offline voice the bot downloads into `data/piper` (English only, a male US voice for the DJ). The Mac mini's Intel Core i5-2415M reads `en_US-ryan-high` slower than real time (1.6 s for each second of speech), so `config.json` uses `en_US-ryan-medium`, the same speaker at a smaller size. Each line is leveled to about the same loudness as before. While Piper is installing, missing, or the language is Czech, Microsoft Edge's read-aloud voice speaks instead: free, no key. Edge returns MP3, and FFmpeg decodes it to audio the same way the radio plays. When both fail, the line still shows on the card and the music carries on.
 - **Jingles** are the owner's Suno files in `assets/fm/jingles/`, and that folder ships with the deploy upload. `id-main` and every other `id-*` are station IDs in the break. The show itself opens without a jingle, so the first song comes as soon as the greeting ends. `sweeper-*` sits between promos. `genre-<id>` (`rock`, `rap`, `edm`, `cz-rap`, `pop`, `metal`, `cz-rock`, `rnb`, `country`, `cz-pop`, `indie`, `latin`, `other`) names the next block. `bed-*` is an instrumental bed under the spoken parts only. `dedication`, `new-find`, and `back-to-music` introduce a dedication, one new find in a block, and the way back to the music. `.mp3` and `.wav` both work. Any file may be missing or unreadable; the show goes on without it.
 - **The card**: Now Playing turns into 🎙️ Kitchen FM with the block’s genre. The DJ’s line sits under the progress bar, and Up next names the station’s next song. While the show is on, the card also has **🔥** and **👎**.
 - **Dedications.** `/radio dedicate` sends a short message (120 characters) while Kitchen FM is on and you are in its voice channel. The DJ reads it before the next song, or before a song you named. One dedication per person can be waiting, and three per server. Anything still unread is dropped when the show ends.
@@ -128,7 +128,7 @@ The genre changes every 15 songs, in a fixed order on every server: rock, rap, E
 | `breakSeconds`       | `180`                            | Break between rotation blocks, in seconds, from 0 to 300. 0 skips the break.          |
 | `jingleVoice`        | `en-GB-RyanNeural`               | Edge voice for station IDs, promos, and outros. The DJ voice reads the recap.         |
 | `engine`             | `piper`                          | `piper` or `edge`. Piper runs on the Linux host. Edge speaks when Piper cannot.       |
-| `piperVoice`         | `en_US-ryan-high`                | Pinned Piper voice for the DJ.                                                        |
+| `piperVoice`         | `en_US-ryan-high`                | Pinned Piper voice for the DJ. The Mac mini uses `en_US-ryan-medium` (see above).     |
 | `piperJingleVoice`   | `en_GB-alan-medium`              | Pinned Piper voice for station IDs, promos, and outros.                               |
 | `piperLengthScale`   | `1`                              | Piper's pace, from 0.7 to 1.3. Lower is a little faster.                              |
 
@@ -365,7 +365,7 @@ Everyday settings live in `src/config/config.json`. The one secret is `DISCORD_T
     "breakSeconds": 180,
     "jingleVoice": "en-GB-RyanNeural",
     "engine": "piper",
-    "piperVoice": "en_US-ryan-high",
+    "piperVoice": "en_US-ryan-medium",
     "piperJingleVoice": "en_GB-alan-medium",
     "piperLengthScale": 1,
     "setsPerServerPerDay": 20,
