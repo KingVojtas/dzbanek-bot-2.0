@@ -21,6 +21,7 @@ import {
   ChainVoice,
   PiperQueue,
   PiperVoice,
+  cleanPiperText,
   djVoiceIdentity,
   installPiper,
   openKitchenVoices,
@@ -1083,7 +1084,7 @@ describe('voice identity and config', () => {
         voice: 'en-US-AndrewMultilingualNeural',
         piperVoice: 'en_US-ryan-high',
       }),
-      'piper:en_US-ryan-high',
+      'piper:en_US-ryan-high;say2',
     );
     assert.equal(
       djVoiceIdentity({
@@ -1107,6 +1108,13 @@ describe('voice identity and config', () => {
       djVoiceIdentity({ language: 'en', voice: 'en-US-AndrewMultilingualNeural' }),
       'en-US-AndrewMultilingualNeural',
     );
+  });
+
+  it('respells dzbanek so eSpeak does not read it letter by letter', () => {
+    assert.equal(cleanPiperText('Good evening, dzbanek team.'), "Good evening, D'zbahneck team.");
+    assert.equal(cleanPiperText('Dzbánek-bot 🎧 is on air'), "D'zbahneck-bot is on air");
+    assert.equal(cleanPiperText('DZBANEK TEAM'), "D'zbahneck TEAM");
+    assert.equal(cleanPiperText('Pekelní Potápěči'), 'Pekelní Potápěči');
   });
 
   it('parses Piper settings, defaults, and a bad voice name', () => {

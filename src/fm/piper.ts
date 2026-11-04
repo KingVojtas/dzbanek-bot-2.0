@@ -46,8 +46,24 @@ export interface DjVoiceSettings {
 }
 
 /**
+ * English spellings for names eSpeak reads wrong. It spells a leading "dz" as
+ * letters, so "dzbanek" came out "dee-zee-bay-nuk" (dˌiːzˈiːbˈeɪnək).
+ * "D'zbahneck" is dəzbˈɑːnɛk in both the US and the British voices.
+ */
+const SPOKEN_AS: ReadonlyArray<readonly [RegExp, string]> = [[/\bdzb[aá]nek/giu, "D'zbahneck"]];
+
+/** Bump when `SPOKEN_AS` changes, so clips stored with the old reading are made again. */
+const PRONUNCIATION_VERSION = 2;
+
+/** `text` with the names in `SPOKEN_AS` respelled for Piper. */
+export function respellForPiper(text: string): string {
+  return SPOKEN_AS.reduce((line, [pattern, spoken]) => line.replace(pattern, spoken), text);
+}
+
+/**
  * What a prepared line was voiced with. Piper keeps its own name, so switching
- * back to Edge (or to another Piper voice) drops the stored clip.
+ * back to Edge (or to another Piper voice) drops the stored clip. So does a new
+ * `PRONUNCIATION_VERSION`.
  * Czech has no pinned voice, so the identity stays the Edge voice.
  */
 export function djVoiceIdentity(dj: {
@@ -57,7 +73,7 @@ export function djVoiceIdentity(dj: {
   piperVoice?: string;
 }): string {
   if (dj.language === 'cs' || dj.engine !== 'piper') return dj.voice;
-  return `piper:${dj.piperVoice || DEFAULT_PIPER_VOICE}`;
+  return `piper:${dj.piperVoice || DEFAULT_PIPER_VOICE};say${PRONUNCIATION_VERSION}`;
 }
 
 /** `audio.sample_rate` from a Piper `.onnx.json`. */
@@ -77,10 +93,10 @@ export function sampleRateOf(json: string): number {
 
 /**
  * One spoken line. Piper reads stdin to the newline, and a song title can
- * carry emoji and line breaks from the card.
+ * carry emoji and line breaks from the card. Names eSpeak gets wrong are respelled.
  */
 export function cleanPiperText(text: string): string {
-  return text
+  return respellForPiper(text)
     .replace(/\p{Extended_Pictographic}/gu, '')
     .replace(/\u200D|\uFE0F|[\u{1F3FB}-\u{1F3FF}]/gu, '')
     .replace(/\p{Cc}/gu, ' ')
